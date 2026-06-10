@@ -383,18 +383,13 @@ class _CategoricalPlotter(VectorPlotter):
         if "hue" not in self.variables:
             return
 
-        cached_offset = self._get_hue_offset(keys.get("hue"))
-        if cached_offset is not None and hasattr(self, "_cat_element_width"):
-            data["width"] = self._cat_element_width
-            data[self.orient] += cached_offset
-            return
-
-        hue_idx = self._hue_map.levels.index(keys["hue"])
-        n = len(self._hue_map.levels)
-        data["width"] /= n
-
-        full_width = data["width"] * n
-        offset = data["width"] * hue_idx + data["width"] / 2 - full_width / 2
+        hue_key = keys.get("hue")
+        offset, width = self._get_position_and_width(
+            base_position=0,
+            hue_key=hue_key,
+            dodge=True,
+        )
+        data["width"] = width
         data[self.orient] += offset
 
     def _invert_scale(self, ax, data, vars=("x", "y")):
@@ -557,6 +552,65 @@ class _CategoricalPlotter(VectorPlotter):
         labels = self._cat_formatted_labels
         axis.set_ticks(positions, labels=labels)
 
+    def _get_full_width(self, fallback_width=0.8):
+        """Get the full category width (before gap/dodge subdivision)."""
+        if hasattr(self, "_cat_full_width"):
+            return self._cat_full_width
+        return fallback_width * self._native_width
+
+    def _get_element_width(self, dodge=False, fallback_gap=0, fallback_width=0.8):
+        """Get the final element width after dodge and gap are applied."""
+        if hasattr(self, "_cat_element_width"):
+            return self._cat_element_width
+        full_width = self._get_full_width(fallback_width)
+        if dodge and "hue" in self.variables and self._hue_map.levels is not None:
+            full_width /= len(self._hue_map.levels)
+        if hasattr(self, "_cat_gap") and self._cat_gap:
+            return full_width * (1 - self._cat_gap)
+        if fallback_gap:
+            return full_width * (1 - fallback_gap)
+        return full_width
+
+    def _get_position_and_width(self, base_position, hue_key=None,
+                                 dodge=False, fallback_gap=0, fallback_width=0.8):
+        """
+        Get the dodged position and element width for a category/hue combination.
+
+        This is the unified entry point for all categorical plots. It returns
+        the final position (with dodge offset) and the final width (with gap
+        applied) that every plotting method should use.
+        """
+        width = self._get_full_width(fallback_width)
+        offset = 0
+
+        if dodge and hue_key is not None:
+            cached_offset = self._get_hue_offset(hue_key)
+            if cached_offset is not None:
+                offset = cached_offset
+                if hasattr(self, "_cat_element_width"):
+                    width = self._cat_element_width
+                else:
+                    width /= self._cat_n_hue if hasattr(self, "_cat_n_hue") else len(self._hue_map.levels)
+                    gap = getattr(self, "_cat_gap", fallback_gap)
+                    if gap:
+                        width *= (1 - gap)
+            else:
+                hue_idx = self._hue_map.levels.index(hue_key)
+                n = len(self._hue_map.levels)
+                width /= n
+                each_width = width
+                full_width = width * n
+                offset = each_width * hue_idx + each_width / 2 - full_width / 2
+                gap = fallback_gap
+                if gap:
+                    width *= (1 - gap)
+        else:
+            width = self._get_element_width(dodge=False,
+                                            fallback_gap=fallback_gap,
+                                            fallback_width=fallback_width)
+
+        return base_position + offset, width
+
     def _nested_offsets(self, width, dodge):
         """Return offsets for each hue level for dodged plots."""
         offsets = None
@@ -584,11 +638,7 @@ class _CategoricalPlotter(VectorPlotter):
         plot_kws,
     ):
 
-        if hasattr(self, "_cat_full_width"):
-            width = self._cat_full_width
-        else:
-            width = .8 * self._native_width
-        offsets = self._nested_offsets(width, dodge)
+        width = self._get_full_width()
 
         if jitter is True:
             jlim = 0.1
@@ -615,10 +665,10 @@ class _CategoricalPlotter(VectorPlotter):
 
             ax = self._get_axes(sub_vars)
 
-            if hasattr(self, "_cat_hue_offsets") and self._cat_hue_offsets is not None and dodge:
+            if dodge and "hue" in sub_vars:
                 dodge_move = sub_data["hue"].map(lambda h: self._get_hue_offset(h) or 0)
-            elif offsets is not None and (offsets != 0).any():
-                dodge_move = offsets[sub_data["hue"].map(self._hue_map.levels.index)]
+            else:
+                dodge_move = 0
 
             jitter_move = jitterer(size=len(sub_data)) if len(sub_data) > 1 else 0
 
@@ -640,11 +690,7 @@ class _CategoricalPlotter(VectorPlotter):
         plot_kws,
     ):
 
-        if hasattr(self, "_cat_full_width"):
-            width = self._cat_full_width
-        else:
-            width = .8 * self._native_width
-        offsets = self._nested_offsets(width, dodge)
+        width = self._get_full_width()
 
         iter_vars = [self.orient]
         if dodge:
@@ -663,10 +709,10 @@ class _CategoricalPlotter(VectorPlotter):
 
             ax = self._get_axes(sub_vars)
 
-            if hasattr(self, "_cat_hue_offsets") and self._cat_hue_offsets is not None and dodge:
+            if dodge and "hue" in sub_vars:
                 dodge_move = sub_data["hue"].map(lambda h: self._get_hue_offset(h) or 0)
-            elif offsets is not None:
-                dodge_move = offsets[sub_data["hue"].map(self._hue_map.levels.index)]
+            else:
+                dodge_move = 0
 
             if not sub_data.empty:
                 sub_data[self.orient] = sub_data[self.orient] + dodge_move
@@ -765,17 +811,11 @@ class _CategoricalPlotter(VectorPlotter):
             stats = pd.DataFrame(mpl.cbook.boxplot_stats(value_data, whis=whis,
                                                          bootstrap=bootstrap))
 
-            if hasattr(self, "_cat_full_width"):
-                orig_width = self._cat_full_width
-            else:
-                orig_width = width * self._native_width
-            data = pd.DataFrame({self.orient: positions, "width": orig_width})
+            data = pd.DataFrame({self.orient: positions, "width": self._get_full_width(width)})
             if dodge:
                 self._dodge(sub_vars, data)
-            elif hasattr(self, "_cat_gap") and self._cat_gap:
-                data["width"] = self._cat_element_width
-            elif gap:
-                data["width"] *= 1 - gap
+            else:
+                data["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
             capwidth = plot_kws.get("capwidths", 0.5 * data["width"])
 
             self._invert_scale(ax, data)
@@ -935,14 +975,12 @@ class _CategoricalPlotter(VectorPlotter):
 
             pos_data = pd.DataFrame({
                 self.orient: [sub_vars[self.orient]],
-                "width": [self._cat_full_width if hasattr(self, "_cat_full_width") else width * self._native_width],
+                "width": [self._get_full_width(width)],
             })
             if dodge:
                 self._dodge(sub_vars, pos_data)
-            elif hasattr(self, "_cat_gap") and self._cat_gap:
-                pos_data["width"] = self._cat_element_width
-            elif gap:
-                pos_data["width"] *= 1 - gap
+            else:
+                pos_data["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
 
             # Letter-value boxes
             levels = lv_data["levels"]
@@ -1118,10 +1156,7 @@ class _CategoricalPlotter(VectorPlotter):
                 ]) for key in norm_keys
             }
 
-        if hasattr(self, "_cat_full_width"):
-            real_width = self._cat_full_width
-        else:
-            real_width = width * self._native_width
+        real_width = self._get_full_width(width)
 
         for violin in violin_data:
 
@@ -1135,10 +1170,8 @@ class _CategoricalPlotter(VectorPlotter):
 
             if dodge:
                 self._dodge(violin["sub_vars"], data)
-            elif hasattr(self, "_cat_gap") and self._cat_gap:
-                data["width"] = self._cat_element_width
-            elif gap:
-                data["width"] *= 1 - gap
+            else:
+                data["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
 
             # Normalize the density across the distribution(s) and relative to the width
             norm_key = vars_to_key(violin["sub_vars"])
@@ -1198,8 +1231,8 @@ class _CategoricalPlotter(VectorPlotter):
             pos_dict = {self.orient: violin["position"], "width": real_width}
             if dodge:
                 self._dodge(violin["sub_vars"], pos_dict)
-            if gap:
-                pos_dict["width"] *= (1 - gap)
+            else:
+                pos_dict["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
 
             # --- Plot the inner components
             if inner is None:
@@ -1434,16 +1467,11 @@ class _CategoricalPlotter(VectorPlotter):
                 .reset_index()
             )
 
-            if hasattr(self, "_cat_full_width"):
-                agg_data["width"] = self._cat_full_width
-            else:
-                agg_data["width"] = width * self._native_width
+            agg_data["width"] = self._get_full_width(width)
             if dodge:
                 self._dodge(sub_vars, agg_data)
-            elif hasattr(self, "_cat_gap") and self._cat_gap:
-                agg_data["width"] = self._cat_element_width
-            elif gap:
-                agg_data["width"] *= 1 - gap
+            else:
+                agg_data["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
 
             agg_data["edge"] = agg_data[self.orient] - agg_data["width"] / 2
             self._invert_scale(ax, agg_data)
