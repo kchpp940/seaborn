@@ -353,25 +353,13 @@ class _CategoricalPlotter(VectorPlotter):
 
     def _adjust_cat_axis(self, ax, axis):
         """Set ticks and limits for a categorical variable."""
-        # Note: in theory, this could happen in _attach for all categorical axes
-        # But two reasons not to do that:
-        # - If it happens before plotting, autoscaling messes up the plot limits
-        # - It would change existing plots from other seaborn functions
         if self.var_types[axis] != "categorical":
+            self._apply_formatter_to_axis(ax)
             return
 
-        # If both x/y data are empty, the correct way to set up the plot is
-        # somewhat undefined; because we don't add null category data to the plot in
-        # this case we don't *have* a categorical axis (yet), so best to just bail.
         if self.plot_data[axis].empty:
             return
 
-        # We can infer the total number of categories (including those from previous
-        # plots that are not part of the plot we are currently making) from the number
-        # of ticks, which matplotlib sets up while doing unit conversion. This feels
-        # slightly risky, as if we are relying on something that may be a matplotlib
-        # implementation detail. But I cannot think of a better way to keep track of
-        # the state from previous categorical calls (see GH2516 for context)
         n = len(getattr(ax, f"get_{axis}ticks")())
 
         if axis == "x":
@@ -379,7 +367,6 @@ class _CategoricalPlotter(VectorPlotter):
             ax.set_xlim(-.5, n - .5, auto=None)
         else:
             ax.yaxis.grid(False)
-            # Note limits that correspond to previously-inverted y axis
             ax.set_ylim(n - .5, -.5, auto=None)
 
     def _dodge_needed(self):
@@ -394,10 +381,14 @@ class _CategoricalPlotter(VectorPlotter):
     def _dodge(self, keys, data):
         """Apply a dodge transform to coordinates in place."""
         if "hue" not in self.variables:
-            # Short-circuit if hue variable was not assigned
-            # We could potentially warn when hue=None, dodge=True, user may be confused
-            # But I think it's fine to just treat it as a no-op.
             return
+
+        cached_offset = self._get_hue_offset(keys.get("hue"))
+        if cached_offset is not None and hasattr(self, "_cat_element_width"):
+            data["width"] = self._cat_element_width
+            data[self.orient] += cached_offset
+            return
+
         hue_idx = self._hue_map.levels.index(keys["hue"])
         n = len(self._hue_map.levels)
         data["width"] /= n
@@ -432,17 +423,139 @@ class _CategoricalPlotter(VectorPlotter):
     @property
     def _native_width(self):
         """Return unit of width separating categories on native numeric scale."""
-        # Categorical data always have a unit width
+        if hasattr(self, "_cached_native_width"):
+            return self._cached_native_width
+
         if self.var_types[self.orient] == "categorical":
+            self._cached_native_width = 1
             return 1
 
-        # Otherwise, define the width as the smallest space between observations
-        unique_values = np.unique(self.comp_data[self.orient])
+        cat_series = self.comp_data[self.orient].dropna()
+        numeric_vals = pd.to_numeric(cat_series, errors="coerce").dropna()
+        unique_values = np.sort(numeric_vals.unique())
+
         if len(unique_values) > 1:
-            native_width = np.nanmin(np.diff(unique_values))
+            diffs = np.diff(unique_values)
+            diffs = diffs[diffs > 0]
+            if len(diffs) > 0:
+                native_width = np.nanmin(diffs)
+            else:
+                native_width = 1
         else:
             native_width = 1
+
+        self._cached_native_width = native_width
         return native_width
+
+    def _setup_coordinate_mapping(
+        self, order=None, formatter=None, native_scale=False,
+    ):
+        """
+        Phase 1: Set up categorical coordinate normalization and formatting.
+
+        This must be called before _attach(). It handles:
+        - Category ordering (respecting explicit order)
+        - Decision between native vs ordinal scale
+        - Formatter application to categorical data (when not using native_scale)
+        - Storage of formatter for later use with native_scale tick labels
+        """
+        if self.var_types.get(self.orient) == "categorical" or not native_scale:
+            self.scale_categorical(self.orient, order=order, formatter=formatter)
+            self._cat_use_native = False
+            self._cat_formatter = None
+        else:
+            self._cat_use_native = True
+            self._cat_formatter = formatter
+
+            cat_data = self.plot_data[self.orient].dropna()
+            cat_order = categorical_order(cat_data, order)
+            self._var_ordered[self.orient] = (
+                order is not None or cat_data.dtype.name == "category"
+            )
+            self.var_levels[self.orient] = cat_order
+
+    def _finalize_coordinate_mapping(self, dodge=False, width=.8, gap=0):
+        """
+        Phase 2: Finalize coordinate mapping after hue mapping is established.
+
+        This must be called after map_hue() and _attach(). It computes:
+        - Native width between categories (cached)
+        - Numeric positions for each category
+        - Formatted tick labels
+        - Hue dodge offsets
+        - Final element widths after dodge/gap
+        """
+        self._cat_dodge = dodge
+        self._cat_width_factor = width
+        self._cat_gap = gap
+
+        if self._cat_use_native:
+            levels = self.var_levels[self.orient]
+            try:
+                numeric_levels = pd.to_numeric(pd.Series(list(levels))).to_numpy()
+            except (TypeError, ValueError):
+                numeric_levels = np.arange(len(levels))
+            self._cat_positions = numeric_levels
+        else:
+            self._cat_positions = np.arange(len(self.var_levels[self.orient]))
+
+        _ = self._native_width
+
+        if self._cat_use_native and self._cat_formatter is not None:
+            self._cat_formatted_labels = [
+                self._cat_formatter(v) for v in self.var_levels[self.orient]
+            ]
+        elif not self._cat_use_native:
+            self._cat_formatted_labels = list(self.var_levels[self.orient])
+        else:
+            self._cat_formatted_labels = None
+
+        self._setup_hue_offsets(width, dodge)
+
+    def _setup_hue_offsets(self, width, dodge):
+        """Compute hue dodge offsets and element widths, cached for all plots."""
+        full_width = width * self._native_width
+        self._cat_full_width = full_width
+
+        if "hue" in self.variables and self._hue_map and self._hue_map.levels is not None:
+            n_levels = len(self._hue_map.levels)
+        else:
+            n_levels = 1
+
+        self._cat_n_hue = n_levels
+
+        if dodge and n_levels > 1:
+            each_width = full_width / n_levels
+            offsets = np.linspace(0, full_width - each_width, n_levels)
+            offsets -= offsets.mean()
+            self._cat_hue_offsets = dict(zip(self._hue_map.levels, offsets))
+            self._cat_element_width = each_width
+        else:
+            self._cat_hue_offsets = None
+            self._cat_element_width = full_width
+
+        if self._cat_gap:
+            self._cat_element_width *= (1 - self._cat_gap)
+
+    def _get_hue_offset(self, hue_key):
+        """Get the dodge offset for a given hue level."""
+        if not hasattr(self, "_cat_hue_offsets") or self._cat_hue_offsets is None:
+            return None
+        if hue_key not in self._cat_hue_offsets:
+            return 0
+        return self._cat_hue_offsets[hue_key]
+
+    def _apply_formatter_to_axis(self, ax):
+        """Apply the stored formatter to tick labels when using native_scale."""
+        if not getattr(self, "_cat_use_native", False):
+            return
+        if not getattr(self, "_cat_formatted_labels", None):
+            return
+        axis = getattr(ax, f"{self.orient}axis")
+        positions_raw = self._cat_positions
+        positions = axis.convert_units(positions_raw)
+        labels = self._cat_formatted_labels
+        axis.set_ticks(positions, labels=labels)
 
     def _nested_offsets(self, width, dodge):
         """Return offsets for each hue level for dodged plots."""
@@ -471,7 +584,10 @@ class _CategoricalPlotter(VectorPlotter):
         plot_kws,
     ):
 
-        width = .8 * self._native_width
+        if hasattr(self, "_cat_full_width"):
+            width = self._cat_full_width
+        else:
+            width = .8 * self._native_width
         offsets = self._nested_offsets(width, dodge)
 
         if jitter is True:
@@ -499,7 +615,9 @@ class _CategoricalPlotter(VectorPlotter):
 
             ax = self._get_axes(sub_vars)
 
-            if offsets is not None and (offsets != 0).any():
+            if hasattr(self, "_cat_hue_offsets") and self._cat_hue_offsets is not None and dodge:
+                dodge_move = sub_data["hue"].map(lambda h: self._get_hue_offset(h) or 0)
+            elif offsets is not None and (offsets != 0).any():
                 dodge_move = offsets[sub_data["hue"].map(self._hue_map.levels.index)]
 
             jitter_move = jitterer(size=len(sub_data)) if len(sub_data) > 1 else 0
@@ -522,7 +640,10 @@ class _CategoricalPlotter(VectorPlotter):
         plot_kws,
     ):
 
-        width = .8 * self._native_width
+        if hasattr(self, "_cat_full_width"):
+            width = self._cat_full_width
+        else:
+            width = .8 * self._native_width
         offsets = self._nested_offsets(width, dodge)
 
         iter_vars = [self.orient]
@@ -542,7 +663,9 @@ class _CategoricalPlotter(VectorPlotter):
 
             ax = self._get_axes(sub_vars)
 
-            if offsets is not None:
+            if hasattr(self, "_cat_hue_offsets") and self._cat_hue_offsets is not None and dodge:
+                dodge_move = sub_data["hue"].map(lambda h: self._get_hue_offset(h) or 0)
+            elif offsets is not None:
                 dodge_move = offsets[sub_data["hue"].map(self._hue_map.levels.index)]
 
             if not sub_data.empty:
@@ -599,7 +722,7 @@ class _CategoricalPlotter(VectorPlotter):
         linecolor,
         linewidth,
         fliersize,
-        plot_kws,  # TODO rename user_kws?
+        plot_kws,
     ):
 
         iter_vars = ["hue"]
@@ -642,11 +765,16 @@ class _CategoricalPlotter(VectorPlotter):
             stats = pd.DataFrame(mpl.cbook.boxplot_stats(value_data, whis=whis,
                                                          bootstrap=bootstrap))
 
-            orig_width = width * self._native_width
+            if hasattr(self, "_cat_full_width"):
+                orig_width = self._cat_full_width
+            else:
+                orig_width = width * self._native_width
             data = pd.DataFrame({self.orient: positions, "width": orig_width})
             if dodge:
                 self._dodge(sub_vars, data)
-            if gap:
+            elif hasattr(self, "_cat_gap") and self._cat_gap:
+                data["width"] = self._cat_element_width
+            elif gap:
                 data["width"] *= 1 - gap
             capwidth = plot_kws.get("capwidths", 0.5 * data["width"])
 
@@ -807,11 +935,13 @@ class _CategoricalPlotter(VectorPlotter):
 
             pos_data = pd.DataFrame({
                 self.orient: [sub_vars[self.orient]],
-                "width": [width * self._native_width],
+                "width": [self._cat_full_width if hasattr(self, "_cat_full_width") else width * self._native_width],
             })
             if dodge:
                 self._dodge(sub_vars, pos_data)
-            if gap:
+            elif hasattr(self, "_cat_gap") and self._cat_gap:
+                pos_data["width"] = self._cat_element_width
+            elif gap:
                 pos_data["width"] *= 1 - gap
 
             # Letter-value boxes
@@ -988,9 +1118,11 @@ class _CategoricalPlotter(VectorPlotter):
                 ]) for key in norm_keys
             }
 
-        real_width = width * self._native_width
+        if hasattr(self, "_cat_full_width"):
+            real_width = self._cat_full_width
+        else:
+            real_width = width * self._native_width
 
-        # Now iterate through the violins again to apply the normalization and plot
         for violin in violin_data:
 
             index = pd.RangeIndex(0, max(len(violin["support"]), 1))
@@ -1003,7 +1135,9 @@ class _CategoricalPlotter(VectorPlotter):
 
             if dodge:
                 self._dodge(violin["sub_vars"], data)
-            if gap:
+            elif hasattr(self, "_cat_gap") and self._cat_gap:
+                data["width"] = self._cat_element_width
+            elif gap:
                 data["width"] *= 1 - gap
 
             # Normalize the density across the distribution(s) and relative to the width
@@ -1198,7 +1332,10 @@ class _CategoricalPlotter(VectorPlotter):
             max_cat_val = int(self.comp_data[self.orient].max())
             base_positions = [i for i in range(min_cat_val, max_cat_val + 1)]
 
-        n_hue_levels = 0 if self._hue_map.levels is None else len(self._hue_map.levels)
+        if hasattr(self, "_cat_n_hue"):
+            n_hue_levels = self._cat_n_hue
+        else:
+            n_hue_levels = 0 if self._hue_map.levels is None else len(self._hue_map.levels)
         if dodge is True:
             dodge = .025 * n_hue_levels
 
@@ -1222,10 +1359,16 @@ class _CategoricalPlotter(VectorPlotter):
             )
 
             if dodge:
-                hue_idx = self._hue_map.levels.index(sub_vars["hue"])
-                step_size = dodge / (n_hue_levels - 1)
-                offset = -dodge / 2 + step_size * hue_idx
-                agg_data[self.orient] += offset * self._native_width
+                if hasattr(self, "_cat_hue_offsets") and self._cat_hue_offsets is not None:
+                    offset = self._get_hue_offset(sub_vars["hue"]) or 0
+                    if self._cat_n_hue > 1:
+                        scale = dodge * self._cat_n_hue / (self._cat_width_factor * (self._cat_n_hue - 1))
+                        agg_data[self.orient] += offset * scale
+                else:
+                    hue_idx = self._hue_map.levels.index(sub_vars["hue"])
+                    step_size = dodge / (n_hue_levels - 1)
+                    pointplot_offset = -dodge / 2 + step_size * hue_idx
+                    agg_data[self.orient] += pointplot_offset * self._native_width
 
             self._invert_scale(ax, agg_data)
 
@@ -1291,10 +1434,15 @@ class _CategoricalPlotter(VectorPlotter):
                 .reset_index()
             )
 
-            agg_data["width"] = width * self._native_width
+            if hasattr(self, "_cat_full_width"):
+                agg_data["width"] = self._cat_full_width
+            else:
+                agg_data["width"] = width * self._native_width
             if dodge:
                 self._dodge(sub_vars, agg_data)
-            if gap:
+            elif hasattr(self, "_cat_gap") and self._cat_gap:
+                agg_data["width"] = self._cat_element_width
+            elif gap:
                 agg_data["width"] *= 1 - gap
 
             agg_data["edge"] = agg_data[self.orient] - agg_data["width"] / 2
@@ -1618,15 +1766,14 @@ def boxplot(
         return ax
 
     if dodge == "auto":
-        # Needs to be before scale_categorical changes the coordinate series dtype
         dodge = p._dodge_needed()
 
-    if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(ax, log_scale=log_scale)
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
@@ -1638,6 +1785,8 @@ def boxplot(
         saturation=saturation,
     )
     linecolor = p._complement_color(linecolor, color, p._hue_map)
+
+    p._finalize_coordinate_mapping(dodge=dodge, width=width, gap=gap)
 
     p.plot_boxes(
         width=width,
@@ -1746,15 +1895,14 @@ def violinplot(
         return ax
 
     if dodge == "auto":
-        # Needs to be before scale_categorical changes the coordinate series dtype
         dodge = p._dodge_needed()
 
-    if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(ax, log_scale=log_scale)
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
@@ -1774,6 +1922,8 @@ def violinplot(
     bw_method = p._violin_bw_backcompat(bw, bw_method)
     kde_kws = dict(cut=cut, gridsize=gridsize, bw_method=bw_method, bw_adjust=bw_adjust)
     inner_kws = {} if inner_kws is None else inner_kws.copy()
+
+    p._finalize_coordinate_mapping(dodge=dodge, width=width, gap=gap)
 
     p.plot_violins(
         width=width,
@@ -1935,30 +2085,29 @@ def boxenplot(
         return ax
 
     if dodge == "auto":
-        # Needs to be before scale_categorical changes the coordinate series dtype
         dodge = p._dodge_needed()
 
-    if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(ax, log_scale=log_scale)
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
-    # Longer-term deprecations
     width_method = p._boxen_scale_backcompat(scale, width_method)
 
     saturation = saturation if fill else 1
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm, saturation=saturation)
     color = _default_color(
         ax.fill_between, hue, color,
-        {},  # TODO how to get default color?
-        # {k: v for k, v in kwargs.items() if k in ["c", "color", "fc", "facecolor"]},
+        {},
         saturation=saturation,
     )
     linecolor = p._complement_color(linecolor, color, p._hue_map)
+
+    p._finalize_coordinate_mapping(dodge=dodge, width=width, gap=gap)
 
     p.plot_boxens(
         width=width,
@@ -2102,18 +2251,20 @@ def stripplot(
     if p.plot_data.empty:
         return ax
 
-    if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(ax, log_scale=log_scale)
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
     color = _default_color(ax.scatter, hue, color, kwargs)
     edgecolor = p._complement_color(edgecolor, color, p._hue_map)
+
+    p._finalize_coordinate_mapping(dodge=dodge, width=.8, gap=0)
 
     kwargs.setdefault("zorder", 3)
     size = kwargs.get("s", size)
@@ -2227,21 +2378,23 @@ def swarmplot(
     if p.plot_data.empty:
         return ax
 
-    if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(ax, log_scale=log_scale)
 
     if not p.has_xy_data:
         return ax
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
     color = _default_color(ax.scatter, hue, color, kwargs)
     edgecolor = p._complement_color(edgecolor, color, p._hue_map)
+
+    p._finalize_coordinate_mapping(dodge=dodge, width=.8, gap=0)
 
     kwargs.setdefault("zorder", 3)
     size = kwargs.get("s", size)
@@ -2365,15 +2518,14 @@ def barplot(
         return ax
 
     if dodge == "auto":
-        # Needs to be before scale_categorical changes the coordinate series dtype
         dodge = p._dodge_needed()
 
-    if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(ax, log_scale=log_scale)
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
@@ -2385,8 +2537,9 @@ def barplot(
     aggregator = agg_cls(estimator, errorbar, n_boot=n_boot, seed=seed)
     err_kws = {} if err_kws is None else normalize_kwargs(err_kws, mpl.lines.Line2D)
 
-    # Deprecations to remove in v0.15.0.
     err_kws, capsize = p._err_kws_backcompat(err_kws, errcolor, errwidth, capsize)
+
+    p._finalize_coordinate_mapping(dodge=dodge, width=width, gap=gap)
 
     p.plot_bars(
         aggregator=aggregator,
@@ -2504,12 +2657,12 @@ def pointplot(
     if p.plot_data.empty:
         return ax
 
-    if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(ax, log_scale=log_scale)
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
@@ -2520,9 +2673,12 @@ def pointplot(
     aggregator = agg_cls(estimator, errorbar, n_boot=n_boot, seed=seed)
     err_kws = {} if err_kws is None else normalize_kwargs(err_kws, mpl.lines.Line2D)
 
-    # Deprecations to remove in v0.15.0.
     p._point_kwargs_backcompat(scale, join, kwargs)
     err_kws, capsize = p._err_kws_backcompat(err_kws, None, errwidth, capsize)
+
+    pointplot_width = .8
+    pointplot_gap = 0
+    p._finalize_coordinate_mapping(dodge=bool(dodge), width=pointplot_width, gap=pointplot_gap)
 
     p.plot_points(
         aggregator=aggregator,
@@ -2656,15 +2812,14 @@ def countplot(
         return ax
 
     if dodge == "auto":
-        # Needs to be before scale_categorical changes the coordinate series dtype
         dodge = p._dodge_needed()
 
-    if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(ax, log_scale=log_scale)
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
@@ -2683,6 +2838,8 @@ def countplot(
         p.plot_data[count_axis] /= len(p.plot_data) / denom
 
     aggregator = EstimateAggregator("sum", errorbar=None)
+
+    p._finalize_coordinate_mapping(dodge=dodge, width=width, gap=gap)
 
     p.plot_bars(
         aggregator=aggregator,
@@ -2834,19 +2991,18 @@ def catplot(
     # happen or if disabling that is the cleaner solution.
     has_xy_data = p.has_xy_data
 
-    if not native_scale or p.var_types[p.orient] == "categorical":
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    p._setup_coordinate_mapping(
+        order=order, formatter=formatter, native_scale=native_scale,
+    )
 
     p._attach(g, log_scale=log_scale)
 
     if not has_xy_data:
         return g
 
-    # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
-    # Othe deprecations
     errorbar = utils._deprecate_ci(errorbar, ci)
 
     saturation = kwargs.pop(
@@ -2855,8 +3011,6 @@ def catplot(
     )
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm, saturation=saturation)
 
-    # Set a default color
-    # Otherwise each artist will be plotted separately and trip the color cycle
     if hue is None:
         color = "C0" if color is None else color
         if saturation < 1:
@@ -2870,8 +3024,11 @@ def catplot(
 
     width = kwargs.pop("width", 0.8)
     dodge = kwargs.pop("dodge", False if kind in undodged_kinds else "auto")
+    gap = kwargs.pop("gap", 0)
     if dodge == "auto":
         dodge = p._dodge_needed()
+
+    p._finalize_coordinate_mapping(dodge=dodge, width=width, gap=gap)
 
     if "weight" in p.plot_data:
         if kind not in ["bar", "point"]:
@@ -2918,7 +3075,6 @@ def catplot(
     elif kind == "box":
 
         plot_kws = kwargs.copy()
-        gap = plot_kws.pop("gap", 0)
         fill = plot_kws.pop("fill", True)
         whis = plot_kws.pop("whis", 1.5)
         linewidth = plot_kws.pop("linewidth", None)
@@ -2943,7 +3099,6 @@ def catplot(
     elif kind == "violin":
 
         plot_kws = kwargs.copy()
-        gap = plot_kws.pop("gap", 0)
         fill = plot_kws.pop("fill", True)
         split = plot_kws.pop("split", False)
         inner = plot_kws.pop("inner", "box")
@@ -2991,7 +3146,6 @@ def catplot(
     elif kind == "boxen":
 
         plot_kws = kwargs.copy()
-        gap = plot_kws.pop("gap", 0)
         fill = plot_kws.pop("fill", True)
         linecolor = plot_kws.pop("linecolor", "auto")
         linewidth = plot_kws.pop("linewidth", None)
@@ -3072,7 +3226,6 @@ def catplot(
             errwidth=kwargs.pop("errwidth", deprecated),
             capsize=kwargs.pop("capsize", 0),
         )
-        gap = kwargs.pop("gap", 0)
         fill = kwargs.pop("fill", True)
 
         p.plot_bars(
@@ -3101,7 +3254,6 @@ def catplot(
             denom = 100 if stat == "percent" else 1
             p.plot_data[count_axis] /= len(p.plot_data) / denom
 
-        gap = kwargs.pop("gap", 0)
         fill = kwargs.pop("fill", True)
 
         p.plot_bars(
