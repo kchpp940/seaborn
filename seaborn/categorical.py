@@ -329,7 +329,7 @@ class _CategoricalPlotter(VectorPlotter):
             self.plot_data["hue"] = self.plot_data[self.orient]
             self.variables["hue"] = self.variables[self.orient]
             self.var_types["hue"] = "categorical"
-            hue_order = self.var_levels[self.orient]
+            hue_order = self._cat_map.levels
 
             # Because we convert the categorical axis variable to string,
             # we need to update a dictionary palette too
@@ -373,7 +373,7 @@ class _CategoricalPlotter(VectorPlotter):
             self.variables["hue"] = self.variables.get(self.orient)
             self.var_types["hue"] = self.var_types.get(self.orient)
 
-            hue_order = self.var_levels.get(self.orient)
+            hue_order = self._cat_map.levels
             self._var_levels.pop("hue", None)
 
         return hue_order
@@ -577,6 +577,68 @@ class _CategoricalPlotter(VectorPlotter):
             for suf in ["", "min", "max"]:
                 if (col := f"{var}{suf}") in data:
                     data[col] = inv(data[col])
+
+    def _update_legend_data(
+        self,
+        update,
+        var,
+        verbosity,
+        title,
+        title_kws,
+        attr_names,
+        other_props,
+    ):
+        """Generate legend tick values and formatted labels.
+
+        Overrides VectorPlotter._update_legend_data to use CategoryMapping.legend_labels
+        for the orient variable (or hue variable in wide format), ensuring legend
+        labels match tick labels when a custom formatter is applied.
+        """
+        mapper = getattr(self, f"_{var}_map", None)
+        if mapper is None:
+            return
+
+        brief = mapper.map_type == "numeric" and (
+            verbosity == "brief"
+            or (verbosity == "auto" and len(mapper.levels) > 6)
+        )
+
+        if brief:
+            super()._update_legend_data(
+                update, var, verbosity, title, title_kws, attr_names, other_props
+            )
+            return
+
+        if mapper.levels is None:
+            return
+
+        levels = mapper.levels
+
+        use_cat_map = (
+            var == "hue"
+            and self._redundant_hue
+            and self._cat_map.legend_labels is not None
+        )
+
+        if use_cat_map:
+            formatted_levels = self._cat_map.legend_labels
+        else:
+            formatted_levels = mapper.levels
+
+        if not title and self.variables.get(var, None) is not None:
+            update((self.variables[var], "title"), self.variables[var], **title_kws)
+
+        other_props = {} if other_props is None else other_props
+
+        for level, formatted_level in zip(levels, formatted_levels):
+            if level is not None:
+                attr = mapper(level)
+                if isinstance(attr_names, list):
+                    attr = {name: attr for name in attr_names}
+                elif attr_names is not None:
+                    attr = {attr_names: attr}
+                attr.update({k: v[level] for k, v in other_props.items() if level in v})
+                update(self.variables[var], formatted_level, **attr)
 
     def _configure_legend(self, ax, func, common_kws=None, semantic_kws=None):
         if self.legend == "auto":
@@ -3414,7 +3476,16 @@ def catplot(
     else:
         show_legend = bool(legend)
     if show_legend:
-        g.add_legend(title=p.variables.get("hue"), label_order=hue_order)
+        legend_title = p.variables.get("hue")
+        use_cat_map_labels = (
+            p._redundant_hue
+            and p._cat_map.legend_labels is not None
+        )
+        if use_cat_map_labels:
+            legend_labels = p._cat_map.legend_labels
+        else:
+            legend_labels = hue_order
+        g.add_legend(title=legend_title, label_order=legend_labels)
 
     if data is not None:
         # Replace the dataframe on the FacetGrid for any subsequent maps
