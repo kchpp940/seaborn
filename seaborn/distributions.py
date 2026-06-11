@@ -20,7 +20,11 @@ from ._base import VectorPlotter
 # but still use the older Histogram for bivariate computation.
 from ._statistics import ECDF, Histogram, KDE
 from ._stats.counting import Hist
-from ._stats.norm_utils import normalize_histogram
+from ._stats.norm_utils import (
+    effective_weight_total,
+    filter_valid_vectors,
+    normalize_histogram,
+)
 
 from .axisgrid import (
     FacetGrid,
@@ -1307,26 +1311,30 @@ class _DistributionPlotter(VectorPlotter):
         if not set(self.variables) - {"x", "y"}:
             common_norm = False
 
-        # -- Pre-compute per-subset weights for common_norm -----------------
-        subsets: list[tuple[dict, "DataFrame", float, "ndarray | None"]] = []
+        # -- Pre-compute per-subset effective weights for common_norm -------
+        # Use the *same* sample filtering as ``compute_ecdf`` so that the
+        # common_norm denominator and the ECDF numerator come from exactly
+        # the same set of valid samples (no x/weight finite mismatch).
+        subsets: list[tuple[dict, np.ndarray, np.ndarray | None, float]] = []
         whole_weight = 0.0
         for sub_vars, sub_data in self.iter_data(
             "hue", from_comp_data=True,
         ):
             if sub_data.empty:
                 continue
-            observations = sub_data[self.data_variable]
-            weights = sub_data.get("weights", None)
-            if weights is not None:
-                w_arr = np.asarray(weights, dtype=float)
-                part_weight = float(np.where(np.isfinite(w_arr), w_arr, 0.0).sum())
-            else:
-                part_weight = float(len(observations))
-            subsets.append((sub_vars, sub_data, part_weight, weights))
+            observations = sub_data[self.data_variable].to_numpy()
+            weights = (
+                sub_data["weights"].to_numpy()
+                if "weights" in sub_data.columns
+                else None
+            )
+            vals_filt, w_filt = filter_valid_vectors(observations, weights)
+            part_weight = effective_weight_total(w_filt)
+            subsets.append((sub_vars, vals_filt, w_filt, part_weight))
             whole_weight += part_weight
 
         # -- Loop through the subsets, transform and plot the data -----------
-        for sub_vars, sub_data, part_weight, weights in reversed(subsets):
+        for sub_vars, vals_filt, w_filt, part_weight in reversed(subsets):
 
             # Choose the normalization denominator
             if common_norm:
@@ -1334,9 +1342,8 @@ class _DistributionPlotter(VectorPlotter):
             else:
                 norm_total = None
 
-            observations = sub_data[self.data_variable]
-            stat, vals = estimator(
-                observations, weights=weights, norm_total=norm_total,
+            stat_vals, x_vals = estimator(
+                vals_filt, weights=w_filt, norm_total=norm_total,
             )
 
             # Assign attributes based on semantic mapping
@@ -1347,26 +1354,27 @@ class _DistributionPlotter(VectorPlotter):
             # Return the data variable to the linear domain
             ax = self._get_axes(sub_vars)
             _, inv = _get_transform_functions(ax, self.data_variable)
-            vals = inv(vals)
+            x_vals = inv(x_vals)
 
             # Manually set the minimum value on a "log" scale
             if isinstance(inv.__self__, mpl.scale.LogTransform):
-                vals[0] = -np.inf
+                x_vals[0] = -np.inf
 
             # Work out the orientation of the plot
             if self.data_variable == "x":
-                plot_args = vals, stat
+                plot_args = x_vals, stat_vals
                 stat_variable = "y"
             else:
-                plot_args = stat, vals
+                plot_args = stat_vals, x_vals
                 stat_variable = "x"
 
+            # Determine the top sticky edge
             if estimator.stat == "count":
-                top_edge = len(observations)
-            elif common_norm:
-                top_edge = 1
-            else:
-                top_edge = 1
+                top_edge = part_weight
+            elif estimator.stat == "percent":
+                top_edge = 100.0 if not common_norm else 100.0
+            else:  # proportion
+                top_edge = 1.0
 
             # Draw the line for this subset
             artist, = ax.plot(*plot_args, **artist_kws)
