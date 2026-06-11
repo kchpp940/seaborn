@@ -189,23 +189,140 @@ def _matrix_mask(data, mask):
     return mask
 
 
+class _MatrixContext:
+    """Unified context holding cleaned matrix data and associated metadata.
+
+    All matrix plotting components (heatmap, dendrogram, side colors) read
+    from this single context to ensure consistency across nullable dtypes,
+    mask merging, clustering reorder, and index/column alignment.
+
+    Attributes
+    ----------
+    df : DataFrame
+        Cleaned numeric DataFrame with float dtype; pd.NA converted to np.nan.
+    mask : DataFrame
+        Boolean DataFrame with same index/columns as df; True = masked cell.
+        Includes both explicit mask and missing values from df.
+    orig_is_frame : bool
+        Whether the original user input was a DataFrame (vs ndarray).
+    """
+
+    def __init__(self, data, mask=None):
+        """Create a unified matrix context from input data.
+
+        Parameters
+        ----------
+        data : DataFrame, ndarray, or array-like
+            Input rectangular data.
+        mask : None, array-like, or DataFrame
+            Optional mask; pd.NA values are treated as True (masked).
+        """
+        if isinstance(data, pd.DataFrame):
+            self.orig_is_frame = True
+        else:
+            self.orig_is_frame = False
+
+        self.df = _clean_df_for_matrix(data)
+        self.mask = _matrix_mask(self.df, mask)
+
+    @property
+    def values(self):
+        """Numeric float array of the data values."""
+        return _df_to_numeric_array(self.df)
+
+    @property
+    def shape(self):
+        """Shape of the matrix (n_rows, n_cols)."""
+        return self.df.shape
+
+    @property
+    def index(self):
+        """Row index of the matrix."""
+        return self.df.index
+
+    @property
+    def columns(self):
+        """Column index of the matrix."""
+        return self.df.columns
+
+    @property
+    def plot_data(self):
+        """Masked array suitable for passing to matplotlib (pcolormesh etc.)."""
+        return np.ma.masked_where(self.mask.values, self.values)
+
+    def reindex(self, row_ind=None, col_ind=None):
+        """Return a new context with rows/columns reordered by integer indices.
+
+        Parameters
+        ----------
+        row_ind : array-like of int, optional
+            Row ordering indices.
+        col_ind : array-like of int, optional
+            Column ordering indices.
+
+        Returns
+        -------
+        _MatrixContext
+            New context with reordered data and mask.
+        """
+        new_ctx = _MatrixContext.__new__(_MatrixContext)
+        new_ctx.orig_is_frame = self.orig_is_frame
+
+        if row_ind is not None:
+            new_df = self.df.iloc[row_ind]
+            new_mask = self.mask.iloc[row_ind]
+        else:
+            new_df = self.df
+            new_mask = self.mask
+
+        if col_ind is not None:
+            new_df = new_df.iloc[:, col_ind]
+            new_mask = new_mask.iloc[:, col_ind]
+
+        new_ctx.df = new_df
+        new_ctx.mask = new_mask
+        return new_ctx
+
+    def xlabel(self):
+        """Axis label for the x-axis (columns)."""
+        label = _index_to_label(self.df.columns)
+        return label if label is not None else ""
+
+    def ylabel(self):
+        """Axis label for the y-axis (rows)."""
+        label = _index_to_label(self.df.index)
+        return label if label is not None else ""
+
+    def xticklabels(self):
+        """Tick labels for the x-axis (columns)."""
+        return _index_to_ticklabels(self.df.columns)
+
+    def yticklabels(self):
+        """Tick labels for the y-axis (rows)."""
+        return _index_to_ticklabels(self.df.index)
+
+
 class _HeatMapper:
     """Draw a heatmap plot of a matrix with nice labels and colormaps."""
 
-    def __init__(self, data, vmin, vmax, cmap, center, robust, annot, fmt,
-                 annot_kws, cbar, cbar_kws,
-                 xticklabels=True, yticklabels=True, mask=None):
-        """Initialize the plotting object."""
-        # We always want to have a DataFrame with semantic information
-        # and an ndarray to pass to matplotlib. Use unified cleaning
-        # to handle nullable dtypes, pd.NA, object arrays, etc.
-        data = _clean_df_for_matrix(data)
-        plot_data = _df_to_numeric_array(data)
+    def __init__(self, data=None, vmin=None, vmax=None, cmap=None, center=None,
+                 robust=False, annot=None, fmt=".2g", annot_kws=None,
+                 cbar=True, cbar_kws=None,
+                 xticklabels=True, yticklabels=True, mask=None,
+                 context=None):
+        """Initialize the plotting object.
 
-        # Validate the mask and convert to DataFrame
-        mask = _matrix_mask(data, mask)
+        Can be initialized either with ``data`` (and optional ``mask``) for
+        standalone use, or with a ``_MatrixContext`` instance for consistent
+        use within ``ClusterGrid``.
+        """
+        if context is not None:
+            self.ctx = context
+        else:
+            self.ctx = _MatrixContext(data, mask)
 
-        plot_data = np.ma.masked_where(np.asarray(mask.values), plot_data)
+        plot_data = self.ctx.plot_data
+        data = self.ctx.df
 
         # Get good names for the rows and columns
         xtickevery = 1
@@ -267,6 +384,8 @@ class _HeatMapper:
                 if isinstance(annot, pd.DataFrame):
                     annot_clean = _clean_df_for_matrix(annot)
                     annot_data = _df_to_numeric_array(annot_clean)
+                elif isinstance(annot, np.ndarray):
+                    annot_data = np.asarray(annot)
                 else:
                     annot_data = np.asarray(annot)
                 if annot_data.shape != plot_data.shape:
@@ -540,9 +659,17 @@ def heatmap(
 
     """
     # Initialize the plotter object
-    plotter = _HeatMapper(data, vmin, vmax, cmap, center, robust, annot, fmt,
-                          annot_kws, cbar, cbar_kws, xticklabels,
-                          yticklabels, mask)
+    if isinstance(data, _MatrixContext):
+        plotter = _HeatMapper(
+            context=data, vmin=vmin, vmax=vmax, cmap=cmap, center=center,
+            robust=robust, annot=annot, fmt=fmt, annot_kws=annot_kws,
+            cbar=cbar, cbar_kws=cbar_kws, xticklabels=xticklabels,
+            yticklabels=yticklabels
+        )
+    else:
+        plotter = _HeatMapper(data, vmin, vmax, cmap, center, robust, annot, fmt,
+                              annot_kws, cbar, cbar_kws, xticklabels,
+                              yticklabels, mask)
 
     # Add the pcolormesh kwargs here
     kwargs["linewidths"] = linewidths
@@ -560,26 +687,41 @@ def heatmap(
 class _DendrogramPlotter:
     """Object for drawing tree of similarities between data rows/columns"""
 
-    def __init__(self, data, linkage, metric, method, axis, label, rotate):
+    def __init__(self, data=None, linkage=None, metric='euclidean', method='average',
+                 axis=1, label=True, rotate=False, context=None):
         """Plot a dendrogram of the relationships between the columns of data
+
+        Can be initialized either with ``data`` for standalone use, or with
+        a ``_MatrixContext`` instance for consistent use within ``ClusterGrid``.
 
         Parameters
         ----------
-        data : pandas.DataFrame
-            Rectangular data
+        data : pandas.DataFrame, optional
+            Rectangular data (not needed if context is provided).
+        context : _MatrixContext, optional
+            Unified matrix context.
         """
         self.axis = axis
-        if self.axis == 1:
-            if isinstance(data, pd.DataFrame):
-                data = data.T
+
+        if context is not None:
+            self.ctx = context
+            if self.axis == 1:
+                df = context.df.T
             else:
-                data = np.asarray(data).T
+                df = context.df
+        else:
+            if self.axis == 1:
+                if isinstance(data, pd.DataFrame):
+                    data = data.T
+                else:
+                    data = np.asarray(data).T
+            data = _clean_df_for_matrix(data)
+            self.ctx = _MatrixContext(data)
+            df = data
 
-        data = _clean_df_for_matrix(data)
-        array = _df_to_numeric_array(data)
-
+        array = _df_to_numeric_array(df)
         self.array = array
-        self.data = data
+        self.data = df
 
         self.shape = self.data.shape
         self.metric = metric
@@ -806,11 +948,9 @@ class ClusterGrid(Grid):
             self.data = pd.DataFrame(data)
             self._orig_is_frame = False
 
-        self.data2d = self.format_data(self.data, pivot_kws, z_score,
-                                       standard_scale)
-        self.data2d = _clean_df_for_matrix(self.data2d)
-
-        self.mask = _matrix_mask(self.data2d, mask)
+        # Build the unified matrix context: pivot -> z_score/standard_scale -> clean -> mask
+        data2d = self.format_data(self.data, pivot_kws, z_score, standard_scale)
+        self.ctx = _MatrixContext(data2d, mask)
 
         self._figure = plt.figure(figsize=figsize)
 
@@ -872,7 +1012,11 @@ class ClusterGrid(Grid):
         self.dendrogram_col = None
 
     def _preprocess_colors(self, colors, axis):
-        """Preprocess {row/col}_colors to extract labels and convert colors."""
+        """Preprocess {row/col}_colors to extract labels and convert colors.
+
+        Colors are aligned to the unified matrix context's index/columns,
+        ensuring consistency after pivot/z_score/standard_scale transforms.
+        """
         labels = None
 
         if colors is not None:
@@ -886,11 +1030,11 @@ class ClusterGrid(Grid):
                            "datatype, e.g. by using `.to_numpy()``")
                     raise TypeError(msg)
 
-                # Ensure colors match data2d indices (after pivot/transform)
+                # Ensure colors match the context's index/columns
                 if axis == 0:
-                    colors = colors.reindex(self.data2d.index)
+                    colors = colors.reindex(self.ctx.index)
                 else:
-                    colors = colors.reindex(self.data2d.columns)
+                    colors = colors.reindex(self.ctx.columns)
 
                 # Replace na's (including pd.NA) with white color
                 # TODO We should set these to transparent instead
@@ -918,6 +1062,26 @@ class ClusterGrid(Grid):
             colors = _convert_colors(colors)
 
         return colors, labels
+
+    @property
+    def data2d(self):
+        """Backward-compatible access to the cleaned 2D data DataFrame."""
+        return self.ctx.df
+
+    @data2d.setter
+    def data2d(self, value):
+        """Backward-compatible setter: creates a new context from value."""
+        self.ctx = _MatrixContext(value)
+
+    @property
+    def mask(self):
+        """Backward-compatible access to the mask DataFrame."""
+        return self.ctx.mask
+
+    @mask.setter
+    def mask(self, value):
+        """Backward-compatible setter: replaces the mask in the context."""
+        self.ctx.mask = value
 
     def format_data(self, data, pivot_kws, z_score=None,
                     standard_scale=None):
@@ -1075,22 +1239,26 @@ class ClusterGrid(Grid):
 
     def plot_dendrograms(self, row_cluster, col_cluster, metric, method,
                          row_linkage, col_linkage, tree_kws):
-        # Plot the row dendrogram
+        # Plot the row dendrogram using the unified context
         if row_cluster:
-            self.dendrogram_row = dendrogram(
-                self.data2d, metric=metric, method=method, label=False, axis=0,
-                ax=self.ax_row_dendrogram, rotate=True, linkage=row_linkage,
-                tree_kws=tree_kws
+            plotter = _DendrogramPlotter(
+                context=self.ctx, metric=metric, method=method,
+                label=False, axis=0, rotate=True, linkage=row_linkage
+            )
+            self.dendrogram_row = plotter.plot(
+                ax=self.ax_row_dendrogram, tree_kws=tree_kws
             )
         else:
             self.ax_row_dendrogram.set_xticks([])
             self.ax_row_dendrogram.set_yticks([])
-        # PLot the column dendrogram
+        # PLot the column dendrogram using the unified context
         if col_cluster:
-            self.dendrogram_col = dendrogram(
-                self.data2d, metric=metric, method=method, label=False,
-                axis=1, ax=self.ax_col_dendrogram, linkage=col_linkage,
-                tree_kws=tree_kws
+            plotter = _DendrogramPlotter(
+                context=self.ctx, metric=metric, method=method,
+                label=False, axis=1, rotate=False, linkage=col_linkage
+            )
+            self.dendrogram_col = plotter.plot(
+                ax=self.ax_col_dendrogram, tree_kws=tree_kws
             )
         else:
             self.ax_col_dendrogram.set_xticks([])
@@ -1164,8 +1332,9 @@ class ClusterGrid(Grid):
             despine(self.ax_col_colors, left=True, bottom=True)
 
     def plot_matrix(self, colorbar_kws, xind, yind, **kws):
-        self.data2d = self.data2d.iloc[yind, xind]
-        self.mask = self.mask.iloc[yind, xind]
+        # Reindex the unified context once: data, mask, and index/columns
+        # all stay in sync after clustering reorder
+        self.ctx = self.ctx.reindex(row_ind=yind, col_ind=xind)
 
         # Try to reorganize specified tick labels, if provided
         xtl = kws.pop("xticklabels", "auto")
@@ -1185,23 +1354,23 @@ class ClusterGrid(Grid):
             pass
         else:
             if isinstance(annot, bool):
-                annot_data = self.data2d
+                annot = True
             else:
                 if isinstance(annot, pd.DataFrame):
                     annot_clean = _clean_df_for_matrix(annot)
                     annot_data = _df_to_numeric_array(annot_clean)
                 else:
                     annot_data = np.asarray(annot)
-                if annot_data.shape != self.data2d.shape:
+                if annot_data.shape != self.ctx.shape:
                     err = "`data` and `annot` must have same shape."
                     raise ValueError(err)
                 annot_data = annot_data[yind][:, xind]
-            annot = annot_data
+                annot = annot_data
 
         # Setting ax_cbar=None in clustermap call implies no colorbar
         kws.setdefault("cbar", self.ax_cbar is not None)
-        heatmap(self.data2d, ax=self.ax_heatmap, cbar_ax=self.ax_cbar,
-                cbar_kws=colorbar_kws, mask=self.mask,
+        heatmap(self.ctx, ax=self.ax_heatmap, cbar_ax=self.ax_cbar,
+                cbar_kws=colorbar_kws,
                 xticklabels=xtl, yticklabels=ytl, annot=annot, **kws)
 
         ytl = self.ax_heatmap.get_yticklabels()
