@@ -158,18 +158,14 @@ class _DistributionPlotter(VectorPlotter):
 
         if isinstance(ax_obj, mpl.axes.Axes):
             ax_obj.legend(handles, labels, title=self.variables["hue"], **legend_kws)
-        else:  # i.e. a FacetGrid. Collect data for unified assembly.
-            # Store legend metadata on the plotter instance using the hierarchical
-            # `(var_name, level)` key structure that FacetGrid.add_legend expects
-            # when called with `adjust_subtitles=True`.  This keeps distribution
-            # plots consistent with relplot and catplot, and prevents stale
-            # entries from accumulating across facet collections.
-            var_name = self.variables["hue"]
-            self.legend_data = {
-                (var_name, label): handle for label, handle in zip(labels, handles)
-            }
-            self.legend_order = [(var_name, level) for level in self.var_levels["hue"]]
-            self.legend_title = var_name
+        else:  # i.e. a FacetGrid. TODO make this better
+            legend_data = dict(zip(labels, handles))
+            ax_obj.add_legend(
+                legend_data,
+                title=self.variables["hue"],
+                label_order=self.var_levels["hue"],
+                **legend_kws
+            )
 
     def _artist_kws(self, kws, fill, element, multiple, color, alpha):
         """Handle differences between artists in filled/unfilled plots."""
@@ -2152,12 +2148,6 @@ def displot(
         **facet_kws,
     )
 
-    # ---- Protocol boundary 1: reset semantic registry before Phase 1 ----
-    #
-    # Reusing the same FacetGrid across multiple displot invocations must
-    # not leak declared/observed/Phase-3 state from a previous call.
-    g._reset_semantic_registry()
-
     # Now attach the axes object to the plotter object
     if kind == "kde":
         allowed_types = ["numeric", "datetime"]
@@ -2165,26 +2155,8 @@ def displot(
         allowed_types = None
     p._attach(g, allowed_types=allowed_types, log_scale=log_scale)
 
-    # ---- Register globally-declared hue semantics with FacetGrid.
-    #
-    # Distribution plots only use `hue` as a semantic (size/style are
-    # not exposed by displot).  The `p._hue_map` has been populated by
-    # the `map_hue` call above; we now pass its levels to the Grid so that
-    # the `iter_data` observation hooks and `_finalize_legend` can
-    # compute the effective level set (declared ∩ observed).
-    if p._hue_map is not None and p._hue_map.levels is not None:
-        g._register_declared_semantics(
-            var="hue",
-            declared_levels=p._hue_map.levels,
-            variable_name=p.variables.get("hue"),
-        )
-
     # Check for a specification that lacks x/y data and return early
     if not p.has_xy_data:
-        # Protocol boundary 2 – early return with no legend; tear down
-        # the registry so state populated by `_attach` / observation
-        # hooks does not leak.
-        g._reset_semantic_registry()
         return g
 
     if color is None and hue is None:
@@ -2285,43 +2257,13 @@ def displot(
         p.plot_rug(**rug_kws)
 
     # Call FacetGrid annotation methods
-    # Note that the legend metadata has already been collected by the
-    # plot_* method (via _add_legend) into `p.legend_data / p.legend_order /
-    # p.legend_title` using hierarchical keys.  We will render it below
-    # after clearing any stale FacetGrid state, for consistency with relplot /
-    # catplot.
+    # Note that the legend is currently set inside the plotting method
     g.set_axis_labels(
-        x_var=p.variables.get("x") or g.axes.flat[0].get_xlabel(),
-        y_var=p.variables.get("y") or g.axes.flat[0].get_ylabel(),
+        x_var=p.variables.get("x", g.axes.flat[0].get_xlabel()),
+        y_var=p.variables.get("y", g.axes.flat[0].get_ylabel()),
     )
     g.set_titles()
     g.tight_layout()
-
-    # ---- Unified legend assembly ----
-    #
-    # The plot_* method (histogram/kde/ecdf) has already called
-    # `_add_legend` with the FacetGrid object, which *collected* legend
-    # metadata (handles + labels) onto the plotter instance using
-    # distribution-specific artist factories (via `_artist_kws`) into
-    # `p.legend_data / p.legend_order / p.legend_title`.  Because the
-    # artist construction here is non-standard (facecolor/edgecolor for
-    # patch-based distribution artists), we use the unified Phase-3
-    # ``_register_prebuilt_legend`` path on the Grid, and then call the
-    # single-argument ``_finalize_legend`` which performs the standard
-    # declared/observed level filtering + FacetGrid.add_legend render.
-
-    if legend and "hue" in p.variables and p.legend_data:
-        g._register_prebuilt_legend(p.legend_data, p.legend_order, p.legend_title)
-        # _finalize_legend reads the Phase-3 registry and then tears the
-        # full registry down in its finally block.
-        g._finalize_legend(p)
-
-    else:
-        # Protocol boundary 2 – no legend will be produced.  Still tear
-        # down the semantic registry so Phase-1/2/3 state from this
-        # invocation (or from a previous reuse of this FacetGrid) cannot
-        # leak out.
-        g._reset_semantic_registry()
 
     if data is not None and (x is not None or y is not None):
         if not isinstance(data, pd.DataFrame):

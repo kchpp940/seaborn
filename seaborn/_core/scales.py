@@ -81,6 +81,71 @@ class Scale:
     def _get_formatter(self, locator: Locator | None = None):
         raise NotImplementedError()
 
+    def _get_hover_metadata(
+        self, var: str, data: Series, prop: Property,
+    ) -> dict[str, Any]:
+        """
+        Collect hover metadata for a variable processed by this scale.
+
+        Parameters
+        ----------
+        var : str
+            Name of the semantic variable (e.g. "x", "color", "pointsize").
+        data : Series
+            Original (unscaled) data values for the variable.
+        prop : Property
+            The Property object associated with this variable.
+
+        Returns
+        -------
+        dict with keys:
+            - variable: semantic variable name
+            - original_values: the raw data values as a numpy array
+            - scaled_values: values after scale transformation and property mapping
+            - display_labels: list of human-readable labels (for legend entries)
+            - legend_values: list of unique data values corresponding to legend labels
+            - coord_range: (min, max) tuple for coordinate variables; None otherwise
+            - scale_type: name of the scale class
+            - property_type: name of the property class
+        """
+        import numpy as np
+        from pandas import Series
+
+        original_values = data.to_numpy() if isinstance(data, Series) else np.asarray(data)
+
+        try:
+            scaled_values = np.asarray(self(data))
+        except Exception:
+            scaled_values = original_values.copy()
+
+        display_labels: list[str] = []
+        legend_values: list[Any] = []
+        if self._legend is not None:
+            legend_values, display_labels = self._legend
+
+        coord_range: tuple[float, float] | None = None
+        if prop.legend is False and var in ("x", "y") and not var.endswith(("min", "max")):
+            try:
+                finite = np.isfinite(scaled_values)
+                if finite.any():
+                    coord_range = (
+                        float(np.min(scaled_values[finite])),
+                        float(np.max(scaled_values[finite])),
+                    )
+            except (TypeError, ValueError):
+                coord_range = None
+
+        return {
+            "variable": var,
+            "original_values": original_values,
+            "scaled_values": scaled_values,
+            "display_labels": display_labels,
+            "legend_values": legend_values,
+            "coord_range": coord_range,
+            "scale_type": self.__class__.__name__,
+            "property_type": prop.__class__.__name__,
+        }
+
     def _get_scale(self, name: str, forward: Callable, inverse: Callable):
 
         major_locator, minor_locator = self._get_locators(**self._tick_params)

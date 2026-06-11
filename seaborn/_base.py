@@ -958,54 +958,9 @@ class VectorPlotter:
 
                 sub_vars = dict(zip(grouping_vars, key))
 
-                # ---- Observe semantic levels (figure-level attach mode) ----
-                #
-                # When this plotter is attached to a FacetGrid (catplot /
-                # displot), each `iter_data` subset corresponds to a
-                # concrete drawing call.  We inspect the subset's semantic
-                # variables and report any non-null level values back to
-                # the FacetGrid so that _finalize_legend can restrict the
-                # legend to levels that were actually rendered in at least
-                # one facet.
-                #
-                # CRITICAL guard: NEVER observe a level pulled purely from
-                # `sub_vars` when `data_subset` is empty.  The grouping path
-                # above uses the *full declared level cartesian product*
-                # (via `itertools.product`) and, under `allow_empty=True`,
-                # yields empty data frames for levels that appear in
-                # user-specified *_order but have zero rows in the current
-                # facet subset.  Registering those would poison the
-                # observed set with never-drawn levels.
-                facets = getattr(self, "facets", None)
-                if facets is not None:
-                    for role in ("hue", "size", "style"):
-                        if (
-                            role in sub_vars
-                            and sub_vars[role] is not None
-                            and not data_subset.empty
-                        ):
-                            facets._observe_semantic_level(role, sub_vars[role])
-                        elif role in data_subset.columns:
-                            series = data_subset[role].dropna()
-                            if len(series):
-                                facets._observe_semantic_levels(
-                                    role, series.unique()
-                                )
-
                 yield sub_vars, data_subset.copy()
 
         else:
-
-            # Same observation logic for the no-grouping path.
-            facets = getattr(self, "facets", None)
-            if facets is not None:
-                for role in ("hue", "size", "style"):
-                    if role in data.columns:
-                        series = data[role].dropna()
-                        if len(series):
-                            facets._observe_semantic_levels(
-                                role, series.unique()
-                            )
 
             yield {}, data.copy()
 

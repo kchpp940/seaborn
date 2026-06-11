@@ -228,6 +228,60 @@ class Mark:
 
         return None
 
+    def _get_hover_metadata(
+        self,
+        data: DataFrame,
+        scales: dict[str, Scale],
+        layer_label: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Collect hover metadata for this mark layer.
+
+        Parameters
+        ----------
+        data : DataFrame
+            The pre-move, pre-plot data for this layer (with original unscaled
+            values for semantic variables, but scaled coordinates).
+        scales : dict[str, Scale]
+            Mapping from variable name to configured Scale object.
+        layer_label : str or None
+            Optional label for this layer (from Plot.add(label=...)).
+
+        Returns
+        -------
+        dict with keys:
+            - mark_type: class name of this Mark
+            - layer_label: the layer label, if provided
+            - variables: dict mapping var_name -> per-variable hover metadata
+            - mappable_props: list of mappable property names for this mark
+        """
+        from seaborn._core.properties import PROPERTIES
+
+        variable_metadata: dict[str, Any] = {}
+        for var_name in data.columns:
+            if var_name in ("col", "row", "group", "width", "baseline"):
+                continue
+            if var_name not in scales:
+                continue
+            scale = scales[var_name]
+            if scale is None:
+                continue
+            prop = PROPERTIES.get(var_name)
+            if prop is None:
+                continue
+            try:
+                var_meta = scale._get_hover_metadata(var_name, data[var_name], prop)
+                variable_metadata[var_name] = var_meta
+            except Exception:
+                continue
+
+        return {
+            "mark_type": self.__class__.__name__,
+            "layer_label": layer_label,
+            "variables": variable_metadata,
+            "mappable_props": list(self._mappable_props.keys()),
+        }
+
 
 def resolve_properties(
     mark: Mark, data: DataFrame, scales: dict[str, Scale]

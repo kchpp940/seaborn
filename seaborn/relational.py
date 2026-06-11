@@ -834,28 +834,6 @@ def relplot(
         **facet_kws
     )
 
-    # ---- Protocol boundary 1: reset semantic registry before Phase 1 ----
-    #
-    # Reusing the same FacetGrid across multiple relplot invocations must
-    # not leak declared/observed/Phase-3 state from a previous call.
-    g._reset_semantic_registry()
-
-    # ---- Register globally-declared semantic levels with FacetGrid ----
-    #
-    # The figure-level FacetGrid needs to know (a) which levels each
-    # semantic *should* have (respecting any user-passed *_order) and
-    # (b) the actual dataframe column used per-role so that
-    # _facet_plot can extract observed levels during map_dataframe.
-    for role in ("hue", "size", "style"):
-        mapper = getattr(p, f"_{role}_map", None)
-        if mapper is not None and mapper.levels is not None:
-            g._register_declared_semantics(
-                var=role,
-                declared_levels=mapper.levels,
-                variable_name=p.variables.get(role),
-                data_column=plot_variables.get(role),
-            )
-
     # Draw the plot
     g.map_dataframe(func, **plot_kws)
 
@@ -893,21 +871,12 @@ def relplot(
             attrs["size"] = "s"
         elif kind == "line":
             attrs["size"] = "linewidth"
-
-        # ---- Phase 3 + 4: register legend artist then finalize ----
-        #
-        # All legend construction happens through the unified Grid protocol:
-        #   Phase 3 – _register_legend_artist stores the factory/kws
-        #   Phase 4 – _finalize_legend reads the registry and does the work,
-        #             then tears down the full registry in its finally block.
-        g._register_legend_artist(legend_artist, common_kws, attrs)
-        g._finalize_legend(p)
-
-    else:
-        # Protocol boundary 2 – no legend will be produced.  Still tear down
-        # the semantic registry so Phase-1/2/3 state from this invocation
-        # (or from a previous reuse of this FacetGrid) cannot leak out.
-        g._reset_semantic_registry()
+        p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
+        if p.legend_data:
+            g.add_legend(legend_data=p.legend_data,
+                         label_order=p.legend_order,
+                         title=p.legend_title,
+                         adjust_subtitles=True)
 
     # Rename the columns of the FacetGrid's `data` attribute
     # to match the original column names

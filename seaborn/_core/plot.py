@@ -84,6 +84,54 @@ class PairSpec(TypedDict, total=False):
     wrap: int | None
 
 
+# ---- Hover metadata TypedDicts ---------------------------------------------------- #
+
+
+class HoverVariableMetadata(TypedDict, total=False):
+    """Metadata for a single semantic variable within a layer."""
+
+    variable: str
+    original_values: Any
+    scaled_values: Any
+    display_labels: list[str]
+    legend_values: list[Any]
+    coord_range: tuple[float, float] | None
+    scale_type: str
+    property_type: str
+
+
+class HoverLayerMetadata(TypedDict, total=False):
+    """Metadata for a single mark layer within a subplot."""
+
+    mark_type: str
+    layer_label: str | None
+    layer_index: int
+    variables: dict[str, HoverVariableMetadata]
+    mappable_props: list[str]
+
+
+class HoverSubplotMetadata(TypedDict, total=False):
+    """Metadata for a single subplot (including all layers)."""
+
+    subplot_index: tuple[int, int]
+    col: Any | None
+    row: Any | None
+    x_var: str
+    y_var: str
+    x_range: tuple[float, float] | None
+    y_range: tuple[float, float] | None
+    layers: list[HoverLayerMetadata]
+
+
+class HoverMetadata(TypedDict, total=False):
+    """Top-level hover metadata for the entire plot."""
+
+    subplots: list[HoverSubplotMetadata]
+    facet_spec: FacetSpec
+    pair_spec: PairSpec
+    labels: dict[str, str | Callable[[str], str]]
+
+
 # --- Local helpers ---------------------------------------------------------------- #
 
 
@@ -903,6 +951,84 @@ class Plot:
         with theme_context(self._theme_with_defaults()):
             self._plot().save(loc, **kwargs)
         return self
+
+    def hover_metadata(self) -> HoverMetadata:
+        """
+        Compile the plot and return structured hover metadata.
+
+        This method returns a nested dictionary describing every subplot,
+        every mark layer, and every semantic variable. For each variable,
+        it includes the original data values, the scale-mapped visual
+        values, legend display labels, and (for coordinate variables)
+        the data range.
+
+        This is useful for building interactive backends that want to show
+        tooltips or perform hit-testing without reverse-engineering the
+        figure artists.
+
+        Returns
+        -------
+        HoverMetadata
+            A TypedDict with the following structure::
+
+                {
+                    "subplots": [
+                        {
+                            "subplot_index": (i, j),
+                            "col": <facet column value or None>,
+                            "row": <facet row value or None>,
+                            "x_var": "x" | "x0" | "x1" | ...,
+                            "y_var": "y" | "y0" | "y1" | ...,
+                            "x_range": (min, max) | None,
+                            "y_range": (min, max) | None,
+                            "layers": [
+                                {
+                                    "mark_type": str,
+                                    "layer_label": str | None,
+                                    "layer_index": int,
+                                    "variables": {
+                                        var_name: {
+                                            "variable": str,
+                                            "original_values": np.ndarray,
+                                            "scaled_values": np.ndarray,
+                                            "display_labels": list[str],
+                                            "legend_values": list[Any],
+                                            "coord_range": (min, max) | None,
+                                            "scale_type": str,
+                                            "property_type": str,
+                                        },
+                                        ...
+                                    },
+                                    "mappable_props": list[str],
+                                },
+                                ...
+                            ],
+                        },
+                        ...
+                    ],
+                    "facet_spec": {...},
+                    "pair_spec": {...},
+                    "labels": {...},
+                }
+
+        Examples
+        --------
+        .. code-block:: python
+
+            import seaborn.objects as so
+            meta = (
+                so.Plot(penguins, "bill_length_mm", "bill_depth_mm")
+                .add(so.Dot(), color="species")
+                .facet(col="sex")
+                .hover_metadata()
+            )
+            # Access the first subplot's first layer color metadata
+            color_meta = meta["subplots"][0]["layers"][0]["variables"]["color"]
+
+        """
+        with theme_context(self._theme_with_defaults()):
+            plotter = Plotter(pyplot=False, theme=self._theme_with_defaults())
+            return plotter._collect_hover_metadata(self)
 
     def show(self, **kwargs) -> None:
         """
@@ -1828,3 +1954,133 @@ class Plotter:
                     # Should we warn / raise? Note that we don't expect to get here
                     # under any normal circumstances.
                     pass
+
+    def _collect_hover_metadata(self, p: Plot) -> HoverMetadata:
+        """
+        Walk through the plot compilation pipeline and assemble structured
+        hover metadata describing every subplot, layer, and variable.
+        """
+
+        common, layers = self._extract_data(p)
+        self._setup_figure(p, common, layers)
+
+        coord_vars = [v for v in p._variables if re.match(r"^x|y", v)]
+        self._setup_scales(p, common, layers, coord_vars)
+
+        self._compute_stats(p, layers)
+        self._setup_scales(p, common, layers)
+
+        subplot_metas: list[HoverSubplotMetadata] = []
+
+        pair_variables = p._pair_spec.get("structure", {})
+
+        for layer_idx, layer in enumerate(layers):
+            data = layer["data"]
+            mark = layer["mark"]
+            layer_label = layer.get("label")
+
+            for pairing_subplots, df, scales in self._generate_pairings(
+                data, pair_variables
+            ):
+                for subplot_view in pairing_subplots:
+                    subplot_idx = self._subplot_position(subplot_view)
+                    subplot_meta = self._get_or_create_subplot_meta(
+                        subplot_metas, subplot_view, subplot_idx
+                    )
+
+                    view_df = self._filter_subplot_data(df, subplot_view)
+
+                    try:
+                        layer_meta = mark._get_hover_metadata(
+                            view_df, scales, layer_label
+                        )
+                        layer_meta["layer_index"] = layer_idx
+                        subplot_meta["layers"].append(layer_meta)  # type: ignore
+                    except Exception:
+                        continue
+
+                    self._update_coord_ranges(subplot_meta, view_df, scales)
+
+        self._merge_subplot_coord_ranges(subplot_metas)
+
+        result: HoverMetadata = {
+            "subplots": subplot_metas,
+            "facet_spec": p._facet_spec,
+            "pair_spec": p._pair_spec,
+            "labels": p._labels,
+        }
+        return result
+
+    def _subplot_position(self, view: dict) -> tuple[int, int]:
+        """Return the (i, j) grid position for a subplot view dict."""
+        for idx, sub in enumerate(self._subplots):
+            if sub is view:
+                ncols = self._subplots.subplot_spec.get("ncols", 1)
+                return (idx // ncols, idx % ncols)
+        return (0, 0)
+
+    def _get_or_create_subplot_meta(
+        self,
+        metas: list[HoverSubplotMetadata],
+        view: dict,
+        idx: tuple[int, int],
+    ) -> HoverSubplotMetadata:
+        """Find existing subplot metadata or create a new one."""
+        for meta in metas:
+            if meta["subplot_index"] == idx:
+                return meta
+        new_meta: HoverSubplotMetadata = {
+            "subplot_index": idx,
+            "col": view.get("col"),
+            "row": view.get("row"),
+            "x_var": view.get("x", "x"),
+            "y_var": view.get("y", "y"),
+            "x_range": None,
+            "y_range": None,
+            "layers": [],
+        }
+        metas.append(new_meta)
+        return new_meta
+
+    def _update_coord_ranges(
+        self, subplot_meta: HoverSubplotMetadata, df: DataFrame, scales: dict
+    ) -> None:
+        """Update x_range/y_range on a subplot metadata entry from layer data."""
+        import numpy as np
+
+        for axis in ("x", "y"):
+            if axis not in df:
+                continue
+            try:
+                vals = pd.to_numeric(df[axis], errors="coerce").to_numpy()
+                finite = np.isfinite(vals)
+                if not finite.any():
+                    continue
+                vmin = float(np.min(vals[finite]))
+                vmax = float(np.max(vals[finite]))
+                key = f"{axis}_range"
+                current = subplot_meta.get(key)
+                if current is None:
+                    subplot_meta[key] = (vmin, vmax)  # type: ignore
+                else:
+                    subplot_meta[key] = (  # type: ignore
+                        min(current[0], vmin),
+                        max(current[1], vmax),
+                    )
+            except Exception:
+                continue
+
+    def _merge_subplot_coord_ranges(
+        self, metas: list[HoverSubplotMetadata]
+    ) -> None:
+        """Second pass to make sure every subplot entry has coord ranges,
+        taking them from layer variable metadata if not already filled."""
+        for meta in metas:
+            for axis in ("x", "y"):
+                key = f"{axis}_range"
+                if meta.get(key) is None:
+                    for layer in meta.get("layers", []):
+                        var_meta = layer.get("variables", {}).get(axis)
+                        if var_meta is not None and var_meta.get("coord_range"):
+                            meta[key] = var_meta["coord_range"]  # type: ignore
+                            break
