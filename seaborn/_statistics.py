@@ -28,12 +28,6 @@ from numbers import Number
 from statistics import NormalDist
 import numpy as np
 import pandas as pd
-
-from seaborn._stats.norm_utils import (
-    compute_ecdf,
-    filter_valid_vectors,
-    normalize_histogram,
-)
 try:
     from scipy.stats import gaussian_kde
     _no_scipy = False
@@ -377,48 +371,30 @@ class Histogram:
         if bin_kws is None:
             bin_kws = self.define_bin_params(x, weights=weights, cache=False)
 
-        # Always ask numpy for raw weighted counts. The normalization to the
-        # requested stat is handled by normalize_histogram, so that the
-        # result exactly matches what the Stat-layer ``Hist`` produces.
+        density = self.stat == "density"
         hist, bin_edges = np.histogram(
-            x, **bin_kws, weights=weights, density=False,
+            x, **bin_kws, weights=weights, density=density,
         )
 
-        # Compute total effective weight of this group. When ``common_norm``
-        # is handled by the caller (distributions.py) they re-scale; for a
-        # single call to Histogram the effective total is simply the sum of
-        # weights.
-        if weights is None:
-            total_weight = float(len(x))
-        else:
-            w_arr = np.asarray(weights, dtype=float)
-            total_weight = float(
-                np.where(np.isfinite(w_arr), w_arr, 0.0).sum()
-            )
+        if self.stat == "probability" or self.stat == "proportion":
+            hist = hist.astype(float) / hist.sum()
+        elif self.stat == "percent":
+            hist = hist.astype(float) / hist.sum() * 100
+        elif self.stat == "frequency":
+            hist = hist.astype(float) / np.diff(bin_edges)
 
-        hist = normalize_histogram(
-            hist,
-            np.diff(bin_edges),
-            self.stat,
-            cumulative=self.cumulative,
-            total_weight=total_weight,
-        )
+        if self.cumulative:
+            if self.stat in ["density", "frequency"]:
+                hist = (hist * np.diff(bin_edges)).cumsum()
+            else:
+                hist = hist.cumsum()
 
         return hist, bin_edges
 
     def __call__(self, x1, x2=None, weights=None):
         """Count the occurrences in each bin, maybe normalize."""
-        # Filter non-finite values so empty and all-zero groups behave well.
-        # Keep weights=None (don't upgrade to 1s) so automatic bin width
-        # selectors in numpy don't complain about "weighted data".
         if x2 is None:
-            if weights is None:
-                x1_arr = np.asarray(x1, dtype=float)
-                mask = np.isfinite(x1_arr)
-                x1_filt, w_filt = x1_arr[mask], None
-            else:
-                x1_filt, w_filt = filter_valid_vectors(x1, weights)
-            return self._eval_univariate(x1_filt, w_filt)
+            return self._eval_univariate(x1, weights)
         else:
             return self._eval_bivariate(x1, x2, weights)
 
@@ -444,45 +420,36 @@ class ECDF:
         """Inner function for ECDF of two variables."""
         raise NotImplementedError("Bivariate ECDF is not implemented")
 
-    def _eval_univariate(self, x, weights, norm_total=None):
+    def _eval_univariate(self, x, weights):
         """Inner function for ECDF of one variable."""
-        y, x = compute_ecdf(
-            x, weights, stat=self.stat,
-            complementary=self.complementary,
-            norm_total=norm_total,
-        )
+        sorter = x.argsort()
+        x = x[sorter]
+        weights = weights[sorter]
+        y = weights.cumsum()
+
+        if self.stat in ["percent", "proportion"]:
+            y = y / y.max()
+        if self.stat == "percent":
+            y = y * 100
+
+        x = np.r_[-np.inf, x]
+        y = np.r_[0, y]
+
+        if self.complementary:
+            y = y.max() - y
+
         return y, x
 
-    def __call__(self, x1, x2=None, weights=None, norm_total=None):
-        """Return proportion or count of observations below each sorted datapoint.
-
-        Parameters
-        ----------
-        x1 : array-like or :class:`seaborn._stats.norm_utils.ECDFGroup`
-            Data values.  When an ``ECDFGroup`` (from
-            :func:`seaborn._stats.norm_utils.prepare_ecdf_group`) is
-            passed, *weights* is ignored and the pre-filtered values /
-            weights are used directly.
-        x2 : unused (bivariate ECDF not implemented).
-        weights : array-like, optional
-            Observation weights.  Ignored when *x1* is an ``ECDFGroup``.
-        norm_total : float, optional
-            Total effective weight of the *normalization group*. When
-            provided (``common_norm=True``) each subset's ECDF is
-            normalised by this shared denominator instead of its own
-            total. When ``None`` (``common_norm=False``) each subset
-            normalises independently.
-        """
-        from ._stats.norm_utils import ECDFGroup
-
-        if isinstance(x1, ECDFGroup):
-            group = x1
+    def __call__(self, x1, x2=None, weights=None):
+        """Return proportion or count of observations below each sorted datapoint."""
+        x1 = np.asarray(x1)
+        if weights is None:
+            weights = np.ones_like(x1)
         else:
-            from ._stats.norm_utils import prepare_ecdf_group
-            group = prepare_ecdf_group(x1, weights)
+            weights = np.asarray(weights)
 
         if x2 is None:
-            return self._eval_univariate(group, None, norm_total=norm_total)
+            return self._eval_univariate(x1, weights)
         else:
             return self._eval_bivariate(x1, x2, weights)
 

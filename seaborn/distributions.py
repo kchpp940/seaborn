@@ -20,11 +20,6 @@ from ._base import VectorPlotter
 # but still use the older Histogram for bivariate computation.
 from ._statistics import ECDF, Histogram, KDE
 from ._stats.counting import Hist
-from ._stats.norm_utils import (
-    ECDFGroup,
-    normalize_histogram,
-    prepare_ecdf_group,
-)
 
 from .axisgrid import (
     FacetGrid,
@@ -259,33 +254,17 @@ class _DistributionPlotter(VectorPlotter):
             for col_idxs in column_groups.values():
                 cols = curves.columns[col_idxs]
 
-                # Replace any NaN values (e.g. from empty groups) with 0
-                # before accumulating so that stacking is numerically safe.
-                curves_safe = curves[cols].fillna(0.0)
-
-                norm_constant = curves_safe.sum(axis="columns")
+                norm_constant = curves[cols].sum(axis="columns")
 
                 # Take the cumulative sum to stack
-                curves_safe = curves_safe.cumsum(axis="columns")
+                curves[cols] = curves[cols].cumsum(axis="columns")
 
                 # Normalize by row sum to fill
                 if multiple == "fill":
-                    # Guard against divide-by-zero when a row has no mass
-                    # (e.g. all curves are zero at that support point, or
-                    # all hue groups are empty / effectively zero-weight).
-                    safe_denom = norm_constant.where(
-                        norm_constant > 0, 1.0
-                    )
-                    curves_safe = curves_safe.div(safe_denom, axis="index")
-                    # Rows with zero total mass -> zero fill (not NaN)
-                    curves_safe = curves_safe.where(norm_constant > 0, 0.0)
-
-                curves.loc[:, cols] = curves_safe.values
+                    curves[cols] = curves[cols].div(norm_constant, axis="index")
 
                 # Define where each segment starts
-                baselines.loc[:, cols] = (
-                    curves_safe.shift(1, axis=1).fillna(0.0).values
-                )
+                baselines[cols] = curves[cols].shift(1, axis=1).fillna(0)
 
         if multiple == "dodge":
 
@@ -328,10 +307,9 @@ class _DistributionPlotter(VectorPlotter):
         # Initialize the estimator object
         estimator = KDE(**estimate_kws)
 
-        all_observations = self.comp_data.dropna()
-
         if set(self.variables) - {"x", "y"}:
             if common_grid:
+                all_observations = self.comp_data.dropna()
                 estimator.define_support(all_observations[data_variable])
         else:
             common_norm = False
@@ -341,10 +319,6 @@ class _DistributionPlotter(VectorPlotter):
             whole_weight = all_data["weights"].sum()
         else:
             whole_weight = len(all_data)
-
-        # Only pre-compute a shared support when common_grid says to, or when
-        # the caller has already forced it on (e.g. for multiple=stack/fill).
-        shared_support = getattr(estimator, "support", None)
 
         densities = {}
 
@@ -356,71 +330,38 @@ class _DistributionPlotter(VectorPlotter):
             # Extract the weights for this subset of observations
             if "weights" in self.variables:
                 weights = sub_data["weights"]
-                part_weight = float(np.nansum(weights.to_numpy(dtype=float)))
+                part_weight = weights.sum()
             else:
                 weights = None
-                part_weight = float(len(observations))
-
-            # Invert the scaling of the support points (done below as well,
-            # kept in one place).
-            _, f_inv = self._get_scale_transforms(self.data_variable)
-
-            # Decide what support to evaluate this group on.
-            group_support = None
-            if shared_support is not None:
-                try:
-                    group_support = f_inv(shared_support)
-                except Exception:
-                    group_support = None
+                part_weight = len(sub_data)
 
             # Estimate the density of observations at this level
-            variance = np.nan_to_num(
-                pd.to_numeric(observations, errors="coerce").var()
-            )
-            singular = (
-                len(observations) < 2
-                or math.isclose(variance, 0)
-                or part_weight <= 0  # all-zero-weight group → skip fitting
-            )
-            density = None
-            support = None
+            variance = np.nan_to_num(observations.var())
+            singular = len(observations) < 2 or math.isclose(variance, 0)
             try:
                 if not singular:
+                    # Convoluted approach needed because numerical failures
+                    # can manifest in a few different ways.
                     density, support = estimator(observations, weights=weights)
-                    support = f_inv(support)
-            except (np.linalg.LinAlgError, ValueError) as e:
-                if "array must not contain" in str(e) or "finite" in str(e).lower():
-                    singular = True
-                else:
-                    singular = True
+            except np.linalg.LinAlgError:
+                singular = True
 
             if singular:
-                if group_support is None:
-                    try:
-                        estimator.define_support(all_data[data_variable])
-                        shared_support = getattr(estimator, "support", shared_support)
-                        if shared_support is not None:
-                            group_support = f_inv(shared_support)
-                    except Exception:
-                        pass
-                # Produce an all-zero density curve on the available support
-                # so stacking / filling downstream still works.
-                if group_support is not None:
-                    density = np.zeros_like(group_support, dtype=float)
-                    support = group_support
-                else:
-                    msg = (
-                        "Dataset has 0 variance; skipping density estimate. "
-                        "Pass `warn_singular=False` to disable this warning."
-                    )
-                    if warn_singular:
-                        warnings.warn(msg, UserWarning, stacklevel=4)
-                    continue
+                msg = (
+                    "Dataset has 0 variance; skipping density estimate. "
+                    "Pass `warn_singular=False` to disable this warning."
+                )
+                if warn_singular:
+                    warnings.warn(msg, UserWarning, stacklevel=4)
+                continue
+
+            # Invert the scaling of the support points
+            _, f_inv = self._get_scale_transforms(self.data_variable)
+            support = f_inv(support)
 
             # Apply a scaling factor so that the integral over all subsets is 1
             if common_norm:
-                safe_denom = whole_weight if whole_weight > 0 else 1.0
-                density = density * (part_weight / safe_denom)
+                density *= part_weight / whole_weight
 
             # Store the density for this level
             key = tuple(sub_vars.items())
@@ -527,56 +468,38 @@ class _DistributionPlotter(VectorPlotter):
             # Do the histogram computation
             if not (multiple_histograms and common_bins):
                 bin_kws = estimator._define_bin_params(sub_data, orient, None)
-            raw = estimator._eval(sub_data, orient, bin_kws)
-            counts = raw["count"].to_numpy()
-            widths_arr = raw["space"].to_numpy()
+            res = estimator._normalize(estimator._eval(sub_data, orient, bin_kws))
+            heights = res[estimator.stat].to_numpy()
+            widths = res["space"].to_numpy()
+            edges = res[orient].to_numpy() - widths / 2
 
-            # Determine the normalization denominator
-            norm_weight = whole_weight if common_norm else part_weight
-
-            heights = normalize_histogram(
-                counts,
-                widths_arr,
-                estimator.stat,
-                cumulative=estimator.cumulative,
-                total_weight=norm_weight,
-            )
-            centers = raw[orient].to_numpy()
-            edges = centers - widths_arr / 2
-
-            # Rescale the smoothed curve to match the histogram.
-            # Use the *per-group* normalized heights (common_norm=False
-            # semantics) so the KDE is scaled by the group's own area
-            # before any cross-group rescaling.
+            # Rescale the smoothed curve to match the histogram
             if kde and key in densities:
-                group_heights = normalize_histogram(
-                    counts,
-                    widths_arr,
-                    estimator.stat,
-                    cumulative=estimator.cumulative,
-                    total_weight=part_weight,
-                )
                 density = densities[key]
                 if estimator.cumulative:
-                    hist_norm = group_heights.max()
+                    hist_norm = heights.max()
                 else:
-                    hist_norm = (group_heights * widths_arr).sum()
+                    hist_norm = (heights * widths).sum()
                 densities[key] *= hist_norm
 
             # Convert edges back to original units for plotting
             ax = self._get_axes(sub_vars)
             _, inv = _get_transform_functions(ax, self.data_variable)
-            plot_widths = inv(edges + widths_arr) - inv(edges)
-            plot_edges = inv(edges)
+            widths = inv(edges + widths) - inv(edges)
+            edges = inv(edges)
 
             # Pack the histogram data and metadata together
-            plot_edges = plot_edges + (1 - shrink) / 2 * plot_widths
-            plot_widths *= shrink
+            edges = edges + (1 - shrink) / 2 * widths
+            widths *= shrink
             index = pd.MultiIndex.from_arrays([
-                pd.Index(plot_edges, name="edges"),
-                pd.Index(plot_widths, name="widths"),
+                pd.Index(edges, name="edges"),
+                pd.Index(widths, name="widths"),
             ])
             hist = pd.Series(heights, index=index, name="heights")
+
+            # Apply scaling to normalize across groups
+            if common_norm:
+                hist *= part_weight / whole_weight
 
             # Store the finalized histogram data for future plotting
             histograms[key] = hist
@@ -894,16 +817,7 @@ class _DistributionPlotter(VectorPlotter):
 
             # Apply scaling to normalize across groups
             if estimator.stat != "count" and common_norm:
-                if all_data.get("weights", None) is not None:
-                    sub_w = np.nansum(
-                        np.asarray(sub_data.get("weights", 1.0), dtype=float)
-                    )
-                    all_w = np.nansum(
-                        np.asarray(all_data["weights"], dtype=float)
-                    )
-                    heights *= sub_w / all_w if all_w > 0 else 0.0
-                else:
-                    heights *= len(sub_data) / len(all_data)
+                heights *= len(sub_data) / len(all_data)
 
             # Define the specific kwargs for this artist
             artist_kws = plot_kws.copy()
@@ -1293,9 +1207,7 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, fill, False, "layer", 1, artist_kws, {},
             )
 
-    def plot_univariate_ecdf(
-        self, estimate_kws, common_norm, legend, **plot_kws,
-    ):
+    def plot_univariate_ecdf(self, estimate_kws, legend, **plot_kws):
 
         estimator = ECDF(**estimate_kws)
 
@@ -1303,46 +1215,18 @@ class _DistributionPlotter(VectorPlotter):
         drawstyles = dict(x="steps-post", y="steps-pre")
         plot_kws["drawstyle"] = drawstyles[self.data_variable]
 
-        # Simplify downstream code if we are not normalizing
-        if estimator.stat == "count":
-            common_norm = False
-
-        # When there is no hue semantic, common_norm is irrelevant
-        if not set(self.variables) - {"x", "y"}:
-            common_norm = False
-
-        # -- 1. Prepare each subset using the shared filter routine -----------
-        #    ``prepare_ecdf_group`` is the single place ECDF sample filtering
-        #    happens.  The returned ``ECDFGroup`` contains the pre-filtered
-        #    values, weights and per-group total weight, so both the cross-
-        #    group ``common_norm`` denominator and the per-subset ECDF
-        #    numerator come from exactly the same valid-sample set.
-        subsets: list[tuple[dict, ECDFGroup]] = []
-        whole_weight = 0.0
+        # Loop through the subsets, transform and plot the data
         for sub_vars, sub_data in self.iter_data(
-            "hue", from_comp_data=True,
+            "hue", reverse=True, from_comp_data=True,
         ):
+
+            # Compute the ECDF
             if sub_data.empty:
                 continue
-            observations = sub_data[self.data_variable].to_numpy()
-            weights = (
-                sub_data["weights"].to_numpy()
-                if "weights" in sub_data.columns
-                else None
-            )
-            group = prepare_ecdf_group(observations, weights)
-            subsets.append((sub_vars, group))
-            whole_weight += group.total_weight
 
-        # -- 2. Evaluate and plot each subset --------------------------------
-        for sub_vars, group in reversed(subsets):
-
-            norm_total = whole_weight if common_norm else None
-
-            # Pass the pre-built ECDFGroup in – no re-filtering happens.
-            stat_vals, x_vals = estimator(
-                group, norm_total=norm_total,
-            )
+            observations = sub_data[self.data_variable]
+            weights = sub_data.get("weights", None)
+            stat, vals = estimator(observations, weights=weights)
 
             # Assign attributes based on semantic mapping
             artist_kws = plot_kws.copy()
@@ -1352,27 +1236,24 @@ class _DistributionPlotter(VectorPlotter):
             # Return the data variable to the linear domain
             ax = self._get_axes(sub_vars)
             _, inv = _get_transform_functions(ax, self.data_variable)
-            x_vals = inv(x_vals)
+            vals = inv(vals)
 
             # Manually set the minimum value on a "log" scale
             if isinstance(inv.__self__, mpl.scale.LogTransform):
-                x_vals[0] = -np.inf
+                vals[0] = -np.inf
 
             # Work out the orientation of the plot
             if self.data_variable == "x":
-                plot_args = x_vals, stat_vals
+                plot_args = vals, stat
                 stat_variable = "y"
             else:
-                plot_args = stat_vals, x_vals
+                plot_args = stat, vals
                 stat_variable = "x"
 
-            # Determine the top sticky edge
             if estimator.stat == "count":
-                top_edge = group.total_weight
-            elif estimator.stat == "percent":
-                top_edge = 100.0
-            else:  # proportion
-                top_edge = 1.0
+                top_edge = len(observations)
+            else:
+                top_edge = 1
 
             # Draw the line for this subset
             artist, = ax.plot(*plot_args, **artist_kws)
@@ -1982,7 +1863,7 @@ def ecdfplot(
     # Vector variables
     x=None, y=None, hue=None, weights=None,
     # Computation parameters
-    stat="proportion", complementary=False, common_norm=True,
+    stat="proportion", complementary=False,
     # Hue mapping parameters
     palette=None, hue_order=None, hue_norm=None,
     # Axes information
@@ -2026,7 +1907,6 @@ def ecdfplot(
 
     p.plot_univariate_ecdf(
         estimate_kws=estimate_kws,
-        common_norm=common_norm,
         legend=legend,
         **kwargs,
     )
@@ -2058,11 +1938,6 @@ weights : vector or key in ``data``
     towards the cumulative distribution using these values.
 {params.ecdf.stat}
 {params.ecdf.complementary}
-common_norm : bool
-    If ``True``, scale each subset's ECDF by the total count across all
-    subsets so that the proportions sum to 1 across the full dataset.
-    If ``False``, normalize each subset independently so its own ECDF
-    reaches 1.
 {params.core.palette}
 {params.core.hue_order}
 {params.core.hue_norm}

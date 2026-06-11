@@ -1350,6 +1350,28 @@ class Plotter:
                     parts.append(df.filter(cols))
             var_df = pd.concat(parts, ignore_index=True)
 
+            if axis is not None:
+                share_state_check = self._subplots.subplot_spec.get(f"share{axis}")
+                if share_state_check in [True, "all"]:
+                    all_same_axis_vars = [var]
+                    for v in p._variables:
+                        m_v = re.match(rf"^{axis}\d+$", str(v))
+                        if m_v and v != var:
+                            all_same_axis_vars.append(v)
+                    if len(all_same_axis_vars) > 1:
+                        all_same_axis_vars.sort(key=lambda s: int(re.search(r"\d+$", s).group()))
+                        all_values = []
+                        for av in all_same_axis_vars:
+                            if av in common.frame:
+                                all_values.extend(common.frame[av].dropna().values)
+                        combined_unique = list(dict.fromkeys(all_values))
+                        n_rows = max(len(var_df), len(combined_unique))
+                        new_var_col = list(combined_unique)
+                        while len(new_var_col) < n_rows:
+                            new_var_col.append(combined_unique[-1])
+                        var_df = var_df.reindex(range(n_rows))
+                        var_df[var] = new_var_col
+
             prop = PROPERTIES[prop_key]
             scale = self._get_scale(p, scale_key, prop, var_df[var])
 
@@ -1391,9 +1413,8 @@ class Plotter:
 
             for view in subplots:
 
-                axis_obj = getattr(view["ax"], f"{axis}axis")
                 seed_values = self._get_subplot_data(var_df, var, view, share_state)
-                view_scale = scale._setup(seed_values, prop, axis=axis_obj)
+                view_scale = scale._setup(seed_values, prop)
                 view["ax"].set(**{f"{axis}scale": view_scale._matplotlib_scale})
 
                 for layer, new_series in zip(layers, transformed_data):
