@@ -1449,6 +1449,9 @@ class Plotter:
 
         pair_variables = p._pair_spec.get("structure", {})
 
+        layer_actual_values: dict[str, set] = {}
+        layer_scales: dict[str, Scale] = {}
+
         for subplots, df, scales in self._generate_pairings(data, pair_variables):
 
             orient = layer["orient"] or mark._infer_orient(scales)
@@ -1506,6 +1509,23 @@ class Plotter:
 
             df = self._unscale_coords(subplots, df, orient)
 
+            for view in subplots:
+                view_df = self._filter_subplot_data(df, view)
+                for var in scales:
+                    if var in "xy":
+                        continue
+                    if var not in view_df.columns:
+                        continue
+                    if scales[var]._legend is None:
+                        continue
+                    if var not in layer_scales:
+                        layer_scales[var] = scales[var]
+                    if var not in layer_actual_values:
+                        layer_actual_values[var] = set()
+                    layer_actual_values[var].update(
+                        view_df[var].dropna().tolist()
+                    )
+
             grouping_vars = mark._grouping_props + default_grouping_vars
             split_generator = self._setup_split_generator(grouping_vars, df, subplots)
 
@@ -1516,7 +1536,9 @@ class Plotter:
             view["ax"].autoscale_view()
 
         if layer["legend"]:
-            self._update_legend_contents(p, mark, data, scales, layer["label"])
+            self._update_legend_contents(
+                p, mark, data, layer_scales, layer_actual_values, layer["label"]
+            )
 
     def _unscale_coords(
         self, subplots: list[dict], df: DataFrame, orient: str,
@@ -1697,25 +1719,18 @@ class Plotter:
         mark: Mark,
         data: PlotData,
         scales: dict[str, Scale],
+        actual_values: dict[str, set],
         layer_label: str | None,
     ) -> None:
         """Add legend artists / labels for one layer in the plot."""
-        if data.frame.empty and data.frames:
-            legend_vars: list[str] = []
-            all_data_values: dict[str, set] = {}
-            for frame in data.frames.values():
-                frame_vars = frame.columns.intersection(list(scales))
-                for v in frame_vars:
-                    if v not in legend_vars:
-                        legend_vars.append(v)
-                    if v not in all_data_values:
-                        all_data_values[v] = set()
-                    all_data_values[v].update(frame[v].dropna().tolist())
-        else:
-            legend_vars = list(data.frame.columns.intersection(list(scales)))
-            all_data_values = {
-                v: set(data.frame[v].dropna().tolist()) for v in legend_vars
-            }
+        legend_vars: list[str] = []
+        for var in scales:
+            if var in "xy":
+                continue
+            if scales[var]._legend is None:
+                continue
+            if var not in legend_vars:
+                legend_vars.append(var)
 
         # First handle layer legends, which occupy a single entry in legend_contents.
         if layer_label is not None:
@@ -1741,13 +1756,21 @@ class Plotter:
             var_legend = scales[var]._legend
             if var_legend is not None:
                 values, labels = var_legend
-                present_values = all_data_values.get(var, set())
-                filtered_values = []
-                filtered_labels = []
-                for val, lbl in zip(values, labels):
-                    if val in present_values:
-                        filtered_values.append(val)
-                        filtered_labels.append(lbl)
+
+                user_explicit_order = getattr(scales[var], "order", None)
+                present_values = actual_values.get(var, set())
+
+                if user_explicit_order is not None:
+                    filtered_values = list(values)
+                    filtered_labels = list(labels)
+                else:
+                    filtered_values = []
+                    filtered_labels = []
+                    for val, lbl in zip(values, labels):
+                        if val in present_values:
+                            filtered_values.append(val)
+                            filtered_labels.append(lbl)
+
                 if not filtered_values:
                     continue
                 for (_, part_id), part_vars, _ in schema:
