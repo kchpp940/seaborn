@@ -18,11 +18,64 @@ containers so they can be called from either code path.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
+
+
+# ---------------------------------------------------------------------------
+# Shared container for filtered ECDF input (single source of truth)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ECDFGroup:
+    """Result of :func:`prepare_ecdf_group` – the single source of truth for
+    both the legacy plotting code path and the objects-API ``ECDF`` stat.
+
+    Attributes
+    ----------
+    values : ndarray
+        Filtered observation values (finite only; possibly empty).
+    weights : ndarray
+        Filtered weights corresponding to ``values``; all entries are
+        finite and positive-or-zero.  Same length as ``values``.
+    total_weight : float
+        ``weights.sum()`` (pre-computed so all consumers agree on the
+        denominator used for ``common_norm`` / normalisation).
+    n_valid : int
+        Number of valid samples (``len(values)``).
+    """
+    values: np.ndarray
+    weights: np.ndarray
+    total_weight: float
+    n_valid: int
+
+
+def prepare_ecdf_group(
+    values: np.ndarray,
+    weights: Optional[np.ndarray] = None,
+) -> ECDFGroup:
+    """Filter an ECDF input group and derive its effective total weight.
+
+    This is the *only* place that should perform sample filtering for
+    ECDF.  Both :class:`seaborn._statistics.ECDF` (legacy) and
+    :class:`seaborn._stats.ecdf.ECDF` (objects API), as well as the
+    outer grouping loops in ``plot_univariate_ecdf``, should consume
+    the returned :class:`ECDFGroup` so the same set of valid samples
+    is used for the numerator, per-group denominator, and cross-group
+    ``common_norm`` denominator.
+    """
+    v, w = filter_valid_vectors(values, weights)
+    total = effective_weight_total(w)
+    return ECDFGroup(
+        values=v,
+        weights=w,
+        total_weight=float(total),
+        n_valid=int(v.size),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +336,7 @@ def normalize_ecdf(
 
 
 def compute_ecdf(
-    values: np.ndarray,
+    values: np.ndarray | ECDFGroup,
     weights: Optional[np.ndarray] = None,
     *,
     stat: str = "proportion",
@@ -294,10 +347,14 @@ def compute_ecdf(
 
     Parameters
     ----------
-    values : 1D array-like
-        Observed values.
+    values : 1D array-like or :class:`ECDFGroup`
+        Observed values.  When an :class:`ECDFGroup` (the output of
+        :func:`prepare_ecdf_group`) is passed, *weights* is ignored and
+        the pre-filtered values / weights / total are used directly,
+        avoiding a second filtering pass.
     weights : 1D array-like, optional
-        Observation weights (default = 1 for each sample).
+        Observation weights (default = 1 for each sample).  Ignored
+        when *values* is an :class:`ECDFGroup`.
     stat : {"proportion", "percent", "count"}
         Target statistic.
     complementary : bool, default False
@@ -316,12 +373,15 @@ def compute_ecdf(
     x : ndarray
         Sorted unique abscissa with a leading ``-inf`` (length ``n_valid + 1``).
     """
-    x, w = filter_valid_vectors(values, weights)
+    if isinstance(values, ECDFGroup):
+        x = values.values
+        w = values.weights
+        total = values.total_weight
+    else:
+        x, w = filter_valid_vectors(values, weights)
+        total = effective_weight_total(w)
 
-    n = x.size
-    total = effective_weight_total(w)
-
-    if n == 0:
+    if x.size == 0:
         y_out = np.array([0.0, 0.0])
         x_out = np.array([-np.inf, np.inf])
     else:

@@ -21,9 +21,9 @@ from ._base import VectorPlotter
 from ._statistics import ECDF, Histogram, KDE
 from ._stats.counting import Hist
 from ._stats.norm_utils import (
-    effective_weight_total,
-    filter_valid_vectors,
+    ECDFGroup,
     normalize_histogram,
+    prepare_ecdf_group,
 )
 
 from .axisgrid import (
@@ -1311,11 +1311,13 @@ class _DistributionPlotter(VectorPlotter):
         if not set(self.variables) - {"x", "y"}:
             common_norm = False
 
-        # -- Pre-compute per-subset effective weights for common_norm -------
-        # Use the *same* sample filtering as ``compute_ecdf`` so that the
-        # common_norm denominator and the ECDF numerator come from exactly
-        # the same set of valid samples (no x/weight finite mismatch).
-        subsets: list[tuple[dict, np.ndarray, np.ndarray | None, float]] = []
+        # -- 1. Prepare each subset using the shared filter routine -----------
+        #    ``prepare_ecdf_group`` is the single place ECDF sample filtering
+        #    happens.  The returned ``ECDFGroup`` contains the pre-filtered
+        #    values, weights and per-group total weight, so both the cross-
+        #    group ``common_norm`` denominator and the per-subset ECDF
+        #    numerator come from exactly the same valid-sample set.
+        subsets: list[tuple[dict, ECDFGroup]] = []
         whole_weight = 0.0
         for sub_vars, sub_data in self.iter_data(
             "hue", from_comp_data=True,
@@ -1328,22 +1330,18 @@ class _DistributionPlotter(VectorPlotter):
                 if "weights" in sub_data.columns
                 else None
             )
-            vals_filt, w_filt = filter_valid_vectors(observations, weights)
-            part_weight = effective_weight_total(w_filt)
-            subsets.append((sub_vars, vals_filt, w_filt, part_weight))
-            whole_weight += part_weight
+            group = prepare_ecdf_group(observations, weights)
+            subsets.append((sub_vars, group))
+            whole_weight += group.total_weight
 
-        # -- Loop through the subsets, transform and plot the data -----------
-        for sub_vars, vals_filt, w_filt, part_weight in reversed(subsets):
+        # -- 2. Evaluate and plot each subset --------------------------------
+        for sub_vars, group in reversed(subsets):
 
-            # Choose the normalization denominator
-            if common_norm:
-                norm_total = whole_weight
-            else:
-                norm_total = None
+            norm_total = whole_weight if common_norm else None
 
+            # Pass the pre-built ECDFGroup in – no re-filtering happens.
             stat_vals, x_vals = estimator(
-                vals_filt, weights=w_filt, norm_total=norm_total,
+                group, norm_total=norm_total,
             )
 
             # Assign attributes based on semantic mapping
@@ -1370,9 +1368,9 @@ class _DistributionPlotter(VectorPlotter):
 
             # Determine the top sticky edge
             if estimator.stat == "count":
-                top_edge = part_weight
+                top_edge = group.total_weight
             elif estimator.stat == "percent":
-                top_edge = 100.0 if not common_norm else 100.0
+                top_edge = 100.0
             else:  # proportion
                 top_edge = 1.0
 

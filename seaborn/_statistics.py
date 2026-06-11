@@ -458,11 +458,14 @@ class ECDF:
 
         Parameters
         ----------
-        x1 : array-like
-            Data values.
+        x1 : array-like or :class:`seaborn._stats.norm_utils.ECDFGroup`
+            Data values.  When an ``ECDFGroup`` (from
+            :func:`seaborn._stats.norm_utils.prepare_ecdf_group`) is
+            passed, *weights* is ignored and the pre-filtered values /
+            weights are used directly.
         x2 : unused (bivariate ECDF not implemented).
         weights : array-like, optional
-            Observation weights.
+            Observation weights.  Ignored when *x1* is an ``ECDFGroup``.
         norm_total : float, optional
             Total effective weight of the *normalization group*. When
             provided (``common_norm=True``) each subset's ECDF is
@@ -470,14 +473,16 @@ class ECDF:
             total. When ``None`` (``common_norm=False``) each subset
             normalises independently.
         """
-        x1 = np.asarray(x1, dtype=float)
-        if weights is None:
-            weights = np.ones_like(x1, dtype=float)
+        from ._stats.norm_utils import ECDFGroup
+
+        if isinstance(x1, ECDFGroup):
+            group = x1
         else:
-            weights = np.asarray(weights, dtype=float)
+            from ._stats.norm_utils import prepare_ecdf_group
+            group = prepare_ecdf_group(x1, weights)
 
         if x2 is None:
-            return self._eval_univariate(x1, weights, norm_total=norm_total)
+            return self._eval_univariate(group, None, norm_total=norm_total)
         else:
             return self._eval_bivariate(x1, x2, weights)
 

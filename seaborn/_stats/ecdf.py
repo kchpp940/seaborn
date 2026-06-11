@@ -13,9 +13,9 @@ from seaborn._core.scales import Scale
 from seaborn._stats.base import Stat
 from seaborn._stats.norm_utils import (
     compute_ecdf,
-    effective_weight_total,
     filter_valid_samples,
     normalize_ecdf,
+    prepare_ecdf_group,
 )
 
 
@@ -71,14 +71,11 @@ class ECDF(Stat):
     def _eval(self, data: DataFrame, orient: str) -> DataFrame:
         """Compute the raw ECDF (count scale) for a single (hue-)group.
 
-        Returns a DataFrame with columns:
-          * ``orient``: the sorted sample values (plus a leading ``-inf``).
-          * ``_total_weight``: effective total weight of this group.
-          * ``ecdf``: the un-normalized weighted cumulative count on the
-            count scale (no ``complementary`` flip yet – that happens in
-            :meth:`_normalize` together with all other stat conversions so
-            both the legacy and objects paths go through the same
-            :func:`seaborn._stats.norm_utils.normalize_ecdf` function).
+        Sample filtering happens *once* in :func:`prepare_ecdf_group`, and
+        the resulting :class:`ECDFGroup` is consumed by both the per-group
+        total-weight lookup and by :func:`compute_ecdf`, ensuring the
+        numerator and denominator always refer to exactly the same set of
+        valid samples.
         """
         vals = data[orient].to_numpy(dtype=float)
         weights = (
@@ -87,14 +84,14 @@ class ECDF(Stat):
             else None
         )
 
+        group = prepare_ecdf_group(vals, weights)
         y_counts, x_vals = compute_ecdf(
-            vals, weights, stat="count", complementary=False,
+            group, stat="count", complementary=False,
         )
-        total_weight = float(y_counts[-1]) if y_counts.size > 0 else 0.0
 
         return DataFrame({
             orient: x_vals,
-            "_total_weight": total_weight,
+            "_total_weight": group.total_weight,
             "ecdf": y_counts,
         })
 
