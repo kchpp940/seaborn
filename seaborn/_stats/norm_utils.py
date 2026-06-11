@@ -212,6 +212,76 @@ def _check_stat(stat: str) -> None:
 # ECDF helpers
 # ---------------------------------------------------------------------------
 
+def normalize_ecdf(
+    y_counts: np.ndarray,
+    group_total: float,
+    *,
+    stat: str = "proportion",
+    complementary: bool = False,
+    norm_total: Optional[float] = None,
+) -> np.ndarray:
+    """Normalize raw cumulative counts to the requested ECDF ``stat``.
+
+    This is the single source of truth for ECDF normalization. Both
+    :class:`seaborn._statistics.ECDF` (legacy) and
+    :class:`seaborn._stats.ecdf.ECDF` (objects API) funnel through here
+    so their output is identical for the same input.
+
+    Parameters
+    ----------
+    y_counts : 1D ndarray
+        Raw weighted cumulative counts (including the leading zero if the
+        caller uses the ``-inf`` anchor convention).
+    group_total : float
+        Total effective weight of *this* group. Used as the fallback
+        denominator when ``norm_total`` is ``None``, and as the flip
+        reference for ``complementary`` on the count scale.
+    stat : {"proportion", "percent", "count"}
+        Target statistic.
+    complementary : bool, default False
+        If True return the complementary CDF (``max - y``).  The flip
+        happens on the *output* scale, i.e. after normalization for
+        ``proportion`` / ``percent`` but on the raw count scale for
+        ``stat="count"``.
+    norm_total : float, optional
+        Total effective weight of the *normalization group* (all subsets
+        that share a ``common_norm`` scope).  When provided it replaces
+        ``group_total`` as the denominator so each subset's ECDF
+        reflects its share of the whole.  When ``None`` (the default)
+        each group is normalised by its own total.
+    """
+    if stat not in {"proportion", "percent", "count"}:
+        raise ValueError(
+            "ECDF `stat` must be one of 'proportion', 'percent', 'count'; "
+            f"got {stat!r}."
+        )
+
+    y = np.asarray(y_counts, dtype=float)
+
+    if stat == "count":
+        if complementary and y.size > 0:
+            y = group_total - y
+        return y
+
+    # -- proportion / percent -----------------------------------------------
+    denom = float(norm_total) if norm_total is not None else group_total
+    safe_denom = denom if denom > 0 else 1.0
+    out = y / safe_denom
+    if denom <= 0:
+        out = np.zeros_like(out)
+
+    if complementary:
+        max_val = group_total / safe_denom if denom > 0 else 0.0
+        if denom <= 0:
+            max_val = 0.0
+        out = max_val - out
+
+    if stat == "percent":
+        out = out * 100.0
+
+    return out
+
+
 def compute_ecdf(
     values: np.ndarray,
     weights: Optional[np.ndarray] = None,
@@ -246,44 +316,29 @@ def compute_ecdf(
     x : ndarray
         Sorted unique abscissa with a leading ``-inf`` (length ``n_valid + 1``).
     """
-    if stat not in {"proportion", "percent", "count"}:
-        raise ValueError(
-            "ECDF `stat` must be one of 'proportion', 'percent', 'count'; "
-            f"got {stat!r}."
-        )
-
     x, w = filter_valid_vectors(values, weights)
 
     n = x.size
     total = effective_weight_total(w)
 
-    if n == 0 or (stat != "count" and total <= 0):
+    if n == 0:
         y_out = np.array([0.0, 0.0])
         x_out = np.array([-np.inf, np.inf])
-        return y_out, x_out
-
-    order = np.argsort(x, kind="mergesort")
-    x_sorted = x[order]
-    w_sorted = w[order]
-
-    y_raw = np.cumsum(w_sorted, dtype=float)
-
-    if stat == "count":
-        y = y_raw
     else:
-        denom = float(norm_total) if norm_total is not None else total
-        safe_denom = denom if denom > 0 else 1.0
-        y = y_raw / safe_denom
-        if denom <= 0:
-            y = np.zeros_like(y)
-        if stat == "percent":
-            y = y * 100.0
+        order = np.argsort(x, kind="mergesort")
+        x_sorted = x[order]
+        w_sorted = w[order]
+        y_raw = np.cumsum(w_sorted, dtype=float)
+        y_out = np.r_[0.0, y_raw]
+        x_out = np.r_[-np.inf, x_sorted]
 
-    y_out = np.r_[0.0, y]
-    x_out = np.r_[-np.inf, x_sorted]
-
-    if complementary:
-        y_out = y_out[-1] - y_out
+    y_out = normalize_ecdf(
+        y_out,
+        group_total=total,
+        stat=stat,
+        complementary=complementary,
+        norm_total=norm_total,
+    )
 
     return y_out, x_out
 

@@ -15,6 +15,7 @@ from seaborn._stats.norm_utils import (
     compute_ecdf,
     effective_weight_total,
     filter_valid_samples,
+    normalize_ecdf,
 )
 
 
@@ -68,46 +69,33 @@ class ECDF(Stat):
         self._check_param_one_of("stat", ["proportion", "percent", "count"])
 
     def _eval(self, data: DataFrame, orient: str) -> DataFrame:
-        """Compute the ECDF for a single (hue-)group of data.
+        """Compute the raw ECDF (count scale) for a single (hue-)group.
 
         Returns a DataFrame with columns:
           * ``orient``: the sorted sample values (plus a leading ``-inf``).
           * ``_total_weight``: effective total weight of this group.
-          * ``ecdf``: the un-normalized weighted cumulative count up to
-            the corresponding value. This is then normalized in
-            :meth:`__call__` to honour ``common_norm``.
+          * ``ecdf``: the un-normalized weighted cumulative count on the
+            count scale (no ``complementary`` flip yet – that happens in
+            :meth:`_normalize` together with all other stat conversions so
+            both the legacy and objects paths go through the same
+            :func:`seaborn._stats.norm_utils.normalize_ecdf` function).
         """
         vals = data[orient].to_numpy(dtype=float)
         weights = (
             data["weight"].to_numpy(dtype=float)
             if "weight" in data.columns
-            else np.ones_like(vals, dtype=float)
+            else None
         )
 
-        finite_mask = np.isfinite(vals) & np.isfinite(weights)
-        vals = vals[finite_mask]
-        weights = weights[finite_mask]
-
-        total_weight = float(np.where(weights > 0, weights, 0.0).sum())
-
-        if vals.size == 0:
-            y_out = np.array([0.0, 0.0])
-            x_out = np.array([-np.inf, np.inf])
-        else:
-            order = np.argsort(vals, kind="mergesort")
-            x_sorted = vals[order]
-            w_sorted = weights[order]
-            y_raw = np.cumsum(w_sorted, dtype=float)
-            y_out = np.r_[0.0, y_raw]
-            x_out = np.r_[-np.inf, x_sorted]
-
-        if self.complementary and y_out.size > 1:
-            y_out = y_out[-1] - y_out
+        y_counts, x_vals = compute_ecdf(
+            vals, weights, stat="count", complementary=False,
+        )
+        total_weight = float(y_counts[-1]) if y_counts.size > 0 else 0.0
 
         return DataFrame({
-            orient: x_out,
-            "_total_weight": float(total_weight),
-            "ecdf": y_out,
+            orient: x_vals,
+            "_total_weight": total_weight,
+            "ecdf": y_counts,
         })
 
     def _normalize(self, data: DataFrame, orient: str,
@@ -115,10 +103,15 @@ class ECDF(Stat):
         """Normalize weighted cumulative counts to the requested stat.
 
         ``total_weight_lookup`` maps each hue-group's tuple to the
-        effective total weight that should be used as the denominator.
-        When the lookup is ``None`` (stat == "count", or common_norm is
-        handled differently) the un-normalized cumulative values are
-        returned as-is (then scaled for ``percent`` below).
+        effective total weight that should be used as the denominator
+        (i.e. the ``norm_total`` argument of :func:`normalize_ecdf`).
+        When the lookup is ``None`` each group uses its own
+        ``_total_weight`` as the denominator.
+
+        The actual normalization (including ``complementary`` flip,
+        percent scaling, and zero-total guards) is delegated to
+        :func:`seaborn._stats.norm_utils.normalize_ecdf` so the objects
+        API and the legacy :class:`seaborn._statistics.ECDF` agree.
         """
         grouping_cols = [
             c for c in data.columns
@@ -127,20 +120,14 @@ class ECDF(Stat):
 
         def _norm_one(part: DataFrame, denom: float | None) -> DataFrame:
             ecdf = part["ecdf"].to_numpy(dtype=float)
-
-            if self.stat == "count":
-                out = ecdf
-            else:
-                if denom is None:
-                    # Fall back to per-group total.
-                    denom = float(part["_total_weight"].iloc[0])
-                if denom <= 0:
-                    out = np.zeros_like(ecdf)
-                else:
-                    out = ecdf / float(denom)
-                if self.stat == "percent":
-                    out = out * 100.0
-
+            group_total = float(part["_total_weight"].iloc[0])
+            out = normalize_ecdf(
+                ecdf,
+                group_total=group_total,
+                stat=self.stat,
+                complementary=self.complementary,
+                norm_total=denom,
+            )
             return part.assign(**{self.stat: out})
 
         if grouping_cols and total_weight_lookup is not None:
@@ -155,7 +142,10 @@ class ECDF(Stat):
             parts = [_norm_one(p, None) for _, p in data.groupby(grouping_cols, sort=False)]
             return pd.concat(parts, ignore_index=True)
         else:
-            return _norm_one(data, total_weight_lookup.get(()) if total_weight_lookup else None)
+            return _norm_one(
+                data,
+                total_weight_lookup.get(()) if total_weight_lookup else None,
+            )
 
     def __call__(
         self,
