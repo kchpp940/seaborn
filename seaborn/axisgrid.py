@@ -114,6 +114,21 @@ class Grid(_BaseGrid):
         # don't add proxy artists onto the Axes. We need an overall cleaner approach.
         self._extract_legend_handles = False
 
+    def _reset_legend_state(self):
+        """Reset internal legend state to prevent stale entries between calls.
+
+        This clears `_legend_data` and removes any previously drawn legend,
+        ensuring that figure-level functions start from a clean slate when
+        assembling the legend.
+        """
+        self._legend_data = {}
+        if self._legend is not None:
+            try:
+                self._legend.remove()
+            except NotImplementedError:
+                pass
+            self._legend = None
+
     def tight_layout(self, *args, **kwargs):
         """Call fig.tight_layout within rect that exclude the legend."""
         kwargs = kwargs.copy()

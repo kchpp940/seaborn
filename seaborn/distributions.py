@@ -158,14 +158,18 @@ class _DistributionPlotter(VectorPlotter):
 
         if isinstance(ax_obj, mpl.axes.Axes):
             ax_obj.legend(handles, labels, title=self.variables["hue"], **legend_kws)
-        else:  # i.e. a FacetGrid. TODO make this better
-            legend_data = dict(zip(labels, handles))
-            ax_obj.add_legend(
-                legend_data,
-                title=self.variables["hue"],
-                label_order=self.var_levels["hue"],
-                **legend_kws
-            )
+        else:  # i.e. a FacetGrid. Collect data for unified assembly.
+            # Store legend metadata on the plotter instance using the hierarchical
+            # `(var_name, level)` key structure that FacetGrid.add_legend expects
+            # when called with `adjust_subtitles=True`.  This keeps distribution
+            # plots consistent with relplot and catplot, and prevents stale
+            # entries from accumulating across facet collections.
+            var_name = self.variables["hue"]
+            self.legend_data = {
+                (var_name, label): handle for label, handle in zip(labels, handles)
+            }
+            self.legend_order = [(var_name, level) for level in self.var_levels["hue"]]
+            self.legend_title = var_name
 
     def _artist_kws(self, kws, fill, element, multiple, color, alpha):
         """Handle differences between artists in filled/unfilled plots."""
@@ -2257,13 +2261,39 @@ def displot(
         p.plot_rug(**rug_kws)
 
     # Call FacetGrid annotation methods
-    # Note that the legend is currently set inside the plotting method
+    # Note that the legend metadata has already been collected by the
+    # plot_* method (via _add_legend) into `p.legend_data / p.legend_order /
+    # p.legend_title` using hierarchical keys.  We will render it below
+    # after clearing any stale FacetGrid state, for consistency with relplot /
+    # catplot.
     g.set_axis_labels(
-        x_var=p.variables.get("x", g.axes.flat[0].get_xlabel()),
-        y_var=p.variables.get("y", g.axes.flat[0].get_ylabel()),
+        x_var=p.variables.get("x") or g.axes.flat[0].get_xlabel(),
+        y_var=p.variables.get("y") or g.axes.flat[0].get_ylabel(),
     )
     g.set_titles()
     g.tight_layout()
+
+    # ---- Unified legend assembly ----
+    #
+    # The plot_* method (histogram/kde/ecdf) has already called
+    # `_add_legend` with the FacetGrid object, which *collected* legend
+    # metadata (handles + labels) onto the plotter instance instead of
+    # rendering it directly.  This two-step approach keeps the structure
+    # consistent with `relplot` / `catplot` and lets us clear any stale
+    # FacetGrid legend state before producing the single external legend.
+    g._reset_legend_state()
+
+    legend_data = getattr(p, "legend_data", None)
+    legend_order = getattr(p, "legend_order", None)
+    legend_title = getattr(p, "legend_title", None)
+
+    if legend and "hue" in p.variables and legend_data:
+        g.add_legend(
+            legend_data=legend_data,
+            label_order=legend_order,
+            title=legend_title,
+            adjust_subtitles=True,
+        )
 
     if data is not None and (x is not None or y is not None):
         if not isinstance(data, pd.DataFrame):

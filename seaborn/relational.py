@@ -846,6 +846,11 @@ def relplot(
         # the correct type, since we force a categorical mapping above.
         p.plot_data = plot_data
 
+        # Clear any residual legend state that may have accumulated from
+        # FacetGrid.map_dataframe internal calls to _update_legend_data, or
+        # from prior uses of the same Axes objects.
+        g._reset_legend_state()
+
         # Handle the additional non-semantic keyword arguments out here.
         # We're selective because some kwargs may be seaborn function specific
         # and not relevant to the matplotlib artists going into the legend.

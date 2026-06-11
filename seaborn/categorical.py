@@ -426,7 +426,7 @@ class _CategoricalPlotter(VectorPlotter):
         if show_legend:
             self.add_legend_data(ax, func, common_kws, semantic_kws=semantic_kws)
             handles, _ = ax.get_legend_handles_labels()
-            if handles:
+            if handles and self.facets is None:
                 ax.legend(title=self.legend_title)
 
     @property
@@ -3126,20 +3126,42 @@ def catplot(
     for ax in g.axes.flat:
         p._adjust_cat_axis(ax, axis=p.orient)
 
-    g.set_axis_labels(p.variables.get("x"), p.variables.get("y"))
+    # Use the original x/y variable names (captured here before any
+    # downstream scaling might have modified `p.variables`) when applying
+    # the shared axis labels, to match relplot/displot conventions.
+    x_label = p.variables.get("x") if p.variables.get("x") is not None else ""
+    y_label = p.variables.get("y") if p.variables.get("y") is not None else ""
+    g.set_axis_labels(x_label, y_label)
     g.set_titles()
     g.tight_layout()
 
-    for ax in g.axes.flat:
-        g._update_legend_data(ax)
-        ax.legend_ = None
+    # ---- Unified legend assembly ----
+    #
+    # The plot_* methods above have already called `_configure_legend` ->
+    # `add_legend_data` on the global plotter `p`.  That populates
+    # `p.legend_data` with hierarchical keys `(var, level)` -> artist
+    # handles, `p.legend_order` with the desired key ordering, and
+    # `p.legend_title` with the appropriate (single) semantic title or ""
+    # for multi-semantic legends.  Because `_configure_legend` skips
+    # `ax.legend()` in figure-level mode (see `self.facets is None` guard),
+    # no per-Axes legend was drawn.  All we need to do here is:
+    #   1. Clear any stale state that may have accumulated on the FacetGrid
+    #   2. Delegate to `FacetGrid.add_legend` with the plotter's data,
+    #      producing a single external legend that is consistent with
+    #      `relplot` / `displot`.
+    g._reset_legend_state()
 
     if legend == "auto":
         show_legend = not p._redundant_hue and p.input_format != "wide"
     else:
         show_legend = bool(legend)
-    if show_legend:
-        g.add_legend(title=p.variables.get("hue"), label_order=hue_order)
+    if show_legend and p.legend_data:
+        g.add_legend(
+            legend_data=p.legend_data,
+            label_order=p.legend_order,
+            title=p.legend_title,
+            adjust_subtitles=True,
+        )
 
     if data is not None:
         # Replace the dataframe on the FacetGrid for any subsequent maps
