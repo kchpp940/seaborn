@@ -57,39 +57,134 @@ def _convert_colors(colors):
         return [list(map(to_rgb, color_list)) for color_list in colors]
 
 
+def _clean_df_for_matrix(data):
+    """Convert input to a clean DataFrame suitable for matrix plotting.
+
+    Handles pandas nullable dtypes (Int64, Float64, etc.) and pd.NA values
+    by converting them to float with np.nan. Preserves index and columns
+    (including MultiIndex). Only converts columns that can be made numeric.
+
+    Parameters
+    ----------
+    data : DataFrame, ndarray, or array-like
+        Input rectangular data.
+
+    Returns
+    -------
+    df : DataFrame
+        Cleaned DataFrame with numeric float dtype and np.nan for missing values.
+
+    """
+    if not isinstance(data, pd.DataFrame):
+        arr = np.asarray(data)
+        if arr.dtype == object:
+            try:
+                arr = arr.astype(float)
+            except (TypeError, ValueError):
+                pass
+        data = pd.DataFrame(arr)
+
+    needs_conversion = False
+    for dtype in data.dtypes:
+        if isinstance(dtype, pd.ArrowDtype) or pd.api.types.is_extension_array_dtype(dtype):
+            needs_conversion = True
+            break
+        if dtype == object:
+            needs_conversion = True
+            break
+
+    if needs_conversion:
+        new_data = {}
+        for col in data.columns:
+            series = data[col]
+            if pd.api.types.is_extension_array_dtype(series.dtype):
+                try:
+                    new_data[col] = series.to_numpy(dtype=float, na_value=np.nan)
+                except (TypeError, ValueError):
+                    new_data[col] = series.to_numpy()
+            elif pd.api.types.is_numeric_dtype(series):
+                new_data[col] = series.to_numpy()
+            else:
+                try:
+                    new_data[col] = pd.to_numeric(series, errors='coerce').to_numpy()
+                except (TypeError, ValueError):
+                    new_data[col] = series.to_numpy()
+        data = pd.DataFrame(new_data, index=data.index, columns=data.columns)
+
+    return data
+
+
+def _df_to_numeric_array(df):
+    """Convert a DataFrame to a float numpy array, handling missing values.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Input DataFrame (already cleaned by _clean_df_for_matrix).
+
+    Returns
+    -------
+    arr : ndarray
+        Numeric float array with np.nan for missing values.
+
+    """
+    return np.asarray(df.values, dtype=float)
+
+
 def _matrix_mask(data, mask):
     """Ensure that data and mask are compatible and add missing values.
 
     Values will be plotted for cells where ``mask`` is ``False``.
 
     ``data`` is expected to be a DataFrame; ``mask`` can be an array or
-    a DataFrame.
+    a DataFrame. Masks with pd.NA are treated as True (masked).
 
     """
     if mask is None:
-        mask = np.zeros(data.shape, bool)
+        mask = pd.DataFrame(np.zeros(data.shape, bool),
+                            index=data.index, columns=data.columns)
 
     if isinstance(mask, pd.DataFrame):
-        # For DataFrame masks, ensure that semantic labels match data
         if not mask.index.equals(data.index) \
-           and mask.columns.equals(data.columns):
+           or not mask.columns.equals(data.columns):
             err = "Mask must have the same index and columns as data."
             raise ValueError(err)
+
+        mask_arr = np.zeros(mask.shape, dtype=bool)
+        for i, col in enumerate(mask.columns):
+            series = mask[col]
+            if pd.api.types.is_extension_array_dtype(series.dtype):
+                col_values = series.to_numpy(dtype=object, na_value=None)
+            else:
+                col_values = series.to_numpy(dtype=object)
+            for j, val in enumerate(col_values):
+                if val is None or (isinstance(val, float) and np.isnan(val)) or pd.isna(val):
+                    mask_arr[j, i] = True
+                else:
+                    mask_arr[j, i] = bool(val)
+        mask = pd.DataFrame(mask_arr, index=data.index, columns=data.columns, dtype=bool)
+
     elif hasattr(mask, "__array__"):
         mask = np.asarray(mask)
-        # For array masks, ensure that shape matches data then convert
         if mask.shape != data.shape:
             raise ValueError("Mask must have the same shape as data.")
 
-        mask = pd.DataFrame(mask,
+        mask_obj = np.asarray(mask, dtype=object)
+        mask_bool = np.zeros(mask.shape, dtype=bool)
+        for idx in np.ndindex(mask.shape):
+            val = mask_obj[idx]
+            if val is None or (isinstance(val, float) and np.isnan(val)) or pd.isna(val):
+                mask_bool[idx] = True
+            else:
+                mask_bool[idx] = bool(val)
+
+        mask = pd.DataFrame(mask_bool,
                             index=data.index,
                             columns=data.columns,
                             dtype=bool)
 
-    # Add any cells with missing data to the mask
-    # This works around an issue where `plt.pcolormesh` doesn't represent
-    # missing data properly
-    mask = mask | pd.isnull(data)
+    data_isnull = pd.isnull(data)
+    mask = mask | data_isnull
 
     return mask
 
@@ -102,17 +197,15 @@ class _HeatMapper:
                  xticklabels=True, yticklabels=True, mask=None):
         """Initialize the plotting object."""
         # We always want to have a DataFrame with semantic information
-        # and an ndarray to pass to matplotlib
-        if isinstance(data, pd.DataFrame):
-            plot_data = data.values
-        else:
-            plot_data = np.asarray(data)
-            data = pd.DataFrame(plot_data)
+        # and an ndarray to pass to matplotlib. Use unified cleaning
+        # to handle nullable dtypes, pd.NA, object arrays, etc.
+        data = _clean_df_for_matrix(data)
+        plot_data = _df_to_numeric_array(data)
 
         # Validate the mask and convert to DataFrame
         mask = _matrix_mask(data, mask)
 
-        plot_data = np.ma.masked_where(np.asarray(mask), plot_data)
+        plot_data = np.ma.masked_where(np.asarray(mask.values), plot_data)
 
         # Get good names for the rows and columns
         xtickevery = 1
@@ -171,7 +264,11 @@ class _HeatMapper:
             if isinstance(annot, bool):
                 annot_data = plot_data
             else:
-                annot_data = np.asarray(annot)
+                if isinstance(annot, pd.DataFrame):
+                    annot_clean = _clean_df_for_matrix(annot)
+                    annot_data = _df_to_numeric_array(annot_clean)
+                else:
+                    annot_data = np.asarray(annot)
                 if annot_data.shape != plot_data.shape:
                     err = "`data` and `annot` must have same shape."
                     raise ValueError(err)
@@ -473,13 +570,13 @@ class _DendrogramPlotter:
         """
         self.axis = axis
         if self.axis == 1:
-            data = data.T
+            if isinstance(data, pd.DataFrame):
+                data = data.T
+            else:
+                data = np.asarray(data).T
 
-        if isinstance(data, pd.DataFrame):
-            array = data.values
-        else:
-            array = np.asarray(data)
-            data = pd.DataFrame(array)
+        data = _clean_df_for_matrix(data)
+        array = _df_to_numeric_array(data)
 
         self.array = array
         self.data = data
@@ -704,20 +801,23 @@ class ClusterGrid(Grid):
 
         if isinstance(data, pd.DataFrame):
             self.data = data
+            self._orig_is_frame = True
         else:
             self.data = pd.DataFrame(data)
+            self._orig_is_frame = False
 
         self.data2d = self.format_data(self.data, pivot_kws, z_score,
                                        standard_scale)
+        self.data2d = _clean_df_for_matrix(self.data2d)
 
         self.mask = _matrix_mask(self.data2d, mask)
 
         self._figure = plt.figure(figsize=figsize)
 
         self.row_colors, self.row_color_labels = \
-            self._preprocess_colors(data, row_colors, axis=0)
+            self._preprocess_colors(row_colors, axis=0)
         self.col_colors, self.col_color_labels = \
-            self._preprocess_colors(data, col_colors, axis=1)
+            self._preprocess_colors(col_colors, axis=1)
 
         try:
             row_dendrogram_ratio, col_dendrogram_ratio = dendrogram_ratio
@@ -771,38 +871,44 @@ class ClusterGrid(Grid):
         self.dendrogram_row = None
         self.dendrogram_col = None
 
-    def _preprocess_colors(self, data, colors, axis):
+    def _preprocess_colors(self, colors, axis):
         """Preprocess {row/col}_colors to extract labels and convert colors."""
         labels = None
 
         if colors is not None:
             if isinstance(colors, (pd.DataFrame, pd.Series)):
 
-                # If data is unindexed, raise
-                if (not hasattr(data, "index") and axis == 0) or (
-                    not hasattr(data, "columns") and axis == 1
-                ):
+                # If original data was unindexed (not a DataFrame), raise
+                if not self._orig_is_frame:
                     axis_name = "col" if axis else "row"
                     msg = (f"{axis_name}_colors indices can't be matched with data "
                            f"indices. Provide {axis_name}_colors as a non-indexed "
                            "datatype, e.g. by using `.to_numpy()``")
                     raise TypeError(msg)
 
-                # Ensure colors match data indices
+                # Ensure colors match data2d indices (after pivot/transform)
                 if axis == 0:
-                    colors = colors.reindex(data.index)
+                    colors = colors.reindex(self.data2d.index)
                 else:
-                    colors = colors.reindex(data.columns)
+                    colors = colors.reindex(self.data2d.columns)
 
-                # Replace na's with white color
+                # Replace na's (including pd.NA) with white color
                 # TODO We should set these to transparent instead
-                colors = colors.astype(object).fillna('white')
-
-                # Extract color values and labels from frame/series
                 if isinstance(colors, pd.DataFrame):
+                    for col in colors.columns:
+                        if pd.api.types.is_extension_array_dtype(colors[col].dtype):
+                            colors[col] = colors[col].astype(object).where(
+                                colors[col].notna(), 'white'
+                            )
+                        else:
+                            colors[col] = colors[col].astype(object).fillna('white')
                     labels = list(colors.columns)
                     colors = colors.T.values
                 else:
+                    if pd.api.types.is_extension_array_dtype(colors.dtype):
+                        colors = colors.astype(object).where(colors.notna(), 'white')
+                    else:
+                        colors = colors.astype(object).fillna('white')
                     if colors.name is None:
                         labels = [""]
                     else:
@@ -1081,7 +1187,11 @@ class ClusterGrid(Grid):
             if isinstance(annot, bool):
                 annot_data = self.data2d
             else:
-                annot_data = np.asarray(annot)
+                if isinstance(annot, pd.DataFrame):
+                    annot_clean = _clean_df_for_matrix(annot)
+                    annot_data = _df_to_numeric_array(annot_clean)
+                else:
+                    annot_data = np.asarray(annot)
                 if annot_data.shape != self.data2d.shape:
                     err = "`data` and `annot` must have same shape."
                     raise ValueError(err)

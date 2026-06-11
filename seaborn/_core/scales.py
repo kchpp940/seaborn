@@ -193,15 +193,9 @@ class Boolean(Scale):
         forward, inverse = _make_identity_transforms()
         mpl_scale = new._get_scale(str(data.name), forward, inverse)
 
-        setup_axis = PseudoAxis(mpl_scale)
-        mpl_scale.set_default_locators_and_formatters(setup_axis)
+        axis = PseudoAxis(mpl_scale) if axis is None else axis
+        mpl_scale.set_default_locators_and_formatters(axis)
         new._matplotlib_scale = mpl_scale
-
-        if axis is not None:
-            ax = axis.axes
-            name = axis.axis_name
-            set_scale = getattr(ax, f"set_{name}scale")
-            set_scale(mpl_scale)
 
         return new
 
@@ -266,32 +260,57 @@ class Nominal(Scale):
         if new._label_params is None:
             new = new.label()
 
+        # TODO flexibility over format() which isn't great for numbers / dates
         stringify = np.vectorize(format, otypes=["object"])
 
         units_seed = categorical_order(data, new.order)
-        units_list = list(stringify(np.array(units_seed)))
-        units_index = {u: i for i, u in enumerate(units_list)}
+
+        # TODO move to Nominal._get_scale?
+        # TODO this needs some more complicated rethinking about how to pass
+        # a unit dictionary down to these methods, along with how much we want
+        # to invest in their API. What is it useful for tick() to do here?
+        # (Ordinal may be different if we draw that contrast).
+        # Any customization we do to allow, e.g., label wrapping will probably
+        # require defining our own Formatter subclass.
+        # We could also potentially implement auto-wrapping in an Axis subclass
+        # (see Axis.draw ... it already is computing the bboxes).
+        # major_locator, minor_locator = new._get_locators(**new._tick_params)
+        # major_formatter = new._get_formatter(major_locator, **new._label_params)
 
         class CatScale(mpl.scale.LinearScale):
-            def __init__(self, axis_name):
-                super().__init__(axis_name)
-
             def set_default_locators_and_formatters(self, axis):
-                unit_dict = units_index
-                axis.set_major_locator(mpl.category.StrCategoryLocator(unit_dict))
-                axis.set_major_formatter(mpl.category.StrCategoryFormatter(unit_dict))
-                axis.update_units(units_list)
+                ...
+                # axis.set_major_locator(major_locator)
+                # if minor_locator is not None:
+                #     axis.set_minor_locator(minor_locator)
+                # axis.set_major_formatter(major_formatter)
 
-        mpl_scale = CatScale(str(data.name))
+        mpl_scale = CatScale(data.name)
+        if axis is None:
+            axis = PseudoAxis(mpl_scale)
+
+            # TODO Currently just used in non-Coordinate contexts, but should
+            # we use this to (A) set the padding we want for categorial plots
+            # and (B) allow the values parameter for a Coordinate to set xlim/ylim
+            axis.set_view_interval(0, len(units_seed) - 1)
 
         new._matplotlib_scale = mpl_scale
 
+        # TODO array cast necessary to handle float/int mixture, which we need
+        # to solve in a more systematic way probably
+        # (i.e. if we have [1, 2.5], do we want [1.0, 2.5]? Unclear)
+        axis.update_units(stringify(np.array(units_seed)))
+
+        # TODO define this more centrally
         def convert_units(x):
-            str_x = stringify(np.asarray(x))
+            # TODO only do this with explicit order?
+            # (But also category dtype?)
+            # TODO isin fails when units_seed mixes numbers and strings (numpy error?)
+            # but np.isin also does not seem any faster? (Maybe not broadcasting in C)
+            # keep = x.isin(units_seed)
+            keep = np.array([x_ in units_seed for x_ in x], bool)
             out = np.full(len(x), np.nan)
-            for i, v in enumerate(str_x):
-                if v in units_index:
-                    out[i] = units_index[v]
+            out[keep] = axis.convert_units(stringify(x[keep]))
             return out
 
         new._pipeline = [convert_units, prop.get_mapping(new, data)]
@@ -299,13 +318,6 @@ class Nominal(Scale):
 
         if prop.legend:
             new._legend = units_seed, list(stringify(units_seed))
-
-        if axis is not None:
-            ax = axis.axes
-            name = axis.axis_name
-            set_scale = getattr(ax, f"set_{name}scale")
-            set_scale(mpl_scale)
-            axis.set_view_interval(0, len(units_seed) - 1)
 
         return new
 
@@ -418,13 +430,12 @@ class ContinuousBase(Scale):
 
         mpl_scale = new._get_scale(str(data.name), forward, inverse)
 
-        setup_axis = PseudoAxis(mpl_scale)
-        setup_axis.update_units(data)
+        if axis is None:
+            axis = PseudoAxis(mpl_scale)
+            axis.update_units(data)
 
-        mpl_scale.set_default_locators_and_formatters(setup_axis)
+        mpl_scale.set_default_locators_and_formatters(axis)
         new._matplotlib_scale = mpl_scale
-
-        convert = setup_axis.convert_units
 
         normalize: Optional[Callable[[ArrayLike], ArrayLike]]
         if prop.normed:
@@ -432,7 +443,7 @@ class ContinuousBase(Scale):
                 vmin, vmax = data.min(), data.max()
             else:
                 vmin, vmax = new.norm
-            vmin, vmax = map(float, convert((vmin, vmax)))
+            vmin, vmax = map(float, axis.convert_units((vmin, vmax)))
             a = forward(vmin)
             b = forward(vmax) - forward(vmin)
 
@@ -443,7 +454,7 @@ class ContinuousBase(Scale):
             normalize = vmin = vmax = None
 
         new._pipeline = [
-            convert,
+            axis.convert_units,
             forward,
             normalize,
             prop.get_mapping(new, data)
@@ -456,22 +467,24 @@ class ContinuousBase(Scale):
             return np.min(np.diff(np.sort(x)))
         new._spacer = spacer
 
+        # TODO How to allow disabling of legend for all uses of property?
+        # Could add a Scale parameter, or perhaps Scale.suppress()?
+        # Are there other useful parameters that would be in Scale.legend()
+        # besides allowing Scale.legend(False)?
         if prop.legend:
-            setup_axis.set_view_interval(vmin, vmax)
-            locs = setup_axis.major.locator()
+            axis.set_view_interval(vmin, vmax)
+            locs = axis.major.locator()
             locs = locs[(vmin <= locs) & (locs <= vmax)]
-            if hasattr(setup_axis.major.formatter, "set_useOffset"):
-                setup_axis.major.formatter.set_useOffset(False)
-            if hasattr(setup_axis.major.formatter, "set_scientific"):
-                setup_axis.major.formatter.set_scientific(False)
-            labels = setup_axis.major.formatter.format_ticks(locs)
+            # Avoid having an offset / scientific notation in a legend
+            # as we don't represent that anywhere so it ends up incorrect.
+            # This could become an option (e.g. Continuous.label(offset=True))
+            # in which case we would need to figure out how to show it.
+            if hasattr(axis.major.formatter, "set_useOffset"):
+                axis.major.formatter.set_useOffset(False)
+            if hasattr(axis.major.formatter, "set_scientific"):
+                axis.major.formatter.set_scientific(False)
+            labels = axis.major.formatter.format_ticks(locs)
             new._legend = list(locs), list(labels)
-
-        if axis is not None:
-            ax = axis.axes
-            name = axis.axis_name
-            set_scale = getattr(ax, f"set_{name}scale")
-            set_scale(mpl_scale)
 
         return new
 
@@ -853,78 +866,6 @@ class Temporal(ContinuousBase):
             formatter = AutoDateFormatter(locator)
 
         return formatter
-
-    def _setup(
-        self, data: Series, prop: Property, axis: Axis | None = None,
-    ) -> Scale:
-
-        new = copy(self)
-        if new._tick_params is None:
-            new = new.tick()
-        if new._label_params is None:
-            new = new.label()
-
-        forward, inverse = new._get_transform()
-
-        mpl_scale = new._get_scale(str(data.name), forward, inverse)
-
-        setup_axis = PseudoAxis(mpl_scale)
-
-        setup_axis.update_units(data)
-
-        mpl_scale.set_default_locators_and_formatters(setup_axis)
-        new._matplotlib_scale = mpl_scale
-
-        convert = mpl.dates.date2num
-
-        normalize: Optional[Callable[[ArrayLike], ArrayLike]]
-        if prop.normed:
-            if new.norm is None:
-                vmin, vmax = data.min(), data.max()
-            else:
-                vmin, vmax = new.norm
-            vmin, vmax = map(float, convert((vmin, vmax)))
-            a = forward(vmin)
-            b = forward(vmax) - forward(vmin)
-
-            def normalize(x):
-                return (x - a) / b
-
-        else:
-            normalize = vmin = vmax = None
-
-        new._pipeline = [
-            convert,
-            forward,
-            normalize,
-            prop.get_mapping(new, data)
-        ]
-
-        def spacer(x):
-            x = x.dropna().unique()
-            if len(x) < 2:
-                return np.nan
-            return np.min(np.diff(np.sort(x)))
-        new._spacer = spacer
-
-        if prop.legend:
-            setup_axis.set_view_interval(vmin, vmax)
-            locs = setup_axis.major.locator()
-            locs = locs[(vmin <= locs) & (locs <= vmax)]
-            if hasattr(setup_axis.major.formatter, "set_useOffset"):
-                setup_axis.major.formatter.set_useOffset(False)
-            if hasattr(setup_axis.major.formatter, "set_scientific"):
-                setup_axis.major.formatter.set_scientific(False)
-            labels = setup_axis.major.formatter.format_ticks(locs)
-            new._legend = list(locs), list(labels)
-
-        if axis is not None:
-            ax = axis.axes
-            name = axis.axis_name
-            set_scale = getattr(ax, f"set_{name}scale")
-            set_scale(mpl_scale)
-
-        return new
 
 
 # ----------------------------------------------------------------------------------- #

@@ -172,8 +172,6 @@ class Subplots:
                 "row": None,
                 "x": "x",
                 "y": "y",
-                "_scales": {},
-                "_has_data": False,
             }]
             self._figure = target.figure
             return self._figure
@@ -216,7 +214,7 @@ class Subplots:
         self._subplot_list = []
         for (i, j), ax in iter_axs:
 
-            info = {"ax": ax, "_scales": {}, "_has_data": False}
+            info = {"ax": ax}
 
             nrows, ncols = self.subplot_spec["nrows"], self.subplot_spec["ncols"]
             if not self.wrap:

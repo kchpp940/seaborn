@@ -1350,28 +1350,6 @@ class Plotter:
                     parts.append(df.filter(cols))
             var_df = pd.concat(parts, ignore_index=True)
 
-            if axis is not None:
-                share_state_check = self._subplots.subplot_spec.get(f"share{axis}")
-                if share_state_check in [True, "all"]:
-                    all_same_axis_vars = [var]
-                    for v in p._variables:
-                        m_v = re.match(rf"^{axis}\d+$", str(v))
-                        if m_v and v != var:
-                            all_same_axis_vars.append(v)
-                    if len(all_same_axis_vars) > 1:
-                        all_same_axis_vars.sort(key=lambda s: int(re.search(r"\d+$", s).group()))
-                        all_values = []
-                        for av in all_same_axis_vars:
-                            if av in common.frame:
-                                all_values.extend(common.frame[av].dropna().values)
-                        combined_unique = list(dict.fromkeys(all_values))
-                        n_rows = max(len(var_df), len(combined_unique))
-                        new_var_col = list(combined_unique)
-                        while len(new_var_col) < n_rows:
-                            new_var_col.append(combined_unique[-1])
-                        var_df = var_df.reindex(range(n_rows))
-                        var_df[var] = new_var_col
-
             prop = PROPERTIES[prop_key]
             scale = self._get_scale(p, scale_key, prop, var_df[var])
 
@@ -1413,11 +1391,9 @@ class Plotter:
 
             for view in subplots:
 
+                axis_obj = getattr(view["ax"], f"{axis}axis")
                 seed_values = self._get_subplot_data(var_df, var, view, share_state)
-                view_scale = scale._setup(seed_values, prop)
-                view["_scales"][coord] = view_scale
-                if not seed_values.dropna().empty:
-                    view["_has_data"] = True
+                view_scale = scale._setup(seed_values, prop, axis=axis_obj)
                 view["ax"].set(**{f"{axis}scale": view_scale._matplotlib_scale})
 
                 for layer, new_series in zip(layers, transformed_data):
@@ -1448,9 +1424,6 @@ class Plotter:
         grouping_properties = [v for v in PROPERTIES if v[0] not in "xy"]
 
         pair_variables = p._pair_spec.get("structure", {})
-
-        layer_actual_values: dict[str, set] = {}
-        layer_scales: dict[str, Scale] = {}
 
         for subplots, df, scales in self._generate_pairings(data, pair_variables):
 
@@ -1509,23 +1482,6 @@ class Plotter:
 
             df = self._unscale_coords(subplots, df, orient)
 
-            for view in subplots:
-                view_df = self._filter_subplot_data(df, view)
-                for var in scales:
-                    if var in "xy":
-                        continue
-                    if var not in view_df.columns:
-                        continue
-                    if scales[var]._legend is None:
-                        continue
-                    if var not in layer_scales:
-                        layer_scales[var] = scales[var]
-                    if var not in layer_actual_values:
-                        layer_actual_values[var] = set()
-                    layer_actual_values[var].update(
-                        view_df[var].dropna().tolist()
-                    )
-
             grouping_vars = mark._grouping_props + default_grouping_vars
             split_generator = self._setup_split_generator(grouping_vars, df, subplots)
 
@@ -1536,9 +1492,7 @@ class Plotter:
             view["ax"].autoscale_view()
 
         if layer["legend"]:
-            self._update_legend_contents(
-                p, mark, data, layer_scales, layer_actual_values, layer["label"]
-            )
+            self._update_legend_contents(p, mark, data, scales, layer["label"])
 
     def _unscale_coords(
         self, subplots: list[dict], df: DataFrame, orient: str,
@@ -1593,14 +1547,10 @@ class Plotter:
                 else:
                     out_df = data.frame.copy()
 
-            scales = {k: v for k, v in self._scales.items() if k not in "xy"}
-            if subplots and x in subplots[0]["_scales"]:
-                scales["x"] = subplots[0]["_scales"][x]
-            elif x in self._scales:
+            scales = self._scales.copy()
+            if x in out_df:
                 scales["x"] = self._scales[x]
-            if subplots and y in subplots[0]["_scales"]:
-                scales["y"] = subplots[0]["_scales"][y]
-            elif y in self._scales:
+            if y in out_df:
                 scales["y"] = self._scales[y]
 
             for axis, var in zip("xy", (x, y)):
@@ -1719,18 +1669,16 @@ class Plotter:
         mark: Mark,
         data: PlotData,
         scales: dict[str, Scale],
-        actual_values: dict[str, set],
         layer_label: str | None,
     ) -> None:
         """Add legend artists / labels for one layer in the plot."""
-        legend_vars: list[str] = []
-        for var in scales:
-            if var in "xy":
-                continue
-            if scales[var]._legend is None:
-                continue
-            if var not in legend_vars:
-                legend_vars.append(var)
+        if data.frame.empty and data.frames:
+            legend_vars: list[str] = []
+            for frame in data.frames.values():
+                frame_vars = frame.columns.intersection(list(scales))
+                legend_vars.extend(v for v in frame_vars if v not in legend_vars)
+        else:
+            legend_vars = list(data.frame.columns.intersection(list(scales)))
 
         # First handle layer legends, which occupy a single entry in legend_contents.
         if layer_label is not None:
@@ -1756,23 +1704,6 @@ class Plotter:
             var_legend = scales[var]._legend
             if var_legend is not None:
                 values, labels = var_legend
-
-                user_explicit_order = getattr(scales[var], "order", None)
-                present_values = actual_values.get(var, set())
-
-                if user_explicit_order is not None:
-                    filtered_values = list(values)
-                    filtered_labels = list(labels)
-                else:
-                    filtered_values = []
-                    filtered_labels = []
-                    for val, lbl in zip(values, labels):
-                        if val in present_values:
-                            filtered_values.append(val)
-                            filtered_labels.append(lbl)
-
-                if not filtered_values:
-                    continue
                 for (_, part_id), part_vars, _ in schema:
                     if data.ids[var] == part_id:
                         # Allow multiple plot semantics to represent same data variable
@@ -1780,7 +1711,7 @@ class Plotter:
                         break
                 else:
                     title = self._resolve_label(p, var, data.names[var])
-                    entry = (title, data.ids[var]), [var], (filtered_values, filtered_labels)
+                    entry = (title, data.ids[var]), [var], (values, labels)
                     schema.append(entry)
 
         # Second pass, generate an artist corresponding to each value
@@ -1849,14 +1780,6 @@ class Plotter:
 
         for sub in self._subplots:
             ax = sub["ax"]
-
-            if not sub["_has_data"]:
-                for axis in "xy":
-                    axis_obj = getattr(ax, f"{axis}axis")
-                    axis_obj.set_major_locator(mpl.ticker.NullLocator())
-                    axis_obj.set_major_formatter(mpl.ticker.NullFormatter())
-                continue
-
             for axis in "xy":
                 axis_key = sub[axis]
                 axis_obj = getattr(ax, f"{axis}axis")
@@ -1873,8 +1796,8 @@ class Plotter:
                         hi = cast(float, hi) + 0.5
                     ax.set(**{f"{axis}lim": (lo, hi)})
 
-                if axis_key in sub["_scales"]:
-                    sub["_scales"][axis_key]._finalize(p, axis_obj)
+                if axis_key in self._scales:  # TODO when would it not be?
+                    self._scales[axis_key]._finalize(p, axis_obj)
 
         if (engine_name := p._layout_spec.get("engine", default)) is not default:
             # None is a valid arg for Figure.set_layout_engine, hence `default`
