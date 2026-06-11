@@ -107,6 +107,20 @@ class HoverVariableMetadata(TypedDict, total=False):
     property_type: str
 
 
+class HoverElementMetadata(TypedDict, total=False):
+    """Metadata for a single visual element (dot, bar, line segment, etc.).
+
+    This allows interactive backends to map hover events back to specific
+    visual elements and their corresponding data values.
+    """
+
+    artist_id: int
+    draw_order: int
+    source_index: list[int] | None
+    stat_index: list[int]
+    group_key: dict[str, Any]
+
+
 class HoverLayerMetadata(TypedDict, total=False):
     """Metadata for a single mark layer within a subplot."""
 
@@ -115,6 +129,7 @@ class HoverLayerMetadata(TypedDict, total=False):
     layer_index: int
     variables: dict[str, HoverVariableMetadata]
     mappable_props: list[str]
+    elements: list[HoverElementMetadata]
 
 
 class HoverSubplotMetadata(TypedDict, total=False):
@@ -1575,7 +1590,11 @@ class Plotter:
 
         pair_variables = p._pair_spec.get("structure", {})
 
-        for subplots, df, scales in self._generate_pairings(data, pair_variables):
+        draw_order_counter = itertools.count()
+
+        for layer_pairing_idx, (subplots, df, scales) in enumerate(
+            self._generate_pairings(data, pair_variables)
+        ):
 
             orient = layer["orient"] or mark._infer_orient(scales)
 
@@ -1635,7 +1654,39 @@ class Plotter:
             grouping_vars = mark._grouping_props + default_grouping_vars
             split_generator = self._setup_split_generator(grouping_vars, df, subplots)
 
+            source_data = None
+            try:
+                layer_idx = self._layers.index(layer)
+                if layer_idx < len(self._pre_stat_layer_data):
+                    source_layer_data = self._pre_stat_layer_data[layer_idx]
+                    if source_layer_data is not None:
+                        source_pairings = list(
+                            self._generate_pairings(source_layer_data, pair_variables)
+                        )
+                        # For pair grids, the source pairings correspond 1:1 with the stat pairings
+                        if layer_pairing_idx < len(source_pairings):
+                            _, source_df, _ = source_pairings[layer_pairing_idx]
+                            if len(source_df) == len(df):
+                                source_data = source_df
+                        # Fallback: try to find by length match
+                        if source_data is None:
+                            for _, source_df, _ in source_pairings:
+                                if len(source_df) == len(df):
+                                    source_data = source_df
+                                    break
+            except (ValueError, IndexError):
+                pass
+
+            mark._start_hover_tracking(source_data, draw_order_counter)
             mark._plot(split_generator, scales, orient)
+
+            pairing_elements = mark._stop_hover_tracking()
+            x_var_key = subplots[0].get("x", "x")
+            y_var_key = subplots[0].get("y", "y")
+            for elem in pairing_elements:
+                elem["x_var"] = x_var_key
+                elem["y_var"] = y_var_key
+            layer.setdefault("_hover_element_data", []).extend(pairing_elements)
 
         # TODO is this the right place for this?
         for view in self._subplots:
@@ -2050,6 +2101,35 @@ class Plotter:
                             view_df, scales, layer_label, source_view_df
                         )
                         layer_meta["layer_index"] = layer_idx
+
+                        all_elements = layer.get("_hover_element_data", [])
+                        subplot_elements = []
+                        for elem in all_elements:
+                            gk = elem.get("group_key", {})
+                            elem_col = gk.get("col")
+                            elem_row = gk.get("row")
+                            elem_x_var = elem.get("x_var")
+                            elem_y_var = elem.get("y_var")
+                            view_col = subplot_view.get("col")
+                            view_row = subplot_view.get("row")
+                            view_x_var = subplot_meta.get("x_var")
+                            view_y_var = subplot_meta.get("y_var")
+                            col_match = elem_col == view_col
+                            row_match = elem_row == view_row
+                            x_var_match = (
+                                elem_x_var is None
+                                or view_x_var is None
+                                or elem_x_var == view_x_var
+                            )
+                            y_var_match = (
+                                elem_y_var is None
+                                or view_y_var is None
+                                or elem_y_var == view_y_var
+                            )
+                            if col_match and row_match and x_var_match and y_var_match:
+                                subplot_elements.append(elem)
+
+                        layer_meta["elements"] = subplot_elements
                         subplot_meta["layers"].append(layer_meta)  # type: ignore
                     except Exception:
                         continue

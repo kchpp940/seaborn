@@ -65,24 +65,25 @@ class DotBase(Mark):
         # (That should be solved upstream by defaulting to "" for unset x/y?)
         # (Be mindful of xmin/xmax, etc!)
 
-        for _, data, ax in split_gen():
+        for group_key, data, ax in split_gen():
 
             offsets = np.column_stack([data["x"], data["y"]])
-            data = self._resolve_properties(data, scales)
+            resolved = self._resolve_properties(data, scales)
 
             points = mpl.collections.PathCollection(
                 offsets=offsets,
-                paths=data["path"],
-                sizes=data["size"],
-                facecolors=data["facecolor"],
-                edgecolors=data["edgecolor"],
-                linewidths=data["linewidth"],
-                linestyles=data["edgestyle"],
+                paths=resolved["path"],
+                sizes=resolved["size"],
+                facecolors=resolved["facecolor"],
+                edgecolors=resolved["edgecolor"],
+                linewidths=resolved["linewidth"],
+                linestyles=resolved["edgestyle"],
                 transOffset=ax.transData,
                 transform=mpl.transforms.IdentityTransform(),
                 **self.artist_kws,
             )
             ax.add_collection(points)
+            self._record_element(points, data.index, group_key)
 
     def _legend_artist(
         self, variables: list[str], value: Any, scales: dict[str, Scale],

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, fields, field
+import itertools
 import textwrap
 from typing import Any, Callable, Union
 from collections.abc import Generator
@@ -106,6 +107,9 @@ class Mark:
     """Base class for objects that visually represent data."""
 
     artist_kws: dict = field(default_factory=dict)
+    _hover_element_data: list[dict[str, Any]] = field(default_factory=list)
+    _hover_tracking_enabled: bool = False
+    _hover_source_data: DataFrame | None = None
 
     @property
     def _mappable_props(self):
@@ -122,6 +126,75 @@ class Mark:
             f.name for f in fields(self)
             if isinstance(f.default, Mappable) and f.default.grouping
         ]
+
+    def _start_hover_tracking(
+        self,
+        source_data: DataFrame | None = None,
+        draw_order_counter: itertools.count | None = None,
+    ) -> None:
+        """Initialize hover tracking for this mark's _plot call."""
+        self._hover_element_data = []
+        self._hover_tracking_enabled = True
+        self._hover_source_data = source_data
+        self._hover_draw_order_counter = draw_order_counter
+        self._hover_local_draw_order = 0
+
+    def _stop_hover_tracking(self) -> list[dict[str, Any]]:
+        """Stop hover tracking and return the collected element data."""
+        self._hover_tracking_enabled = False
+        element_data = self._hover_element_data.copy()
+        self._hover_element_data = []
+        self._hover_source_data = None
+        self._hover_draw_order_counter = None
+        self._hover_local_draw_order = 0
+        return element_data
+
+    def _record_element(
+        self,
+        artist: Artist,
+        stat_indices: list[int] | np.ndarray,
+        group_key: dict[str, Any],
+    ) -> None:
+        """Record a visual element for hover metadata.
+
+        Parameters
+        ----------
+        artist : matplotlib Artist
+            The artist object representing this visual element.
+        stat_indices : list or array
+            Indices into the stat_output data for this element.
+        group_key : dict
+            The grouping key for this element (from split_generator).
+        """
+        if not self._hover_tracking_enabled:
+            return
+
+        if self._hover_draw_order_counter is not None:
+            draw_order = next(self._hover_draw_order_counter)
+        else:
+            draw_order = self._hover_local_draw_order
+            self._hover_local_draw_order += 1
+
+        stat_indices = list(map(int, np.asarray(stat_indices).ravel()))
+
+        source_indices = None
+        if self._hover_source_data is not None and not self._hover_source_data.empty:
+            try:
+                if len(self._hover_source_data) >= max(stat_indices) + 1:
+                    source_indices = list(stat_indices)
+                else:
+                    source_indices = None
+            except Exception:
+                source_indices = None
+
+        element_info = {
+            "artist_id": id(artist),
+            "draw_order": draw_order,
+            "stat_index": stat_indices,
+            "source_index": source_indices,
+            "group_key": group_key,
+        }
+        self._hover_element_data.append(element_info)
 
     # TODO make this method private? Would extender every need to call directly?
     def _resolve(

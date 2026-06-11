@@ -6,7 +6,7 @@ from seaborn._core.plot import Plot
 from seaborn._core.scales import Nominal, Continuous
 from seaborn._marks.dot import Dot
 from seaborn._marks.line import Line
-from seaborn._marks.bar import Bar
+from seaborn._marks.bar import Bar, Bars
 from seaborn._stats.aggregation import Agg
 from seaborn._stats.counting import Hist
 
@@ -629,3 +629,233 @@ class TestHoverMetadataEdgeCases:
         np.testing.assert_array_almost_equal(
             color_var["scaled_values"], expected_scaled
         )
+
+
+class TestHoverMetadataElementTracking:
+    """Tests for element-level tracking (artist_id, indices, draw_order, group_key)."""
+
+    def test_elements_field_present(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        meta = Plot(df, "x", "y").add(Dot()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        assert "elements" in layer
+        assert isinstance(layer["elements"], list)
+        assert len(layer["elements"]) > 0
+
+    def test_element_structure(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        elem = layer["elements"][0]
+        assert "artist_id" in elem
+        assert "draw_order" in elem
+        assert "stat_index" in elem
+        assert "source_index" in elem
+        assert "group_key" in elem
+        assert isinstance(elem["artist_id"], int)
+        assert isinstance(elem["draw_order"], int)
+        assert isinstance(elem["stat_index"], list)
+        assert elem["group_key"] is not None
+
+    def test_dot_single_artist_for_all_points(self):
+        df = pd.DataFrame({"x": [1, 2, 3, 4, 5], "y": [1, 2, 3, 4, 5]})
+        meta = Plot(df, "x", "y").add(Dot()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        assert len(layer["elements"]) == 1
+        elem = layer["elements"][0]
+        assert len(elem["stat_index"]) == 5
+        assert elem["stat_index"] == [0, 1, 2, 3, 4]
+        assert elem["source_index"] == [0, 1, 2, 3, 4]
+        assert elem["draw_order"] == 0
+
+    def test_bar_one_artist_per_bar(self):
+        df = pd.DataFrame({"x": ["a", "b", "c"], "y": [1, 2, 3]})
+        meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        assert len(layer["elements"]) == 3
+        for i, elem in enumerate(layer["elements"]):
+            assert elem["draw_order"] == i
+            assert elem["stat_index"] == [i]
+            assert elem["source_index"] == [i]
+
+    def test_bars_one_artist_per_bar(self):
+        df = pd.DataFrame({"x": ["a", "b", "c"], "y": [1, 2, 3]})
+        meta = Plot(df, "x", "y").add(Bars()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        assert len(layer["elements"]) == 3
+        for i, elem in enumerate(layer["elements"]):
+            assert elem["draw_order"] == i
+            assert elem["stat_index"] == [i]
+            assert elem["source_index"] == [i]
+
+    def test_hist_stat_elements(self):
+        np.random.seed(42)
+        df = pd.DataFrame({"x": np.random.randn(50)})
+        meta = Plot(df, "x").add(Bars(), Hist(bins=5)).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        assert len(layer["elements"]) == 5
+        for i, elem in enumerate(layer["elements"]):
+            assert elem["draw_order"] == i
+            assert elem["stat_index"] == [i]
+            assert elem["source_index"] is None
+
+    def test_agg_stat_elements(self):
+        df = pd.DataFrame({
+            "x": ["a", "a", "b", "b", "c", "c"],
+            "y": [1, 3, 2, 4, 3, 5],
+        })
+        meta = Plot(df, "x", "y").add(Bar(), Agg("mean")).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        assert len(layer["elements"]) == 3
+        for i, elem in enumerate(layer["elements"]):
+            assert elem["draw_order"] == i
+            assert elem["stat_index"] == [i]
+            assert elem["source_index"] is None
+
+    def test_facet_elements_separated(self):
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [1, 2, 3, 4, 5, 6],
+            "g": ["a", "a", "a", "b", "b", "b"],
+        })
+        meta = Plot(df, "x", "y").facet(col="g").add(Bar()).hover_metadata()
+        assert len(meta["subplots"]) == 2
+
+        subplot_a = [s for s in meta["subplots"] if s["col"] == "a"][0]
+        subplot_b = [s for s in meta["subplots"] if s["col"] == "b"][0]
+
+        assert len(subplot_a["layers"][0]["elements"]) == 3
+        assert len(subplot_b["layers"][0]["elements"]) == 3
+
+        for i, elem in enumerate(subplot_a["layers"][0]["elements"]):
+            assert elem["group_key"]["col"] == "a"
+            assert elem["stat_index"] == [i]
+
+        for i, elem in enumerate(subplot_b["layers"][0]["elements"]):
+            assert elem["group_key"]["col"] == "b"
+            assert elem["stat_index"] == [i + 3]
+
+    def test_facet_empty_subset_no_elements(self):
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 4],
+            "y": [1, 2, 3, 4],
+            "g": ["a", "a", "a", "a"],
+        })
+        meta = (
+            Plot(df, "x", "y")
+            .facet(col="g", order=["a", "b"])
+            .add(Bar())
+            .hover_metadata()
+        )
+        assert len(meta["subplots"]) == 2
+
+        subplot_a = [s for s in meta["subplots"] if s["col"] == "a"][0]
+        subplot_b = [s for s in meta["subplots"] if s["col"] == "b"][0]
+
+        assert len(subplot_a["layers"][0]["elements"]) == 4
+        assert len(subplot_b["layers"]) == 0
+
+    def test_pair_elements(self):
+        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        meta = Plot(df).pair(x=["a", "b"], y=["a", "b"]).add(Dot()).hover_metadata()
+        assert len(meta["subplots"]) == 4
+
+        for subplot in meta["subplots"]:
+            assert len(subplot["layers"]) == 1
+            layer = subplot["layers"][0]
+            assert len(layer["elements"]) == 1
+            elem = layer["elements"][0]
+            assert len(elem["stat_index"]) == 3
+            assert elem["source_index"] == [0, 1, 2]
+
+    def test_multi_layer_elements_separated(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        meta = (
+            Plot(df, "x", "y")
+            .add(Bar(), label="bars")
+            .add(Dot(), label="dots")
+            .hover_metadata()
+        )
+        layer = meta["subplots"][0]["layers"]
+        assert len(layer) == 2
+
+        bar_layer = [l for l in layer if l["layer_label"] == "bars"][0]
+        dot_layer = [l for l in layer if l["layer_label"] == "dots"][0]
+
+        assert len(bar_layer["elements"]) == 3
+        assert len(dot_layer["elements"]) == 1
+
+        for elem in bar_layer["elements"]:
+            assert "Bar" in str(type(elem["artist_id"])) or isinstance(elem["artist_id"], int)
+
+        for elem in dot_layer["elements"]:
+            assert isinstance(elem["artist_id"], int)
+
+    def test_draw_order_is_sequential(self):
+        df = pd.DataFrame({"x": ["a", "b", "c", "d"], "y": [1, 2, 3, 4]})
+        meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
+        elements = meta["subplots"][0]["layers"][0]["elements"]
+        draw_orders = [e["draw_order"] for e in elements]
+        assert draw_orders == [0, 1, 2, 3]
+
+    def test_group_key_contains_grouping_vars(self):
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [1, 2, 3, 4, 5, 6],
+            "g": ["a", "a", "a", "b", "b", "b"],
+        })
+        from seaborn._marks.line import Line
+        meta = (
+            Plot(df, "x", "y")
+            .add(Line(), color="g")
+            .hover_metadata()
+        )
+        layer = meta["subplots"][0]["layers"][0]
+        assert len(layer["elements"]) == 2
+
+        group_keys = [e["group_key"] for e in layer["elements"]]
+        color_values = sorted([gk.get("color") for gk in group_keys])
+        assert color_values == ["a", "b"]
+
+    def test_element_indices_match_variable_values(self):
+        df = pd.DataFrame({"x": [10, 20, 30], "y": [100, 200, 300]})
+        meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        x_var = layer["variables"]["x"]
+        y_var = layer["variables"]["y"]
+
+        for i, elem in enumerate(layer["elements"]):
+            stat_idx = elem["stat_index"][0]
+            assert x_var["stat_output_values"][stat_idx] == pytest.approx([10, 20, 30][i])
+            assert y_var["stat_output_values"][stat_idx] == pytest.approx([100, 200, 300][i])
+            assert x_var["source_values"][stat_idx] == [10, 20, 30][i]
+
+    def test_line_mark_tracks_elements(self):
+        df = pd.DataFrame({"x": [1, 2, 3, 4], "y": [1, 4, 9, 16]})
+        from seaborn._marks.line import Line
+        meta = Plot(df, "x", "y").add(Line()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+        assert len(layer["elements"]) == 1
+        elem = layer["elements"][0]
+        assert len(elem["stat_index"]) == 4
+        assert elem["source_index"] == [0, 1, 2, 3]
+        assert elem["draw_order"] == 0
+
+    def test_multiple_group_keys(self):
+        df = pd.DataFrame({
+            "x": [1, 2, 1, 2],
+            "y": [1, 2, 3, 4],
+            "g": ["a", "a", "b", "b"],
+        })
+        from seaborn._marks.line import Line
+        meta = (
+            Plot(df, "x", "y")
+            .add(Line(), color="g", linestyle="g")
+            .hover_metadata()
+        )
+        layer = meta["subplots"][0]["layers"][0]
+        assert len(layer["elements"]) == 2
+        for elem in layer["elements"]:
+            gk = elem["group_key"]
+            assert "color" in gk
+            assert "linestyle" in gk
