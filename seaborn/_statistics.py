@@ -28,6 +28,12 @@ from numbers import Number
 from statistics import NormalDist
 import numpy as np
 import pandas as pd
+
+from seaborn._stats.norm_utils import (
+    compute_ecdf,
+    filter_valid_vectors,
+    normalize_histogram,
+)
 try:
     from scipy.stats import gaussian_kde
     _no_scipy = False
@@ -371,30 +377,48 @@ class Histogram:
         if bin_kws is None:
             bin_kws = self.define_bin_params(x, weights=weights, cache=False)
 
-        density = self.stat == "density"
+        # Always ask numpy for raw weighted counts. The normalization to the
+        # requested stat is handled by normalize_histogram, so that the
+        # result exactly matches what the Stat-layer ``Hist`` produces.
         hist, bin_edges = np.histogram(
-            x, **bin_kws, weights=weights, density=density,
+            x, **bin_kws, weights=weights, density=False,
         )
 
-        if self.stat == "probability" or self.stat == "proportion":
-            hist = hist.astype(float) / hist.sum()
-        elif self.stat == "percent":
-            hist = hist.astype(float) / hist.sum() * 100
-        elif self.stat == "frequency":
-            hist = hist.astype(float) / np.diff(bin_edges)
+        # Compute total effective weight of this group. When ``common_norm``
+        # is handled by the caller (distributions.py) they re-scale; for a
+        # single call to Histogram the effective total is simply the sum of
+        # weights.
+        if weights is None:
+            total_weight = float(len(x))
+        else:
+            w_arr = np.asarray(weights, dtype=float)
+            total_weight = float(
+                np.where(np.isfinite(w_arr), w_arr, 0.0).sum()
+            )
 
-        if self.cumulative:
-            if self.stat in ["density", "frequency"]:
-                hist = (hist * np.diff(bin_edges)).cumsum()
-            else:
-                hist = hist.cumsum()
+        hist = normalize_histogram(
+            hist,
+            np.diff(bin_edges),
+            self.stat,
+            cumulative=self.cumulative,
+            total_weight=total_weight,
+        )
 
         return hist, bin_edges
 
     def __call__(self, x1, x2=None, weights=None):
         """Count the occurrences in each bin, maybe normalize."""
+        # Filter non-finite values so empty and all-zero groups behave well.
+        # Keep weights=None (don't upgrade to 1s) so automatic bin width
+        # selectors in numpy don't complain about "weighted data".
         if x2 is None:
-            return self._eval_univariate(x1, weights)
+            if weights is None:
+                x1_arr = np.asarray(x1, dtype=float)
+                mask = np.isfinite(x1_arr)
+                x1_filt, w_filt = x1_arr[mask], None
+            else:
+                x1_filt, w_filt = filter_valid_vectors(x1, weights)
+            return self._eval_univariate(x1_filt, w_filt)
         else:
             return self._eval_bivariate(x1, x2, weights)
 
@@ -422,31 +446,20 @@ class ECDF:
 
     def _eval_univariate(self, x, weights):
         """Inner function for ECDF of one variable."""
-        sorter = x.argsort()
-        x = x[sorter]
-        weights = weights[sorter]
-        y = weights.cumsum()
-
-        if self.stat in ["percent", "proportion"]:
-            y = y / y.max()
-        if self.stat == "percent":
-            y = y * 100
-
-        x = np.r_[-np.inf, x]
-        y = np.r_[0, y]
-
-        if self.complementary:
-            y = y.max() - y
-
+        # Delegate to the shared implementation for consistent handling of
+        # empty inputs, all-zero weights, and non-finite values.
+        y, x = compute_ecdf(
+            x, weights, stat=self.stat, complementary=self.complementary,
+        )
         return y, x
 
     def __call__(self, x1, x2=None, weights=None):
         """Return proportion or count of observations below each sorted datapoint."""
-        x1 = np.asarray(x1)
+        x1 = np.asarray(x1, dtype=float)
         if weights is None:
-            weights = np.ones_like(x1)
+            weights = np.ones_like(x1, dtype=float)
         else:
-            weights = np.asarray(weights)
+            weights = np.asarray(weights, dtype=float)
 
         if x2 is None:
             return self._eval_univariate(x1, weights)

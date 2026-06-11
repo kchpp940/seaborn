@@ -46,178 +46,6 @@ __all__ = [
 ]
 
 
-class CategoryMapping:
-    """
-    Unified categorical semantic mapping.
-
-    Single source of truth for all category-level coordinate semantics:
-    levels, numeric positions, tick/legend labels, hue dodge offsets,
-    and element widths. Built in two phases:
-
-    1. ``setup(order, formatter, native_scale)`` - before _attach()
-    2. ``finalize(dodge, width, gap, hue_map, comp_data, orient)`` - after map_hue()
-
-    All plotting methods (box/violin/bar/strip/point) read only from this object,
-    never recomputing widths, offsets, or labels independently.
-    """
-
-    def __init__(self):
-        self.levels = None
-        self.positions = None
-        self.tick_labels = None
-        self.legend_labels = None
-        self.native_scale = False
-        self.formatter = None
-        self.hue_offsets = None
-        self.full_width = None
-        self.element_width = None
-        self.n_hue = 1
-        self.width_factor = 0.8
-        self.gap = 0
-        self.dodge = False
-
-    def setup(self, levels, order=None, formatter=None, native_scale=False,
-              var_type="categorical"):
-        """Phase 1: normalize levels and decide on native vs ordinal scale."""
-        if native_scale and var_type != "categorical":
-            self.native_scale = True
-            self.formatter = formatter
-            self.levels = list(levels)
-        else:
-            self.native_scale = False
-            self.formatter = None
-            self.levels = list(levels)
-
-    def finalize(self, dodge, width, gap, hue_map, comp_data, orient):
-        """Phase 2: compute numeric positions, labels, offsets, and widths."""
-        self.dodge = dodge
-        self.width_factor = width
-        self.gap = gap
-
-        if self.native_scale:
-            cat_series = comp_data[orient].dropna()
-            numeric_vals = pd.to_numeric(cat_series, errors="coerce").dropna()
-            self.positions = np.sort(numeric_vals.unique())
-        else:
-            self.positions = np.arange(len(self.levels))
-
-        if self.native_scale and self.formatter is not None:
-            self.tick_labels = [self.formatter(v) for v in self.levels]
-        elif not self.native_scale:
-            self.tick_labels = list(self.levels)
-        else:
-            self.tick_labels = None
-        self.legend_labels = list(self.levels) if self.tick_labels is None else list(self.tick_labels)
-
-        self._compute_native_width(comp_data, orient)
-        self._setup_hue_offsets(width, dodge, hue_map)
-
-    def _compute_native_width(self, comp_data, orient):
-        """Compute the unit width between categories in native coordinates."""
-        if not self.native_scale:
-            self.full_width = self.width_factor
-            return
-
-        cat_series = comp_data[orient].dropna()
-        numeric_vals = pd.to_numeric(cat_series, errors="coerce").dropna()
-        unique_values = np.sort(numeric_vals.unique())
-
-        if len(unique_values) > 1:
-            diffs = np.diff(unique_values)
-            diffs = diffs[diffs > 0]
-            if len(diffs) > 0:
-                native_width = np.nanmin(diffs)
-            else:
-                native_width = 1
-        else:
-            native_width = 1
-
-        self.full_width = self.width_factor * native_width
-
-    def _setup_hue_offsets(self, width, dodge, hue_map):
-        """Compute hue dodge offsets and element widths."""
-        if hue_map is not None and hue_map.levels is not None:
-            self.n_hue = len(hue_map.levels)
-        else:
-            self.n_hue = 1
-
-        if dodge and self.n_hue > 1:
-            each_width = self.full_width / self.n_hue
-            offsets = np.linspace(0, self.full_width - each_width, self.n_hue)
-            offsets -= offsets.mean()
-            self.hue_offsets = dict(zip(hue_map.levels, offsets))
-            self.element_width = each_width
-        else:
-            self.hue_offsets = None
-            self.element_width = self.full_width
-
-        if self.gap:
-            self.element_width *= (1 - self.gap)
-
-    def get_hue_offset(self, hue_key):
-        """Return the dodge offset for a given hue level, or 0 if N/A."""
-        if self.hue_offsets is None:
-            return None
-        return self.hue_offsets.get(hue_key, 0)
-
-    def get_full_width(self, fallback_width=0.8):
-        """Get full category width (before dodge subdivision and gap)."""
-        if self.full_width is not None:
-            return self.full_width
-        return fallback_width
-
-    def get_element_width(self, dodge=False, fallback_gap=0, fallback_width=0.8):
-        """Get final element width (after dodge subdivision and gap)."""
-        if self.element_width is not None:
-            return self.element_width
-        full_w = self.get_full_width(fallback_width)
-        if dodge and self.n_hue > 1:
-            full_w /= self.n_hue
-        gap = self.gap or fallback_gap
-        if gap:
-            return full_w * (1 - gap)
-        return full_w
-
-    def get_position_and_width(self, base_position, hue_key=None,
-                                dodge=False, fallback_gap=0, fallback_width=0.8):
-        """
-        Unified entry point: return (dodged_position, final_element_width).
-
-        Every plotting function should use this instead of computing offsets
-        or widths independently.
-        """
-        width = self.get_full_width(fallback_width)
-        offset = 0
-
-        if dodge and hue_key is not None:
-            cached_offset = self.get_hue_offset(hue_key)
-            if cached_offset is not None:
-                offset = cached_offset
-                if self.element_width is not None:
-                    width = self.element_width
-                else:
-                    width /= self.n_hue
-                    gap = self.gap or fallback_gap
-                    if gap:
-                        width *= (1 - gap)
-            else:
-                hue_idx = list(self.hue_offsets.keys()).index(hue_key) if self.hue_offsets else 0
-                n = self.n_hue
-                width /= n
-                each_width = width
-                full_width = width * n
-                offset = each_width * hue_idx + each_width / 2 - full_width / 2
-                gap = fallback_gap
-                if gap:
-                    width *= (1 - gap)
-        else:
-            width = self.get_element_width(
-                dodge=False, fallback_gap=fallback_gap, fallback_width=fallback_width,
-            )
-
-        return base_position + offset, width
-
-
 class _CategoricalPlotter(VectorPlotter):
 
     wide_structure = {"x": "@columns", "y": "@values", "hue": "@columns"}
@@ -287,8 +115,6 @@ class _CategoricalPlotter(VectorPlotter):
 
         self.legend = legend
 
-        self._cat_map = CategoryMapping()
-
         # Short-circuit in the case of an empty plot
         if not self.has_xy_data:
             return
@@ -329,7 +155,7 @@ class _CategoricalPlotter(VectorPlotter):
             self.plot_data["hue"] = self.plot_data[self.orient]
             self.variables["hue"] = self.variables[self.orient]
             self.var_types["hue"] = "categorical"
-            hue_order = self._cat_map.levels
+            hue_order = self.var_levels[self.orient]
 
             # Because we convert the categorical axis variable to string,
             # we need to update a dictionary palette too
@@ -373,7 +199,7 @@ class _CategoricalPlotter(VectorPlotter):
             self.variables["hue"] = self.variables.get(self.orient)
             self.var_types["hue"] = self.var_types.get(self.orient)
 
-            hue_order = self._cat_map.levels
+            hue_order = self.var_levels.get(self.orient)
             self._var_levels.pop("hue", None)
 
         return hue_order
@@ -557,13 +383,22 @@ class _CategoricalPlotter(VectorPlotter):
         if "hue" not in self.variables:
             return
 
-        hue_key = keys.get("hue")
-        offset, width = self._get_position_and_width(
-            base_position=0,
-            hue_key=hue_key,
-            dodge=True,
-        )
-        data["width"] = width
+        cached_offset = self._get_hue_offset(keys.get("hue"))
+        if cached_offset is not None and hasattr(self, "_cat_element_width"):
+            n = self._cat_n_hue
+            each_width = self._cat_full_width / n if n > 1 else self._cat_full_width
+            data["width"] = each_width
+            if self._cat_gap:
+                data["width"] *= 1 - self._cat_gap
+            data[self.orient] += cached_offset
+            return
+
+        hue_idx = self._hue_map.levels.index(keys["hue"])
+        n = len(self._hue_map.levels)
+        data["width"] /= n
+
+        full_width = data["width"] * n
+        offset = data["width"] * hue_idx + data["width"] / 2 - full_width / 2
         data[self.orient] += offset
 
     def _invert_scale(self, ax, data, vars=("x", "y")):
@@ -577,68 +412,6 @@ class _CategoricalPlotter(VectorPlotter):
             for suf in ["", "min", "max"]:
                 if (col := f"{var}{suf}") in data:
                     data[col] = inv(data[col])
-
-    def _update_legend_data(
-        self,
-        update,
-        var,
-        verbosity,
-        title,
-        title_kws,
-        attr_names,
-        other_props,
-    ):
-        """Generate legend tick values and formatted labels.
-
-        Overrides VectorPlotter._update_legend_data to use CategoryMapping.legend_labels
-        for the orient variable (or hue variable in wide format), ensuring legend
-        labels match tick labels when a custom formatter is applied.
-        """
-        mapper = getattr(self, f"_{var}_map", None)
-        if mapper is None:
-            return
-
-        brief = mapper.map_type == "numeric" and (
-            verbosity == "brief"
-            or (verbosity == "auto" and len(mapper.levels) > 6)
-        )
-
-        if brief:
-            super()._update_legend_data(
-                update, var, verbosity, title, title_kws, attr_names, other_props
-            )
-            return
-
-        if mapper.levels is None:
-            return
-
-        levels = mapper.levels
-
-        use_cat_map = (
-            var == "hue"
-            and self._redundant_hue
-            and self._cat_map.legend_labels is not None
-        )
-
-        if use_cat_map:
-            formatted_levels = self._cat_map.legend_labels
-        else:
-            formatted_levels = mapper.levels
-
-        if not title and self.variables.get(var, None) is not None:
-            update((self.variables[var], "title"), self.variables[var], **title_kws)
-
-        other_props = {} if other_props is None else other_props
-
-        for level, formatted_level in zip(levels, formatted_levels):
-            if level is not None:
-                attr = mapper(level)
-                if isinstance(attr_names, list):
-                    attr = {name: attr for name in attr_names}
-                elif attr_names is not None:
-                    attr = {attr_names: attr}
-                attr.update({k: v[level] for k, v in other_props.items() if level in v})
-                update(self.variables[var], formatted_level, **attr)
 
     def _configure_legend(self, ax, func, common_kws=None, semantic_kws=None):
         if self.legend == "auto":
@@ -654,14 +427,22 @@ class _CategoricalPlotter(VectorPlotter):
     @property
     def _native_width(self):
         """Return unit of width separating categories on native numeric scale."""
-        if self._cat_map.full_width is not None:
-            return self._cat_map.full_width / self._cat_map.width_factor
+        if hasattr(self, "_cached_native_width"):
+            return self._cached_native_width
+
         if self.var_types[self.orient] == "categorical":
+            self._cached_native_width = 1
             return 1
 
-        cat_series = self.comp_data[self.orient].dropna()
-        numeric_vals = pd.to_numeric(cat_series, errors="coerce").dropna()
-        unique_values = np.sort(numeric_vals.unique())
+        if self.var_levels.get(self.orient) is not None:
+            unique_values = pd.to_numeric(
+                pd.Series(list(self.var_levels[self.orient])),
+                errors="coerce"
+            ).dropna().to_numpy()
+        else:
+            unique_values = np.sort(pd.to_numeric(
+                self.comp_data[self.orient], errors="coerce"
+            ).dropna().unique())
 
         if len(unique_values) > 1:
             diffs = np.diff(unique_values)
@@ -673,6 +454,7 @@ class _CategoricalPlotter(VectorPlotter):
         else:
             native_width = 1
 
+        self._cached_native_width = native_width
         return native_width
 
     def _setup_coordinate_mapping(
@@ -687,13 +469,14 @@ class _CategoricalPlotter(VectorPlotter):
         - Formatter application to categorical data (when not using native_scale)
         - Storage of formatter for later use with native_scale tick labels
         """
-        var_type = self.var_types.get(self.orient, "categorical")
-        use_categorical_scale = (var_type == "categorical" or not native_scale)
-
-        if use_categorical_scale:
+        if self.var_types.get(self.orient) == "categorical" or not native_scale:
             self.scale_categorical(self.orient, order=order, formatter=formatter)
+            self._cat_use_native = False
+            self._cat_formatter = None
+        else:
+            self._cat_use_native = True
+            self._cat_formatter = formatter
 
-        if native_scale and var_type != "categorical":
             cat_data = self.plot_data[self.orient].dropna()
             cat_order = categorical_order(cat_data, order)
             self._var_ordered[self.orient] = (
@@ -701,71 +484,87 @@ class _CategoricalPlotter(VectorPlotter):
             )
             self.var_levels[self.orient] = cat_order
 
-        self._cat_map.setup(
-            levels=self.var_levels[self.orient],
-            order=order,
-            formatter=formatter,
-            native_scale=native_scale,
-            var_type=var_type,
-        )
-
     def _finalize_coordinate_mapping(self, dodge=False, width=.8, gap=0):
         """
         Phase 2: Finalize coordinate mapping after hue mapping is established.
 
         This must be called after map_hue() and _attach(). It computes:
-        - Native width between categories (cached in CategoryMapping)
+        - Native width between categories (cached)
         - Numeric positions for each category
-        - Formatted tick labels and legend labels
+        - Formatted tick labels
         - Hue dodge offsets
         - Final element widths after dodge/gap
         """
-        hue_map = getattr(self, "_hue_map", None)
-        self._cat_map.finalize(
-            dodge=dodge,
-            width=width,
-            gap=gap,
-            hue_map=hue_map,
-            comp_data=self.comp_data,
-            orient=self.orient,
-        )
+        self._cat_dodge = dodge
+        self._cat_width_factor = width
+        self._cat_gap = gap
+
+        if self._cat_use_native:
+            levels = self.var_levels[self.orient]
+            try:
+                numeric_levels = pd.to_numeric(pd.Series(list(levels))).to_numpy()
+            except (TypeError, ValueError):
+                numeric_levels = np.arange(len(levels))
+            self._cat_positions = numeric_levels
+        else:
+            self._cat_positions = np.arange(len(self.var_levels[self.orient]))
+
+        _ = self._native_width
+
+        if self._cat_use_native and self._cat_formatter is not None:
+            self._cat_formatted_labels = [
+                self._cat_formatter(v) for v in self.var_levels[self.orient]
+            ]
+        elif not self._cat_use_native:
+            self._cat_formatted_labels = list(self.var_levels[self.orient])
+        else:
+            self._cat_formatted_labels = None
+
+        self._setup_hue_offsets(width, dodge)
+
+    def _setup_hue_offsets(self, width, dodge):
+        """Compute hue dodge offsets and element widths, cached for all plots."""
+        full_width = width * self._native_width
+        self._cat_full_width = full_width
+
+        if "hue" in self.variables and self._hue_map and self._hue_map.levels is not None:
+            n_levels = len(self._hue_map.levels)
+        else:
+            n_levels = 1
+
+        self._cat_n_hue = n_levels
+
+        if dodge and n_levels > 1:
+            each_width = full_width / n_levels
+            offsets = np.linspace(0, full_width - each_width, n_levels)
+            offsets -= offsets.mean()
+            self._cat_hue_offsets = dict(zip(self._hue_map.levels, offsets))
+            self._cat_element_width = each_width
+        else:
+            self._cat_hue_offsets = None
+            self._cat_element_width = full_width
+
+        if self._cat_gap:
+            self._cat_element_width *= (1 - self._cat_gap)
 
     def _get_hue_offset(self, hue_key):
         """Get the dodge offset for a given hue level."""
-        return self._cat_map.get_hue_offset(hue_key)
+        if not hasattr(self, "_cat_hue_offsets") or self._cat_hue_offsets is None:
+            return None
+        if hue_key not in self._cat_hue_offsets:
+            return 0
+        return self._cat_hue_offsets[hue_key]
 
     def _apply_formatter_to_axis(self, ax):
         """Apply the stored formatter to tick labels when using native_scale."""
-        if not self._cat_map.native_scale:
+        if not getattr(self, "_cat_use_native", False):
             return
-        if self._cat_map.formatter is None or not self._cat_map.tick_labels:
+        if not getattr(self, "_cat_formatted_labels", None):
             return
         axis = getattr(ax, f"{self.orient}axis")
-        positions_raw = self._cat_map.positions
-        positions = axis.convert_units(positions_raw)
-        labels = self._cat_map.tick_labels
+        positions = self._cat_positions
+        labels = self._cat_formatted_labels
         axis.set_ticks(positions, labels=labels)
-
-    def _get_full_width(self, fallback_width=0.8):
-        """Get the full category width (before gap/dodge subdivision)."""
-        return self._cat_map.get_full_width(fallback_width)
-
-    def _get_element_width(self, dodge=False, fallback_gap=0, fallback_width=0.8):
-        """Get the final element width after dodge and gap are applied."""
-        return self._cat_map.get_element_width(dodge, fallback_gap, fallback_width)
-
-    def _get_position_and_width(self, base_position, hue_key=None,
-                                 dodge=False, fallback_gap=0, fallback_width=0.8):
-        """
-        Get the dodged position and element width for a category/hue combination.
-
-        This is the unified entry point for all categorical plots. It returns
-        the final position (with dodge offset) and the final width (with gap
-        applied) that every plotting method should use.
-        """
-        return self._cat_map.get_position_and_width(
-            base_position, hue_key, dodge, fallback_gap, fallback_width,
-        )
 
     def _nested_offsets(self, width, dodge):
         """Return offsets for each hue level for dodged plots."""
@@ -794,7 +593,8 @@ class _CategoricalPlotter(VectorPlotter):
         plot_kws,
     ):
 
-        width = self._get_full_width()
+        width = .8 * self._native_width
+        offsets = self._nested_offsets(width, dodge)
 
         if jitter is True:
             jlim = 0.1
@@ -821,10 +621,8 @@ class _CategoricalPlotter(VectorPlotter):
 
             ax = self._get_axes(sub_vars)
 
-            if dodge and "hue" in sub_vars:
-                dodge_move = sub_data["hue"].map(lambda h: self._get_hue_offset(h) or 0)
-            else:
-                dodge_move = 0
+            if offsets is not None and (offsets != 0).any():
+                dodge_move = offsets[sub_data["hue"].map(self._hue_map.levels.index)]
 
             jitter_move = jitterer(size=len(sub_data)) if len(sub_data) > 1 else 0
 
@@ -846,7 +644,8 @@ class _CategoricalPlotter(VectorPlotter):
         plot_kws,
     ):
 
-        width = self._get_full_width()
+        width = .8 * self._native_width
+        offsets = self._nested_offsets(width, dodge)
 
         iter_vars = [self.orient]
         if dodge:
@@ -865,10 +664,8 @@ class _CategoricalPlotter(VectorPlotter):
 
             ax = self._get_axes(sub_vars)
 
-            if dodge and "hue" in sub_vars:
-                dodge_move = sub_data["hue"].map(lambda h: self._get_hue_offset(h) or 0)
-            else:
-                dodge_move = 0
+            if offsets is not None:
+                dodge_move = offsets[sub_data["hue"].map(self._hue_map.levels.index)]
 
             if not sub_data.empty:
                 sub_data[self.orient] = sub_data[self.orient] + dodge_move
@@ -924,7 +721,7 @@ class _CategoricalPlotter(VectorPlotter):
         linecolor,
         linewidth,
         fliersize,
-        plot_kws,
+        plot_kws,  # TODO rename user_kws?
     ):
 
         iter_vars = ["hue"]
@@ -967,11 +764,12 @@ class _CategoricalPlotter(VectorPlotter):
             stats = pd.DataFrame(mpl.cbook.boxplot_stats(value_data, whis=whis,
                                                          bootstrap=bootstrap))
 
-            data = pd.DataFrame({self.orient: positions, "width": self._get_full_width(width)})
+            orig_width = width * self._native_width
+            data = pd.DataFrame({self.orient: positions, "width": orig_width})
             if dodge:
                 self._dodge(sub_vars, data)
-            else:
-                data["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
+            if gap:
+                data["width"] *= 1 - gap
             capwidth = plot_kws.get("capwidths", 0.5 * data["width"])
 
             self._invert_scale(ax, data)
@@ -1131,12 +929,12 @@ class _CategoricalPlotter(VectorPlotter):
 
             pos_data = pd.DataFrame({
                 self.orient: [sub_vars[self.orient]],
-                "width": [self._get_full_width(width)],
+                "width": [width * self._native_width],
             })
             if dodge:
                 self._dodge(sub_vars, pos_data)
-            else:
-                pos_data["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
+            if gap:
+                pos_data["width"] *= 1 - gap
 
             # Letter-value boxes
             levels = lv_data["levels"]
@@ -1312,8 +1110,9 @@ class _CategoricalPlotter(VectorPlotter):
                 ]) for key in norm_keys
             }
 
-        real_width = self._get_full_width(width)
+        real_width = width * self._native_width
 
+        # Now iterate through the violins again to apply the normalization and plot
         for violin in violin_data:
 
             index = pd.RangeIndex(0, max(len(violin["support"]), 1))
@@ -1326,8 +1125,8 @@ class _CategoricalPlotter(VectorPlotter):
 
             if dodge:
                 self._dodge(violin["sub_vars"], data)
-            else:
-                data["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
+            if gap:
+                data["width"] *= 1 - gap
 
             # Normalize the density across the distribution(s) and relative to the width
             norm_key = vars_to_key(violin["sub_vars"])
@@ -1387,8 +1186,8 @@ class _CategoricalPlotter(VectorPlotter):
             pos_dict = {self.orient: violin["position"], "width": real_width}
             if dodge:
                 self._dodge(violin["sub_vars"], pos_dict)
-            else:
-                pos_dict["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
+            if gap:
+                pos_dict["width"] *= (1 - gap)
 
             # --- Plot the inner components
             if inner is None:
@@ -1515,17 +1314,13 @@ class _CategoricalPlotter(VectorPlotter):
         markers = self._map_prop_with_hue("marker", markers, "o", plot_kws)
         linestyles = self._map_prop_with_hue("linestyle", linestyles, "-", plot_kws)
 
-        base_positions = self._cat_map.levels
+        base_positions = self.var_levels[self.orient]
         if self.var_types[self.orient] == "categorical":
             min_cat_val = int(self.comp_data[self.orient].min())
             max_cat_val = int(self.comp_data[self.orient].max())
             base_positions = [i for i in range(min_cat_val, max_cat_val + 1)]
 
-        n_hue_levels = self._cat_map.n_hue
-        if n_hue_levels == 1 and self._hue_map.levels is not None:
-            n_hue_levels = len(self._hue_map.levels)
-        if n_hue_levels == 0:
-            n_hue_levels = 0 if self._hue_map.levels is None else len(self._hue_map.levels)
+        n_hue_levels = 0 if self._hue_map.levels is None else len(self._hue_map.levels)
         if dodge is True:
             dodge = .025 * n_hue_levels
 
@@ -1549,15 +1344,10 @@ class _CategoricalPlotter(VectorPlotter):
             )
 
             if dodge:
-                offset = self._get_hue_offset(sub_vars["hue"]) or 0
-                if offset is not None and self._cat_map.n_hue > 1:
-                    scale = dodge * self._cat_map.n_hue / (self._cat_map.width_factor * (self._cat_map.n_hue - 1))
-                    agg_data[self.orient] += offset * scale
-                elif n_hue_levels > 1:
-                    hue_idx = self._hue_map.levels.index(sub_vars["hue"])
-                    step_size = dodge / (n_hue_levels - 1)
-                    pointplot_offset = -dodge / 2 + step_size * hue_idx
-                    agg_data[self.orient] += pointplot_offset * self._native_width
+                hue_idx = self._hue_map.levels.index(sub_vars["hue"])
+                step_size = dodge / (n_hue_levels - 1)
+                offset = -dodge / 2 + step_size * hue_idx
+                agg_data[self.orient] += offset * self._native_width
 
             self._invert_scale(ax, agg_data)
 
@@ -1623,11 +1413,11 @@ class _CategoricalPlotter(VectorPlotter):
                 .reset_index()
             )
 
-            agg_data["width"] = self._get_full_width(width)
+            agg_data["width"] = width * self._native_width
             if dodge:
                 self._dodge(sub_vars, agg_data)
-            else:
-                agg_data["width"] = self._get_element_width(dodge=False, fallback_gap=gap, fallback_width=width)
+            if gap:
+                agg_data["width"] *= 1 - gap
 
             agg_data["edge"] = agg_data[self.orient] - agg_data["width"] / 2
             self._invert_scale(ax, agg_data)
@@ -3206,24 +2996,12 @@ def catplot(
             kwargs.pop("edgecolor", default), color, p._hue_map
         )
 
-    if kind == "count":
-        count_axis = {"x": "y", "y": "x"}[p.orient]
-        p.plot_data[count_axis] = 1
-
-        stat_options = ["count", "percent", "probability", "proportion"]
-        stat = _check_argument("stat", stat_options, kwargs.pop("stat", "count"))
-        p.variables[count_axis] = stat
-        if stat != "count":
-            denom = 100 if stat == "percent" else 1
-            p.plot_data[count_axis] /= len(p.plot_data) / denom
-
     width = kwargs.pop("width", 0.8)
     dodge = kwargs.pop("dodge", False if kind in undodged_kinds else "auto")
-    gap = kwargs.pop("gap", 0)
     if dodge == "auto":
         dodge = p._dodge_needed()
 
-    p._finalize_coordinate_mapping(dodge=dodge, width=width, gap=gap)
+    p._finalize_coordinate_mapping(dodge=dodge, width=width, gap=0)
 
     if "weight" in p.plot_data:
         if kind not in ["bar", "point"]:
@@ -3270,6 +3048,7 @@ def catplot(
     elif kind == "box":
 
         plot_kws = kwargs.copy()
+        gap = plot_kws.pop("gap", 0)
         fill = plot_kws.pop("fill", True)
         whis = plot_kws.pop("whis", 1.5)
         linewidth = plot_kws.pop("linewidth", None)
@@ -3294,6 +3073,7 @@ def catplot(
     elif kind == "violin":
 
         plot_kws = kwargs.copy()
+        gap = plot_kws.pop("gap", 0)
         fill = plot_kws.pop("fill", True)
         split = plot_kws.pop("split", False)
         inner = plot_kws.pop("inner", "box")
@@ -3341,6 +3121,7 @@ def catplot(
     elif kind == "boxen":
 
         plot_kws = kwargs.copy()
+        gap = plot_kws.pop("gap", 0)
         fill = plot_kws.pop("fill", True)
         linecolor = plot_kws.pop("linecolor", "auto")
         linewidth = plot_kws.pop("linewidth", None)
@@ -3421,6 +3202,7 @@ def catplot(
             errwidth=kwargs.pop("errwidth", deprecated),
             capsize=kwargs.pop("capsize", 0),
         )
+        gap = kwargs.pop("gap", 0)
         fill = kwargs.pop("fill", True)
 
         p.plot_bars(
@@ -3439,6 +3221,17 @@ def catplot(
 
         aggregator = EstimateAggregator("sum", errorbar=None)
 
+        count_axis = {"x": "y", "y": "x"}[p.orient]
+        p.plot_data[count_axis] = 1
+
+        stat_options = ["count", "percent", "probability", "proportion"]
+        stat = _check_argument("stat", stat_options, kwargs.pop("stat", "count"))
+        p.variables[count_axis] = stat
+        if stat != "count":
+            denom = 100 if stat == "percent" else 1
+            p.plot_data[count_axis] /= len(p.plot_data) / denom
+
+        gap = kwargs.pop("gap", 0)
         fill = kwargs.pop("fill", True)
 
         p.plot_bars(
@@ -3476,16 +3269,7 @@ def catplot(
     else:
         show_legend = bool(legend)
     if show_legend:
-        legend_title = p.variables.get("hue")
-        use_cat_map_labels = (
-            p._redundant_hue
-            and p._cat_map.legend_labels is not None
-        )
-        if use_cat_map_labels:
-            legend_labels = p._cat_map.legend_labels
-        else:
-            legend_labels = hue_order
-        g.add_legend(title=legend_title, label_order=legend_labels)
+        g.add_legend(title=p.variables.get("hue"), label_order=hue_order)
 
     if data is not None:
         # Replace the dataframe on the FacetGrid for any subsequent maps

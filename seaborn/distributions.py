@@ -254,17 +254,33 @@ class _DistributionPlotter(VectorPlotter):
             for col_idxs in column_groups.values():
                 cols = curves.columns[col_idxs]
 
-                norm_constant = curves[cols].sum(axis="columns")
+                # Replace any NaN values (e.g. from empty groups) with 0
+                # before accumulating so that stacking is numerically safe.
+                curves_safe = curves[cols].fillna(0.0)
+
+                norm_constant = curves_safe.sum(axis="columns")
 
                 # Take the cumulative sum to stack
-                curves[cols] = curves[cols].cumsum(axis="columns")
+                curves_safe = curves_safe.cumsum(axis="columns")
 
                 # Normalize by row sum to fill
                 if multiple == "fill":
-                    curves[cols] = curves[cols].div(norm_constant, axis="index")
+                    # Guard against divide-by-zero when a row has no mass
+                    # (e.g. all curves are zero at that support point, or
+                    # all hue groups are empty / effectively zero-weight).
+                    safe_denom = norm_constant.where(
+                        norm_constant > 0, 1.0
+                    )
+                    curves_safe = curves_safe.div(safe_denom, axis="index")
+                    # Rows with zero total mass -> zero fill (not NaN)
+                    curves_safe = curves_safe.where(norm_constant > 0, 0.0)
+
+                curves.loc[:, cols] = curves_safe.values
 
                 # Define where each segment starts
-                baselines[cols] = curves[cols].shift(1, axis=1).fillna(0)
+                baselines.loc[:, cols] = (
+                    curves_safe.shift(1, axis=1).fillna(0.0).values
+                )
 
         if multiple == "dodge":
 
@@ -307,9 +323,10 @@ class _DistributionPlotter(VectorPlotter):
         # Initialize the estimator object
         estimator = KDE(**estimate_kws)
 
+        all_observations = self.comp_data.dropna()
+
         if set(self.variables) - {"x", "y"}:
             if common_grid:
-                all_observations = self.comp_data.dropna()
                 estimator.define_support(all_observations[data_variable])
         else:
             common_norm = False
@@ -319,6 +336,10 @@ class _DistributionPlotter(VectorPlotter):
             whole_weight = all_data["weights"].sum()
         else:
             whole_weight = len(all_data)
+
+        # Only pre-compute a shared support when common_grid says to, or when
+        # the caller has already forced it on (e.g. for multiple=stack/fill).
+        shared_support = getattr(estimator, "support", None)
 
         densities = {}
 
@@ -330,38 +351,71 @@ class _DistributionPlotter(VectorPlotter):
             # Extract the weights for this subset of observations
             if "weights" in self.variables:
                 weights = sub_data["weights"]
-                part_weight = weights.sum()
+                part_weight = float(np.nansum(weights.to_numpy(dtype=float)))
             else:
                 weights = None
-                part_weight = len(sub_data)
+                part_weight = float(len(observations))
+
+            # Invert the scaling of the support points (done below as well,
+            # kept in one place).
+            _, f_inv = self._get_scale_transforms(self.data_variable)
+
+            # Decide what support to evaluate this group on.
+            group_support = None
+            if shared_support is not None:
+                try:
+                    group_support = f_inv(shared_support)
+                except Exception:
+                    group_support = None
 
             # Estimate the density of observations at this level
-            variance = np.nan_to_num(observations.var())
-            singular = len(observations) < 2 or math.isclose(variance, 0)
+            variance = np.nan_to_num(
+                pd.to_numeric(observations, errors="coerce").var()
+            )
+            singular = (
+                len(observations) < 2
+                or math.isclose(variance, 0)
+                or part_weight <= 0  # all-zero-weight group → skip fitting
+            )
+            density = None
+            support = None
             try:
                 if not singular:
-                    # Convoluted approach needed because numerical failures
-                    # can manifest in a few different ways.
                     density, support = estimator(observations, weights=weights)
-            except np.linalg.LinAlgError:
-                singular = True
+                    support = f_inv(support)
+            except (np.linalg.LinAlgError, ValueError) as e:
+                if "array must not contain" in str(e) or "finite" in str(e).lower():
+                    singular = True
+                else:
+                    singular = True
 
             if singular:
-                msg = (
-                    "Dataset has 0 variance; skipping density estimate. "
-                    "Pass `warn_singular=False` to disable this warning."
-                )
-                if warn_singular:
-                    warnings.warn(msg, UserWarning, stacklevel=4)
-                continue
-
-            # Invert the scaling of the support points
-            _, f_inv = self._get_scale_transforms(self.data_variable)
-            support = f_inv(support)
+                if group_support is None:
+                    try:
+                        estimator.define_support(all_data[data_variable])
+                        shared_support = getattr(estimator, "support", shared_support)
+                        if shared_support is not None:
+                            group_support = f_inv(shared_support)
+                    except Exception:
+                        pass
+                # Produce an all-zero density curve on the available support
+                # so stacking / filling downstream still works.
+                if group_support is not None:
+                    density = np.zeros_like(group_support, dtype=float)
+                    support = group_support
+                else:
+                    msg = (
+                        "Dataset has 0 variance; skipping density estimate. "
+                        "Pass `warn_singular=False` to disable this warning."
+                    )
+                    if warn_singular:
+                        warnings.warn(msg, UserWarning, stacklevel=4)
+                    continue
 
             # Apply a scaling factor so that the integral over all subsets is 1
             if common_norm:
-                density *= part_weight / whole_weight
+                safe_denom = whole_weight if whole_weight > 0 else 1.0
+                density = density * (part_weight / safe_denom)
 
             # Store the density for this level
             key = tuple(sub_vars.items())

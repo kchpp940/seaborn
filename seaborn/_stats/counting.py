@@ -9,6 +9,11 @@ from pandas import DataFrame
 from seaborn._core.groupby import GroupBy
 from seaborn._core.scales import Scale
 from seaborn._stats.base import Stat
+from seaborn._stats.norm_utils import (
+    effective_weight_total,
+    filter_valid_samples,
+    normalize_histogram,
+)
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -168,42 +173,145 @@ class Hist(Stat):
         return groupby.apply(data, self._eval, orient, bin_kws)
 
     def _eval(self, data, orient, bin_kws):
+        """Compute raw (weighted) counts without density normalization.
+
+        Always asks numpy for counts so that ``common_norm`` has raw totals
+        to work with; the normalization to density / probability / etc. is
+        handled in :meth:`_normalize`.
+        """
 
         vals = data[orient]
         weights = data.get("weight", None)
 
-        density = self.stat == "density"
-        hist, edges = np.histogram(vals, **bin_kws, weights=weights, density=density)
+        hist, edges = np.histogram(vals, **bin_kws, weights=weights, density=False)
 
         width = np.diff(edges)
         center = edges[:-1] + width / 2
 
         return pd.DataFrame({orient: center, "count": hist, "space": width})
 
-    def _normalize(self, data):
+    def _normalize(self, data, total_weight_lookup=None):
+        """Normalize raw histogram counts using the unified helper.
 
-        hist = data["count"]
-        if self.stat == "probability" or self.stat == "proportion":
-            hist = hist.astype(float) / hist.sum()
-        elif self.stat == "percent":
-            hist = hist.astype(float) / hist.sum() * 100
-        elif self.stat == "frequency":
-            hist = hist.astype(float) / data["space"]
+        Parameters
+        ----------
+        data : DataFrame
+            Must contain the columns produced by :meth:`_eval`.
+        total_weight_lookup : dict[tuple, float] | None
+            Mapping from group-tuple (matching the order of the semantic
+            columns present in ``data``) to the effective total weight of
+            the *normalization group* that the row belongs to. When ``None``
+            (or a row's key is missing) each hue group uses its own raw
+            total count as the denominator, i.e. ``common_norm=False``
+            semantics for that particular group.
+        """
 
-        if self.cumulative:
-            if self.stat in ["density", "frequency"]:
-                hist = (hist * data["space"]).cumsum()
-            else:
-                hist = hist.cumsum()
+        orient_col = [c for c in ("x", "y") if c in data.columns][0]
+        grouping_cols = [
+            c for c in data.columns
+            if c not in (orient_col, "count", "space")
+        ]
 
-        return data.assign(**{self.stat: hist})
+        def _norm_one(part: DataFrame, tw: float | None) -> DataFrame:
+            counts = part["count"].to_numpy(dtype=float)
+            spaces = part["space"].to_numpy(dtype=float)
+            eff_tw = float(tw) if tw is not None else float(counts.sum())
+            out = normalize_histogram(
+                counts, spaces, self.stat,
+                cumulative=self.cumulative, total_weight=eff_tw,
+            )
+            return part.assign(**{self.stat: out})
+
+        if grouping_cols:
+            parts = []
+            for key_tuple, part in data.groupby(grouping_cols, sort=False):
+                k = (key_tuple,) if not isinstance(key_tuple, tuple) else key_tuple
+                tw = (
+                    total_weight_lookup.get(k)
+                    if total_weight_lookup is not None
+                    else None
+                )
+                parts.append(_norm_one(part, tw))
+            data = pd.concat(parts, ignore_index=True)
+        else:
+            tw = (
+                next(iter(total_weight_lookup.values()))
+                if total_weight_lookup is not None
+                else None
+            )
+            data = _norm_one(data, tw)
+
+        return data
+
+    @staticmethod
+    def _build_weight_lookup(data, grouping_vars, norm_vars) -> dict[tuple, float]:
+        """Return a dict: ``tuple(norm_group_values) -> effective total weight``.
+
+        Only rows that actually contributed to the histogram (finite orient +
+        finite weight) are counted.
+        """
+
+        if "weight" in data.columns:
+            w = np.where(
+                np.isfinite(data["weight"].to_numpy(dtype=float)),
+                data["weight"].to_numpy(dtype=float),
+                0.0,
+            )
+        else:
+            w = np.ones(len(data), dtype=float)
+
+        lookup: dict[tuple, float] = {}
+        if not norm_vars:
+            lookup[()] = float(w.sum())
+        else:
+            norm_idx = [grouping_vars.index(v) for v in norm_vars]
+            for row_idx in range(len(data)):
+                all_cols = [data[v].iat[row_idx] for v in grouping_vars]
+                k = tuple(all_cols[i] for i in norm_idx)
+                lookup[k] = lookup.get(k, 0.0) + float(w[row_idx])
+        return lookup
 
     def __call__(
         self, data: DataFrame, groupby: GroupBy, orient: str, scales: dict[str, Scale],
     ) -> DataFrame:
 
+        # 1. Always filter non-finite samples up-front and ensure weight exists.
+        data = filter_valid_samples(data, orient)
+
         scale_type = scales[orient].__class__.__name__.lower()
         grouping_vars = [str(v) for v in data if v in groupby.order]
+
+        # Validate common_norm / common_bins parameter early so undefined
+        # variable names always raise a warning, regardless of stat / etc.
+        if isinstance(self.common_norm, list):
+            self._check_grouping_vars("common_norm", grouping_vars, stacklevel=3)
+        if isinstance(self.common_bins, list):
+            self._check_grouping_vars("common_bins", grouping_vars, stacklevel=3)
+
+        # 1a. Compute per-hue-group effective total weight BEFORE binning,
+        #     because after binning we lose the per-sample information.
+        #     Format: dict[tuple of grouping values, float]
+        has_weight_col = "weight" in data.columns
+        weight_per_hue: dict[tuple, float] = {}
+        if grouping_vars:
+            for key_tuple, part in data.groupby(grouping_vars, sort=False):
+                k = key_tuple if isinstance(key_tuple, tuple) else (key_tuple,)
+                if has_weight_col:
+                    w_col = part["weight"].to_numpy(dtype=float)
+                    w = np.where(np.isfinite(w_col), w_col, 0.0)
+                    weight_per_hue[k] = float(w.sum())
+                else:
+                    weight_per_hue[k] = float(len(part))
+        else:
+            if has_weight_col:
+                w_col = data["weight"].to_numpy(dtype=float)
+                w = np.where(np.isfinite(w_col), w_col, 0.0)
+                weight_per_hue[()] = float(w.sum())
+            else:
+                weight_per_hue[()] = float(len(data))
+
+        # 2. Bin definition + raw count computation (always density=False so
+        #    downstream normalization can do the correct thing).
         if not grouping_vars or self.common_bins is True:
             bin_kws = self._define_bin_params(data, orient, scale_type)
             data = groupby.apply(data, self._eval, orient, bin_kws)
@@ -212,21 +320,62 @@ class Hist(Stat):
                 bin_groupby = GroupBy(grouping_vars)
             else:
                 bin_groupby = GroupBy(self.common_bins)
-                self._check_grouping_vars("common_bins", grouping_vars)
 
             data = bin_groupby.apply(
                 data, self._get_bins_and_eval, orient, groupby, scale_type,
             )
 
-        if not grouping_vars or self.common_norm is True:
-            data = self._normalize(data)
-        else:
-            if self.common_norm is False:
-                norm_groupby = GroupBy(grouping_vars)
+        # 3. Resolve normalization.
+        #    - common_norm=True:   every hue group shares one total weight.
+        #    - common_norm=False:  each hue group uses its own count total.
+        #    - common_norm=[vars]: hue groups nested inside a "norm group"
+        #                          share a total weight across that norm group.
+        #
+        #    Build a lookup: for each original hue group (identified by the
+        #    tuple of its grouping_vars values in the order they appear in the
+        #    result DataFrame), what is the correct denominator to use when
+        #    normalizing?
+        if not grouping_vars or self.stat == "count":
+            lookup = None
+        elif self.common_norm is True:
+            total_all = float(sum(weight_per_hue.values()))
+            sem_cols = [c for c in data.columns if c in grouping_vars]
+            lookup: dict[tuple, float] = {}
+            if sem_cols:
+                for key_tuple, _ in data.groupby(sem_cols, sort=False):
+                    k = key_tuple if isinstance(key_tuple, tuple) else (key_tuple,)
+                    lookup[k] = total_all
             else:
-                norm_groupby = GroupBy(self.common_norm)
-                self._check_grouping_vars("common_norm", grouping_vars)
-            data = norm_groupby.apply(data, self._normalize)
+                lookup[()] = total_all
+        elif self.common_norm is False:
+            lookup = None
+        else:
+            # common_norm = [var names]. Build a mapping from each hue group's
+            # tuple to the total weight of the norm-group it belongs to.
+            norm_vars = [v for v in self.common_norm if v in grouping_vars]
+
+            sem_cols = [c for c in data.columns if c in grouping_vars]
+            if not norm_vars or not sem_cols:
+                total_all = float(sum(weight_per_hue.values()))
+                lookup = {}
+                for key_tuple, _ in data.groupby(sem_cols, sort=False):
+                    k = key_tuple if isinstance(key_tuple, tuple) else (key_tuple,)
+                    lookup[k] = total_all
+            else:
+                lookup = {}
+                norm_col_idx = [grouping_vars.index(v) for v in norm_vars]
+
+                for k_hue, hue_total in weight_per_hue.items():
+                    nk = tuple(k_hue[i] for i in norm_col_idx)
+                    # Sum all hue totals in the same norm-group
+                    norm_total = 0.0
+                    for k2_hue, t2 in weight_per_hue.items():
+                        nk2 = tuple(k2_hue[i] for i in norm_col_idx)
+                        if nk2 == nk:
+                            norm_total += t2
+                    lookup[k_hue] = norm_total
+
+        data = self._normalize(data, total_weight_lookup=lookup)
 
         other = {"x": "y", "y": "x"}[orient]
         return data.assign(**{other: data[self.stat]})

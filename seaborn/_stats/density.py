@@ -16,6 +16,12 @@ except ImportError:
 from seaborn._core.groupby import GroupBy
 from seaborn._core.scales import Scale
 from seaborn._stats.base import Stat
+from seaborn._stats.norm_utils import (
+    effective_weight_total,
+    filter_valid_samples,
+    is_effectively_empty,
+    normalize_kde_density,
+)
 
 
 @dataclass
@@ -109,12 +115,25 @@ class KDE(Stat):
 
     def _fit(self, data: DataFrame, orient: str) -> gaussian_kde:
         """Fit and return a KDE object."""
-        # TODO need to handle singular data
+
+        vals = data[orient].to_numpy(dtype=float)
+        weights = data["weight"].to_numpy(dtype=float) if "weight" in data.columns else None
+
+        # Guard against singular data (all identical values)
+        if vals.size < 2 or np.nanstd(vals) == 0:
+            raise np.linalg.LinAlgError("Singular KDE input")
 
         fit_kws: dict[str, Any] = {"bw_method": self.bw_method}
-        if "weight" in data:
-            fit_kws["weights"] = data["weight"]
-        kde = gaussian_kde(data[orient], **fit_kws)
+        if weights is not None:
+            # Skip zero-weight samples – they confuse scipy's KDE covariance.
+            pos_mask = np.isfinite(weights) & (weights > 0)
+            if pos_mask.sum() < 2:
+                raise np.linalg.LinAlgError("Fewer than 2 positive-weight samples")
+            vals = vals[pos_mask]
+            weights = weights[pos_mask]
+            fit_kws["weights"] = weights
+
+        kde = gaussian_kde(vals, **fit_kws)
         kde.set_bandwidth(kde.factor * self.bw_adjust)
 
         return kde
@@ -133,52 +152,100 @@ class KDE(Stat):
     def _fit_and_evaluate(
         self, data: DataFrame, orient: str, support: ndarray
     ) -> DataFrame:
-        """Transform single group by fitting a KDE and evaluating on a support grid."""
-        empty = pd.DataFrame(columns=[orient, "weight", "density"], dtype=float)
-        if len(data) < 2:
-            return empty
+        """Transform single group by fitting a KDE and evaluating on a support grid.
+
+        Returns a DataFrame with columns ``[orient, "_group_weight", "density"]``.
+        For singular / empty groups we return an empty DataFrame (0 rows)
+        so that callers can decide whether to drop them or re-insert a
+        zero-density curve for stacking compatibility.
+        """
+        group_weight = effective_weight_total(
+            data["weight"].to_numpy(dtype=float) if "weight" in data.columns
+            else np.ones(len(data), dtype=float)
+        )
+
+        empty_out = DataFrame(
+            columns=[orient, "_group_weight", "density"], dtype=float,
+        )
+
+        # Skip fitting for effectively empty groups.
+        vals = data[orient].to_numpy(dtype=float)
+        weights = (
+            data["weight"].to_numpy(dtype=float) if "weight" in data.columns
+            else np.ones_like(vals, dtype=float)
+        )
+        finite_mask = np.isfinite(vals) & np.isfinite(weights)
+        pos_mask = finite_mask & (weights > 0)
+        n_pos = int(pos_mask.sum())
+        if n_pos < 2 or np.nanstd(vals[finite_mask]) == 0:
+            return empty_out
+
         try:
             kde = self._fit(data, orient)
         except np.linalg.LinAlgError:
-            return empty
+            return empty_out
+        except ValueError as e:
+            # scipy may raise ValueError on pathological inputs
+            if "array must not contain" in str(e) or "fin" in str(e).lower():
+                return empty_out
+            raise
 
         if self.cumulative:
             s_0 = support[0]
-            density = np.array([kde.integrate_box_1d(s_0, s_i) for s_i in support])
+            density = np.array(
+                [kde.integrate_box_1d(s_0, s_i) for s_i in support],
+                dtype=float,
+            )
         else:
-            density = kde(support)
+            density = np.asarray(kde(support), dtype=float)
 
-        weight = data["weight"].sum()
-        return pd.DataFrame({orient: support, "weight": weight, "density": density})
+        # Replace any NaN/Inf from scipy with zeros.
+        density = np.where(np.isfinite(density), density, 0.0)
+
+        return DataFrame({
+            orient: support,
+            "_group_weight": float(group_weight),
+            "density": density,
+        })
 
     def _transform(
         self, data: DataFrame, orient: str, grouping_vars: list[str]
     ) -> DataFrame:
         """Transform multiple groups by fitting KDEs and evaluating."""
-        empty = pd.DataFrame(columns=[*data.columns, "density"], dtype=float)
+        # Filter non-finite samples early.
+        data = filter_valid_samples(data, orient)
+
+        empty = DataFrame(
+            columns=[*data.columns, "_group_weight", "density"], dtype=float,
+        )
         if len(data) < 2:
             return empty
+
+        # Define support on the norm-group level (common_grid).
         try:
             support = self._get_support(data, orient)
-        except np.linalg.LinAlgError:
+        except (np.linalg.LinAlgError, ValueError):
+            # If support can't be built, skip this whole norm-group.
             return empty
 
-        grouping_vars = [x for x in grouping_vars if data[x].nunique() > 1]
-        if not grouping_vars:
+        grouping_vars_active = [x for x in grouping_vars if data[x].nunique() > 1]
+        if not grouping_vars_active:
             return self._fit_and_evaluate(data, orient, support)
-        groupby = GroupBy(grouping_vars)
+        groupby = GroupBy(grouping_vars_active)
         return groupby.apply(data, self._fit_and_evaluate, orient, support)
 
     def __call__(
         self, data: DataFrame, groupby: GroupBy, orient: str, scales: dict[str, Scale],
     ) -> DataFrame:
 
-        if "weight" not in data:
-            data = data.assign(weight=1)
-        data = data.dropna(subset=[orient, "weight"])
+        # 1. Ensure weight exists, filter non-finite samples and weights.
+        data = filter_valid_samples(data, orient)
+        if "weight" not in data.columns:
+            data = data.assign(weight=1.0)
 
-        # Transform each group separately
         grouping_vars = [str(v) for v in data if v in groupby.order]
+
+        # 2. Transform (fit + evaluate) each grid-group.
         if not grouping_vars or self.common_grid is True:
             res = self._transform(data, orient, grouping_vars)
         else:
@@ -193,22 +260,76 @@ class KDE(Stat):
                 .apply(data, self._transform, orient, grouping_vars)
             )
 
-        # Normalize, potentially within groups
+        # 3. Normalization.
+        #    _fit_and_evaluate already returns a raw KDE whose integral is 1
+        #    per *original hue group*. We need to scale it so that:
+        #    * common_norm=True:  sum of all hue integrals = 1
+        #    * common_norm=False: each hue integral = 1
+        #    * common_norm=[vars]: hue groups in the same norm-group share
+        #                         the integral 1 across that norm-group.
+        if res.empty:
+            value = {"x": "y", "y": "x"}[orient]
+            res[value] = res.get("density", pd.Series(dtype=float))
+            return res.drop(columns=[c for c in ("_group_weight", "density") if c in res.columns], errors="ignore")
+
+        sem_cols = [c for c in res.columns if c in grouping_vars]
+
+        # -- Build norm_total lookup: hue-group tuple -> total weight of its norm group.
         if not grouping_vars or self.common_norm is True:
-            res = res.assign(group_weight=data["weight"].sum())
+            # Single norm-group (everything together).
+            norm_total_all = float(res["_group_weight"].drop_duplicates().sum())
+            def _norm_total(_key):
+                return norm_total_all
+        elif self.common_norm is False:
+            # Each hue group is its own norm-group.
+            def _norm_total(key):
+                # Find the _group_weight of the (single) hue group matching key.
+                q = True
+                for i, col in enumerate(sem_cols):
+                    q &= (res[col] == key[i])
+                match = res.loc[q, "_group_weight"].drop_duplicates()
+                return float(match.iloc[0]) if len(match) else 0.0
         else:
-            if self.common_norm is False:
-                norm_vars = grouping_vars
-            else:
-                self._check_var_list_or_boolean("common_norm", grouping_vars)
-                norm_vars = [v for v in self.common_norm if v in grouping_vars]
+            norm_vars = [v for v in self.common_norm if v in grouping_vars]
+            self._check_var_list_or_boolean("common_norm", grouping_vars)
+            norm_idx = [sem_cols.index(v) for v in norm_vars if v in sem_cols]
 
-            res = res.join(
-                data.groupby(norm_vars)["weight"].sum().rename("group_weight"),
-                on=norm_vars,
+            # Pre-compute total per norm-group.
+            norm_totals: dict[tuple, float] = {}
+            for key_tuple, part in res.groupby(sem_cols, sort=False):
+                k = key_tuple if isinstance(key_tuple, tuple) else (key_tuple,)
+                nk = tuple(k[i] for i in norm_idx)
+                gw = float(part["_group_weight"].iloc[0])
+                norm_totals[nk] = norm_totals.get(nk, 0.0) + gw
+
+            def _norm_total(key):
+                nk = tuple(key[i] for i in norm_idx)
+                return norm_totals.get(nk, 0.0)
+
+        # Apply per-hue-group scaling.
+        if not sem_cols:
+            gw = float(res["_group_weight"].iloc[0])
+            nt = float(_norm_total(()))
+            res["density"] = normalize_kde_density(
+                res["density"].to_numpy(dtype=float),
+                res[orient].to_numpy(dtype=float),
+                gw, nt,
             )
+        else:
+            parts = []
+            for key_tuple, part in res.groupby(sem_cols, sort=False):
+                k = key_tuple if isinstance(key_tuple, tuple) else (key_tuple,)
+                gw = float(part["_group_weight"].iloc[0])
+                nt = float(_norm_total(k))
+                part = part.copy()
+                part["density"] = normalize_kde_density(
+                    part["density"].to_numpy(dtype=float),
+                    part[orient].to_numpy(dtype=float),
+                    gw, nt,
+                )
+                parts.append(part)
+            res = pd.concat(parts, ignore_index=True)
 
-        res["density"] *= res.eval("weight / group_weight")
         value = {"x": "y", "y": "x"}[orient]
         res[value] = res["density"]
-        return res.drop(["weight", "group_weight"], axis=1)
+        return res.drop(columns=["_group_weight", "weight"], errors="ignore")
