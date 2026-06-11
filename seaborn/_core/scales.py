@@ -92,7 +92,7 @@ class Scale:
         var : str
             Name of the semantic variable (e.g. "x", "color", "pointsize").
         data : Series
-            Original (unscaled) data values for the variable.
+            Data values for the variable (post-stat, pre-scale).
         prop : Property
             The Property object associated with this variable.
 
@@ -100,7 +100,7 @@ class Scale:
         -------
         dict with keys:
             - variable: semantic variable name
-            - original_values: the raw data values as a numpy array
+            - stat_output_values: input data values to the scale (post-stat, pre-scale)
             - scaled_values: values after scale transformation and property mapping
             - display_labels: list of human-readable labels (for legend entries)
             - legend_values: list of unique data values corresponding to legend labels
@@ -111,12 +111,12 @@ class Scale:
         import numpy as np
         from pandas import Series
 
-        original_values = data.to_numpy() if isinstance(data, Series) else np.asarray(data)
+        stat_output_values = data.to_numpy() if isinstance(data, Series) else np.asarray(data)
 
         try:
             scaled_values = np.asarray(self(data))
         except Exception:
-            scaled_values = original_values.copy()
+            scaled_values = stat_output_values.copy()
 
         display_labels: list[str] = []
         legend_values: list[Any] = []
@@ -126,18 +126,18 @@ class Scale:
         coord_range: tuple[float, float] | None = None
         if prop.legend is False and var in ("x", "y") and not var.endswith(("min", "max")):
             try:
-                finite = np.isfinite(scaled_values)
+                finite = np.isfinite(stat_output_values)
                 if finite.any():
                     coord_range = (
-                        float(np.min(scaled_values[finite])),
-                        float(np.max(scaled_values[finite])),
+                        float(np.min(stat_output_values[finite])),
+                        float(np.max(stat_output_values[finite])),
                     )
             except (TypeError, ValueError):
                 coord_range = None
 
         return {
             "variable": var,
-            "original_values": original_values,
+            "stat_output_values": stat_output_values,
             "scaled_values": scaled_values,
             "display_labels": display_labels,
             "legend_values": legend_values,

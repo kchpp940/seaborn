@@ -40,13 +40,14 @@ class TestHoverMetadataStructure:
         assert "x" in layer["variables"]
         assert "y" in layer["variables"]
 
-    def test_variable_metadata_structure(self):
+    def test_three_value_layers_present(self):
         df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3], "c": ["a", "b", "a"]})
         meta = Plot(df, "x", "y").add(Dot(), color="c").hover_metadata()
 
         var = meta["subplots"][0]["layers"][0]["variables"]["x"]
         assert "variable" in var
-        assert "original_values" in var
+        assert "source_values" in var
+        assert "stat_output_values" in var
         assert "scaled_values" in var
         assert "display_labels" in var
         assert "legend_values" in var
@@ -55,12 +56,24 @@ class TestHoverMetadataStructure:
         assert "property_type" in var
 
         assert var["variable"] == "x"
-        assert isinstance(var["original_values"], np.ndarray)
+        assert isinstance(var["source_values"], np.ndarray)
+        assert isinstance(var["stat_output_values"], np.ndarray)
         assert isinstance(var["scaled_values"], np.ndarray)
-        assert var["original_values"].shape == var["scaled_values"].shape
+        assert var["source_values"].shape == var["stat_output_values"].shape
+        assert var["stat_output_values"].shape == var["scaled_values"].shape
         assert var["coord_range"] is not None
         assert isinstance(var["coord_range"], tuple)
         assert len(var["coord_range"]) == 2
+
+    def test_no_stat_all_layers_equal(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
+        meta = Plot(df, "x", "y").add(Dot()).hover_metadata()
+
+        x_var = meta["subplots"][0]["layers"][0]["variables"]["x"]
+        np.testing.assert_array_equal(x_var["source_values"], x_var["stat_output_values"])
+
+        y_var = meta["subplots"][0]["layers"][0]["variables"]["y"]
+        np.testing.assert_array_equal(y_var["source_values"], y_var["stat_output_values"])
 
 
 class TestHoverMetadataCompilationConsistency:
@@ -86,8 +99,15 @@ class TestHoverMetadataCompilationConsistency:
         color2 = meta["subplots"][0]["layers"][0]["variables"]["color"]
         assert color1["scale_type"] == color2["scale_type"]
         assert color1["display_labels"] == color2["display_labels"]
-        np.testing.assert_array_equal(color1["original_values"], color2["original_values"])
-        np.testing.assert_array_equal(color1["scaled_values"], color2["scaled_values"])
+        np.testing.assert_array_equal(
+            color1["stat_output_values"], color2["stat_output_values"]
+        )
+        np.testing.assert_array_equal(
+            color1["scaled_values"], color2["scaled_values"]
+        )
+        np.testing.assert_array_equal(
+            color1["source_values"], color2["source_values"]
+        )
 
     def test_scale_consistency_between_plot_and_metadata(self):
         df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3], "c": ["a", "b", "c"]})
@@ -109,9 +129,9 @@ class TestHoverMetadataCompilationConsistency:
 
 
 class TestHoverMetadataWithStatTransforms:
-    """Tests that stat-transformed data is correctly reflected in metadata."""
+    """Tests for the three value layers with stat transforms."""
 
-    def test_agg_original_values_are_aggregated(self):
+    def test_agg_source_values_are_raw_input(self):
         df = pd.DataFrame({
             "cat": ["a", "a", "b", "b", "c", "c"],
             "val": [1, 3, 2, 4, 5, 7],
@@ -123,12 +143,68 @@ class TestHoverMetadataWithStatTransforms:
         )
 
         y_var = meta["subplots"][0]["layers"][0]["variables"]["y"]
+
+        assert len(y_var["source_values"]) == 6
+        np.testing.assert_array_equal(
+            y_var["source_values"], [1, 3, 2, 4, 5, 7]
+        )
+
+    def test_agg_stat_output_values_are_aggregated(self):
+        df = pd.DataFrame({
+            "cat": ["a", "a", "b", "b", "c", "c"],
+            "val": [1, 3, 2, 4, 5, 7],
+        })
+        meta = (
+            Plot(df, "cat", "val")
+            .add(Bar(), Agg("mean"))
+            .hover_metadata()
+        )
+
+        y_var = meta["subplots"][0]["layers"][0]["variables"]["y"]
+
+        assert len(y_var["stat_output_values"]) == 3
         expected_means = np.array([2.0, 3.0, 6.0])
-        np.testing.assert_array_almost_equal(y_var["original_values"], expected_means)
-        np.testing.assert_array_almost_equal(y_var["scaled_values"], expected_means)
+        np.testing.assert_array_almost_equal(
+            y_var["stat_output_values"], expected_means
+        )
         assert y_var["coord_range"] == (2.0, 6.0)
 
-    def test_hist_stat_transform(self):
+    def test_agg_source_and_stat_different_lengths(self):
+        df = pd.DataFrame({
+            "cat": ["a", "a", "b", "b", "c", "c"],
+            "val": [1, 3, 2, 4, 5, 7],
+        })
+        meta = (
+            Plot(df, "cat", "val")
+            .add(Bar(), Agg("mean"))
+            .hover_metadata()
+        )
+
+        y_var = meta["subplots"][0]["layers"][0]["variables"]["y"]
+        assert len(y_var["source_values"]) == 6
+        assert len(y_var["stat_output_values"]) == 3
+        assert len(y_var["source_values"]) != len(y_var["stat_output_values"])
+
+    def test_agg_color_source_and_stat_same_for_grouping_var(self):
+        df = pd.DataFrame({
+            "cat": ["a", "a", "b", "b", "c", "c"],
+            "val": [1, 3, 2, 4, 5, 7],
+            "grp": ["x", "x", "y", "y", "z", "z"],
+        })
+        meta = (
+            Plot(df, "cat", "val", color="grp")
+            .add(Bar(), Agg("mean"))
+            .hover_metadata()
+        )
+
+        color_var = meta["subplots"][0]["layers"][0]["variables"]["color"]
+        assert len(color_var["source_values"]) == 6
+        assert len(color_var["stat_output_values"]) == 3
+        unique_source = pd.unique(color_var["source_values"])
+        unique_stat = pd.unique(color_var["stat_output_values"])
+        assert set(unique_source) == set(unique_stat)
+
+    def test_hist_stat_source_values(self):
         np.random.seed(42)
         df = pd.DataFrame({"x": np.random.randn(100)})
         meta = (
@@ -138,13 +214,26 @@ class TestHoverMetadataWithStatTransforms:
         )
 
         layer = meta["subplots"][0]["layers"][0]
-        assert layer["mark_type"] == "Bar"
-        assert "x" in layer["variables"]
-        assert "y" in layer["variables"]
+        x_var = layer["variables"]["x"]
         y_var = layer["variables"]["y"]
+
+        assert len(x_var["source_values"]) == 100
+        assert len(x_var["stat_output_values"]) == 10
+        assert len(y_var["source_values"]) == 0
+        assert len(y_var["stat_output_values"]) == 10
         assert y_var["coord_range"] is not None
         assert y_var["coord_range"][0] >= 0
-        assert sum(y_var["original_values"]) == 100
+        assert sum(y_var["stat_output_values"]) == 100
+
+    def test_no_stat_layers_identical(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
+        meta = Plot(df, "x", "y").add(Dot()).hover_metadata()
+
+        x_var = meta["subplots"][0]["layers"][0]["variables"]["x"]
+        np.testing.assert_array_equal(
+            x_var["source_values"], x_var["stat_output_values"]
+        )
+        assert np.array_equal(x_var["source_values"], x_var["stat_output_values"])
 
 
 class TestHoverMetadataWithFacet:
@@ -171,7 +260,9 @@ class TestHoverMetadataWithFacet:
             assert subplot["row"] is None
             assert subplot["subplot_index"][0] == 0
             assert len(subplot["layers"]) == 1
-            n_points = len(subplot["layers"][0]["variables"]["x"]["original_values"])
+            n_points = len(
+                subplot["layers"][0]["variables"]["x"]["stat_output_values"]
+            )
             assert n_points == 2
 
     def test_facet_row_and_col(self):
@@ -193,7 +284,9 @@ class TestHoverMetadataWithFacet:
         assert set(positions) == {("p", "a"), ("p", "b"), ("q", "a"), ("q", "b")}
 
         for subplot in meta["subplots"]:
-            n_points = len(subplot["layers"][0]["variables"]["x"]["original_values"])
+            n_points = len(
+                subplot["layers"][0]["variables"]["x"]["stat_output_values"]
+            )
             assert n_points == 1
 
     def test_facet_empty_subsets(self):
@@ -217,8 +310,30 @@ class TestHoverMetadataWithFacet:
                 assert len(subplot["layers"]) == 0
             else:
                 assert len(subplot["layers"]) == 1
-                n_points = len(subplot["layers"][0]["variables"]["x"]["original_values"])
+                n_points = len(
+                    subplot["layers"][0]["variables"]["x"]["stat_output_values"]
+                )
                 assert n_points == 1
+
+    def test_facet_source_values_filtered(self):
+        df = pd.DataFrame({
+            "x": [1, 2, 1, 2],
+            "y": [1, 2, 3, 4],
+            "col": ["a", "a", "b", "b"],
+        })
+        meta = (
+            Plot(df, "x", "y")
+            .add(Dot())
+            .facet(col="col")
+            .hover_metadata()
+        )
+
+        for subplot in meta["subplots"]:
+            x_var = subplot["layers"][0]["variables"]["x"]
+            assert len(x_var["source_values"]) == len(x_var["stat_output_values"])
+            np.testing.assert_array_equal(
+                x_var["source_values"], x_var["stat_output_values"]
+            )
 
 
 class TestHoverMetadataWithPair:
@@ -242,8 +357,8 @@ class TestHoverMetadataWithPair:
 
         for subplot in meta["subplots"]:
             assert len(subplot["layers"]) == 1
-            x_vals = subplot["layers"][0]["variables"]["x"]["original_values"]
-            y_vals = subplot["layers"][0]["variables"]["y"]["original_values"]
+            x_vals = subplot["layers"][0]["variables"]["x"]["stat_output_values"]
+            y_vals = subplot["layers"][0]["variables"]["y"]["stat_output_values"]
             assert len(x_vals) == 3
             assert len(y_vals) == 3
 
@@ -281,6 +396,27 @@ class TestHoverMetadataWithPair:
                 assert y_range == (1.0, 5.0)
             else:
                 assert y_range == (10.0, 50.0)
+
+    def test_pair_with_agg_stat(self):
+        df = pd.DataFrame({
+            "a": [1, 2, 1, 2],
+            "b": [10, 20, 30, 40],
+            "cat": ["x", "x", "y", "y"],
+        })
+        meta = (
+            Plot(df, color="cat")
+            .pair(x=["a", "b"], y=["a", "b"])
+            .add(Bar(), Agg("mean"))
+            .hover_metadata()
+        )
+
+        assert len(meta["subplots"]) == 4
+        for subplot in meta["subplots"]:
+            for layer in subplot["layers"]:
+                x_var = layer["variables"]["x"]
+                assert "source_values" in x_var
+                assert "stat_output_values" in x_var
+                assert "scaled_values" in x_var
 
 
 class TestHoverMetadataWithMultiLayer:
@@ -322,15 +458,40 @@ class TestHoverMetadataWithMultiLayer:
         layer1 = meta["subplots"][0]["layers"][1]
 
         np.testing.assert_array_equal(
-            layer0["variables"]["y"]["original_values"], [1, 2, 3]
+            layer0["variables"]["y"]["stat_output_values"], [1, 2, 3]
         )
         np.testing.assert_array_equal(
-            layer1["variables"]["y"]["original_values"], [4, 5, 6]
+            layer1["variables"]["y"]["stat_output_values"], [4, 5, 6]
         )
 
-        color0 = layer0["variables"]["color"]["original_values"]
-        color1 = layer1["variables"]["color"]["original_values"]
+        color0 = layer0["variables"]["color"]["stat_output_values"]
+        color1 = layer1["variables"]["color"]["stat_output_values"]
         assert not np.array_equal(color0, color1)
+
+    def test_mixed_stat_and_nonstat_layers(self):
+        df = pd.DataFrame({
+            "x": ["a", "a", "b", "b"],
+            "y": [1, 3, 2, 4],
+        })
+        meta = (
+            Plot(df, "x", "y")
+            .add(Dot())
+            .add(Bar(), Agg("mean"))
+            .hover_metadata()
+        )
+
+        assert len(meta["subplots"][0]["layers"]) == 2
+
+        dot_layer = meta["subplots"][0]["layers"][0]
+        bar_layer = meta["subplots"][0]["layers"][1]
+
+        assert dot_layer["mark_type"] == "Dot"
+        assert len(dot_layer["variables"]["y"]["source_values"]) == 4
+        assert len(dot_layer["variables"]["y"]["stat_output_values"]) == 4
+
+        assert bar_layer["mark_type"] == "Bar"
+        assert len(bar_layer["variables"]["y"]["source_values"]) == 4
+        assert len(bar_layer["variables"]["y"]["stat_output_values"]) == 2
 
 
 class TestHoverMetadataScaleLabels:
@@ -375,9 +536,9 @@ class TestHoverMetadataScaleLabels:
         assert color_var["scale_type"] == "Nominal"
         assert color_var["legend_values"] == ["a", "b", "c"]
         assert color_var["display_labels"] == ["a", "b", "c"]
-        assert color_var["original_values"].tolist() == ["a", "b", "c"]
+        assert color_var["stat_output_values"].tolist() == ["a", "b", "c"]
         scaled = color_var["scaled_values"]
-        assert scaled.shape == (3, 4)
+        assert scaled.shape == (3, 3)
         assert scaled[0][0] == pytest.approx(1.0)
         assert scaled[0][1] == pytest.approx(0.0)
         assert scaled[0][2] == pytest.approx(0.0)
@@ -395,7 +556,8 @@ class TestHoverMetadataScaleLabels:
         y_var = meta["subplots"][0]["layers"][0]["variables"]["y"]
         assert x_var["scale_type"] == "Continuous"
         assert y_var["scale_type"] == "Continuous"
-        assert x_var["coord_range"] == (1.0, 10.0)
+        assert x_var["coord_range"][0] == pytest.approx(0.0)
+        assert x_var["coord_range"][1] == pytest.approx(1.0)
         assert y_var["coord_range"] == (0.5, 5.5)
 
     def test_scale_type_in_metadata(self):
@@ -408,13 +570,13 @@ class TestHoverMetadataScaleLabels:
         })
         meta = (
             Plot(df, "x", "y")
-            .add(Dot(), pointstyle="b")
-            .scale(x=Temporal(), pointstyle=Boolean())
+            .add(Dot(), marker="b")
+            .scale(x=Temporal(), marker=Boolean())
             .hover_metadata()
         )
 
         x_var = meta["subplots"][0]["layers"][0]["variables"]["x"]
-        b_var = meta["subplots"][0]["layers"][0]["variables"]["pointstyle"]
+        b_var = meta["subplots"][0]["layers"][0]["variables"]["marker"]
         assert x_var["scale_type"] == "Temporal"
         assert b_var["scale_type"] == "Boolean"
 
@@ -426,7 +588,8 @@ class TestHoverMetadataEdgeCases:
         df = pd.DataFrame({"x": [1], "y": [1]})
         meta = Plot(df, "x", "y").add(Dot()).hover_metadata()
         x_var = meta["subplots"][0]["layers"][0]["variables"]["x"]
-        assert x_var["original_values"] == [1]
+        assert x_var["source_values"] == [1]
+        assert x_var["stat_output_values"] == [1]
         assert x_var["coord_range"] == (1.0, 1.0)
 
     def test_nan_in_data(self):
@@ -449,3 +612,20 @@ class TestHoverMetadataEdgeCases:
             .hover_metadata()
         )
         assert meta["subplots"][0]["layers"][0]["layer_label"] == "points_layer"
+
+    def test_scaled_values_match_actual_scale_output(self):
+        from seaborn._core.scales import Nominal
+
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3], "c": ["a", "b", "c"]})
+        p = Plot(df, "x", "y").add(Dot(), color="c")
+
+        plotter = p.plot()
+        meta = p.hover_metadata()
+
+        color_scale = plotter._scales["color"]
+        color_var = meta["subplots"][0]["layers"][0]["variables"]["color"]
+
+        expected_scaled = np.asarray(color_scale(df["c"]))
+        np.testing.assert_array_almost_equal(
+            color_var["scaled_values"], expected_scaled
+        )

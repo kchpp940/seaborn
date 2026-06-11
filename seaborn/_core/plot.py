@@ -88,10 +88,17 @@ class PairSpec(TypedDict, total=False):
 
 
 class HoverVariableMetadata(TypedDict, total=False):
-    """Metadata for a single semantic variable within a layer."""
+    """Metadata for a single semantic variable within a layer.
+
+    Values are stored at three stages of the pipeline:
+      - source_values  : raw input column values, before any stat transform
+      - stat_output_values : values after stat transform (if any), same as source when no stat
+      - scaled_values  : values after scale mapping, the actual visual/display values
+    """
 
     variable: str
-    original_values: Any
+    source_values: Any
+    stat_output_values: Any
     scaled_values: Any
     display_labels: list[str]
     legend_values: list[Any]
@@ -958,9 +965,9 @@ class Plot:
 
         This method returns a nested dictionary describing every subplot,
         every mark layer, and every semantic variable. For each variable,
-        it includes the original data values, the scale-mapped visual
-        values, legend display labels, and (for coordinate variables)
-        the data range.
+        it includes values at three pipeline stages (raw source input,
+        stat-transformed output, and scale-mapped display values), plus
+        legend labels and (for coordinate variables) the data range.
 
         This is useful for building interactive backends that want to show
         tooltips or perform hit-testing without reverse-engineering the
@@ -989,7 +996,8 @@ class Plot:
                                     "variables": {
                                         var_name: {
                                             "variable": str,
-                                            "original_values": np.ndarray,
+                                            "source_values": np.ndarray,
+                                            "stat_output_values": np.ndarray,
                                             "scaled_values": np.ndarray,
                                             "display_labels": list[str],
                                             "legend_values": list[Any],
@@ -1077,6 +1085,12 @@ class Plot:
         coord_vars = [v for v in self._variables if re.match(r"^x|y", v)]
         plotter._setup_scales(self, common, layers, coord_vars)
 
+        # Save pre-stat layer data for hover metadata (source values)
+        import copy
+        plotter._pre_stat_layer_data = [
+            copy.deepcopy(layer["data"]) for layer in layers
+        ]
+
         # Apply statistical transform(s)
         plotter._compute_stats(self, layers)
 
@@ -1126,6 +1140,7 @@ class Plotter:
         ]] = []
         self._scales: dict[str, Scale] = {}
         self._hover_metadata: HoverMetadata | None = None
+        self._pre_stat_layer_data: list = []
 
     def save(self, loc, **kwargs) -> Plotter:  # TODO type args
         kwargs.setdefault("dpi", 96)
@@ -1987,24 +2002,52 @@ class Plotter:
             data = layer["data"]
             mark = layer["mark"]
             layer_label = layer.get("label")
+            stat = layer.get("stat")
 
-            for pairing_subplots, df, scales in self._generate_pairings(
-                data, pair_variables
-            ):
-                for subplot_view in pairing_subplots:
+            source_layer_data = (
+                self._pre_stat_layer_data[layer_idx]
+                if layer_idx < len(self._pre_stat_layer_data)
+                else None
+            )
+
+            pairings_stat = list(
+                self._generate_pairings(data, pair_variables)
+            )
+
+            if source_layer_data is not None:
+                pairings_source = list(
+                    self._generate_pairings(source_layer_data, pair_variables)
+                )
+            else:
+                pairings_source = [None] * len(pairings_stat)
+
+            for (pairing_stat, pairing_source) in zip(pairings_stat, pairings_source):
+                subplots_stat, df_stat, scales = pairing_stat
+
+                df_source = None
+                if pairing_source is not None:
+                    _, df_source, _ = pairing_source
+
+                for i, subplot_view in enumerate(subplots_stat):
                     subplot_idx = self._subplot_position(subplot_view)
                     subplot_meta = self._get_or_create_subplot_meta(
                         subplot_metas, subplot_view, subplot_idx
                     )
 
-                    view_df = self._filter_subplot_data(df, subplot_view)
+                    view_df = self._filter_subplot_data(df_stat, subplot_view)
 
                     if view_df.empty:
                         continue
 
+                    source_view_df = None
+                    if df_source is not None:
+                        source_view_df = self._filter_subplot_data(
+                            df_source, subplot_view
+                        )
+
                     try:
                         layer_meta = mark._get_hover_metadata(
-                            view_df, scales, layer_label
+                            view_df, scales, layer_label, source_view_df
                         )
                         layer_meta["layer_index"] = layer_idx
                         subplot_meta["layers"].append(layer_meta)  # type: ignore

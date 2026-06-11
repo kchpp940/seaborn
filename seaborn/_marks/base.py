@@ -233,6 +233,7 @@ class Mark:
         data: DataFrame,
         scales: dict[str, Scale],
         layer_label: str | None = None,
+        source_data: DataFrame | None = None,
     ) -> dict[str, Any]:
         """
         Collect hover metadata for this mark layer.
@@ -240,12 +241,15 @@ class Mark:
         Parameters
         ----------
         data : DataFrame
-            The pre-move, pre-plot data for this layer (with original unscaled
-            values for semantic variables, but scaled coordinates).
+            The post-stat, pre-scale data for this layer (the input to the scales).
         scales : dict[str, Scale]
             Mapping from variable name to configured Scale object.
         layer_label : str or None
             Optional label for this layer (from Plot.add(label=...)).
+        source_data : DataFrame or None
+            Pre-stat data for this layer, used to populate source_values.
+            When None (no stat transform), source_values will be the same as
+            stat_output_values.
 
         Returns
         -------
@@ -271,6 +275,13 @@ class Mark:
                 continue
             try:
                 var_meta = scale._get_hover_metadata(var_name, data[var_name], prop)
+
+                if source_data is not None and var_name in source_data:
+                    source_values = source_data[var_name].to_numpy()
+                else:
+                    source_values = np.array([])
+
+                var_meta["source_values"] = source_values
                 variable_metadata[var_name] = var_meta
             except Exception:
                 continue
