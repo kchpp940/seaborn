@@ -1027,8 +1027,13 @@ class Plot:
 
         """
         with theme_context(self._theme_with_defaults()):
-            plotter = Plotter(pyplot=False, theme=self._theme_with_defaults())
-            return plotter._collect_hover_metadata(self)
+            plotter = self._plot(pyplot=False)
+            if plotter._hover_metadata is None:
+                raise RuntimeError(
+                    "Hover metadata was not collected during plot compilation. "
+                    "This should not happen — please report a bug."
+                )
+            return plotter._hover_metadata
 
     def show(self, **kwargs) -> None:
         """
@@ -1091,6 +1096,9 @@ class Plot:
         plotter._make_legend(self)
         plotter._finalize_figure(self)
 
+        # Collect hover metadata from the fully compiled state
+        plotter._collect_hover_metadata_post_compile(self)
+
         return plotter
 
 
@@ -1117,6 +1125,7 @@ class Plotter:
             tuple[str, str | int], list[Artist], list[str],
         ]] = []
         self._scales: dict[str, Scale] = {}
+        self._hover_metadata: HoverMetadata | None = None
 
     def save(self, loc, **kwargs) -> Plotter:  # TODO type args
         kwargs.setdefault("dpi", 96)
@@ -1955,26 +1964,26 @@ class Plotter:
                     # under any normal circumstances.
                     pass
 
-    def _collect_hover_metadata(self, p: Plot) -> HoverMetadata:
+    def _collect_hover_metadata_post_compile(self, p: Plot) -> None:
         """
-        Walk through the plot compilation pipeline and assemble structured
-        hover metadata describing every subplot, layer, and variable.
+        Collect hover metadata from the fully compiled plot state.
+
+        This method is called after `_plot()` has completed the full compilation
+        pipeline, so the metadata will exactly match what was rendered. It uses
+        `self._data`, `self._layers`, `self._scales`, and `self._subplots` which
+        have already been through stat transforms, scale setup, and pair/facet
+        resolution.
+
+        The collected metadata is stored in `self._hover_metadata` for later
+        retrieval via `Plot.hover_metadata()`.
         """
-
-        common, layers = self._extract_data(p)
-        self._setup_figure(p, common, layers)
-
-        coord_vars = [v for v in p._variables if re.match(r"^x|y", v)]
-        self._setup_scales(p, common, layers, coord_vars)
-
-        self._compute_stats(p, layers)
-        self._setup_scales(p, common, layers)
+        import numpy as np
 
         subplot_metas: list[HoverSubplotMetadata] = []
 
         pair_variables = p._pair_spec.get("structure", {})
 
-        for layer_idx, layer in enumerate(layers):
+        for layer_idx, layer in enumerate(self._layers):
             data = layer["data"]
             mark = layer["mark"]
             layer_label = layer.get("label")
@@ -1990,6 +1999,9 @@ class Plotter:
 
                     view_df = self._filter_subplot_data(df, subplot_view)
 
+                    if view_df.empty:
+                        continue
+
                     try:
                         layer_meta = mark._get_hover_metadata(
                             view_df, scales, layer_label
@@ -2003,13 +2015,12 @@ class Plotter:
 
         self._merge_subplot_coord_ranges(subplot_metas)
 
-        result: HoverMetadata = {
+        self._hover_metadata = {
             "subplots": subplot_metas,
             "facet_spec": p._facet_spec,
             "pair_spec": p._pair_spec,
             "labels": p._labels,
         }
-        return result
 
     def _subplot_position(self, view: dict) -> tuple[int, int]:
         """Return the (i, j) grid position for a subplot view dict."""
