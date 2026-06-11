@@ -834,6 +834,12 @@ def relplot(
         **facet_kws
     )
 
+    # ---- Protocol boundary 1: reset semantic registry before Phase 1 ----
+    #
+    # Reusing the same FacetGrid across multiple relplot invocations must
+    # not leak declared/observed/Phase-3 state from a previous call.
+    g._reset_semantic_registry()
+
     # ---- Register globally-declared semantic levels with FacetGrid ----
     #
     # The figure-level FacetGrid needs to know (a) which levels each
@@ -892,9 +898,16 @@ def relplot(
         #
         # All legend construction happens through the unified Grid protocol:
         #   Phase 3 – _register_legend_artist stores the factory/kws
-        #   Phase 4 – _finalize_legend reads the registry and does the work.
+        #   Phase 4 – _finalize_legend reads the registry and does the work,
+        #             then tears down the full registry in its finally block.
         g._register_legend_artist(legend_artist, common_kws, attrs)
         g._finalize_legend(p)
+
+    else:
+        # Protocol boundary 2 – no legend will be produced.  Still tear down
+        # the semantic registry so Phase-1/2/3 state from this invocation
+        # (or from a previous reuse of this FacetGrid) cannot leak out.
+        g._reset_semantic_registry()
 
     # Rename the columns of the FacetGrid's `data` attribute
     # to match the original column names

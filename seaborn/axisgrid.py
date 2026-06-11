@@ -184,6 +184,46 @@ class Grid(_BaseGrid):
             "legend_title": None,
         }
 
+    def _reset_semantic_registry(self):
+        """Full lifecycle reset of the figure-level semantic registry.
+
+        Returns the Grid to a pristine state as if freshly constructed with
+        respect to the four-phase semantic protocol.  Clears:
+
+          * Phase 1 – declared semantics (``_semantic_registry`` declared
+            levels / variable names / data columns)
+          * Phase 2 – observed levels on each semantic role
+          * Phase 3 – legend-artist registration AND prebuilt-legend
+            registration (the two alternate Phase-3 paths)
+
+        This should be called at **protocol boundaries**:
+
+          1. At the start of a figure-level function's semantic pipeline,
+             before any Phase-1 registration, so that reusing the same
+             ``FacetGrid`` across multiple calls cannot leak state from a
+             previous invocation.
+          2. When a figure-level function determines that it will NOT
+             produce a legend (``legend=False`` or no semantic variables),
+             to ensure any leftover Phase-3 registration from a prior use
+             of the Grid cannot interfere.
+          3. At the END of ``_finalize_legend`` after rendering is complete,
+             so the Grid does not retain a reference to the plotter's
+             legend artifacts longer than necessary.
+        """
+        for role in self._semantic_registry:
+            self._semantic_registry[role].update(
+                declared_levels=None,
+                variable_name=None,
+                data_column=None,
+                observed=set(),
+            )
+        self._legend_artist_registry.update(
+            legend_artist=None, common_kws=None, attrs=None, semantic_kws=None,
+        )
+        self._prebuilt_legend.update(
+            legend_data=None, legend_order=None, legend_title=None,
+        )
+
     def _reset_legend_state(self):
         """Reset the rendered-legend state to prevent stale entries between calls.
 
@@ -191,10 +231,11 @@ class Grid(_BaseGrid):
         that `add_legend` can render a fresh legend from scratch.
 
         NOTE – this intentionally does **not** clear the Phase-3 registries
-        (`_legend_artist_registry` / `_prebuilt_legend`).  Those are populated
-        *before* `_finalize_legend` is called, and `_finalize_legend` itself
-        is the only consumer.  Clearing them here would clobber the state we
-        are about to read.
+        (`_legend_artist_registry` / `_prebuilt_legend`), nor the semantic
+        registry.  Those are managed by :meth:`_reset_semantic_registry` at
+        well-defined protocol boundaries (see its docstring for details).
+        Clearing them here would clobber the state `_finalize_legend` is
+        about to read.
         """
         self._legend_data = {}
         if self._legend is not None:
@@ -382,6 +423,10 @@ class Grid(_BaseGrid):
              order).
           5. Renders the final figure legend via ``add_legend``.
 
+        On every exit path (success or early-return), the full semantic
+        registry is cleared via :meth:`_reset_semantic_registry` so the
+        Grid cannot leak Phase-1/2/3 state to a subsequent caller.
+
         Parameters
         ----------
         plotter : VectorPlotter
@@ -393,6 +438,22 @@ class Grid(_BaseGrid):
         """
         self._reset_legend_state()
 
+        try:
+            return self._finalize_legend_inner(plotter)
+        finally:
+            # Protocol boundary 3 – always tear down the registry after
+            # finalization so the next reuse of this FacetGrid starts from
+            # a clean slate.
+            self._reset_semantic_registry()
+
+    def _finalize_legend_inner(self, plotter):
+        """Internal implementation of Phase-4 legend assembly.
+
+        The public :meth:`_finalize_legend` wraps this in a ``try``/
+        ``finally`` that guarantees :meth:`_reset_semantic_registry` runs
+        on every exit path.  Keeping the real logic here avoids deeply
+        indenting the whole implementation.
+        """
         # ------------------------------------------------------------------
         # Step 1 – obtain full candidate legend_data / legend_order / title
         # ------------------------------------------------------------------

@@ -2839,6 +2839,12 @@ def catplot(
         **facet_kws,
     )
 
+    # ---- Protocol boundary 1: reset semantic registry before Phase 1 ----
+    #
+    # Reusing the same FacetGrid across multiple catplot invocations must
+    # not leak declared/observed/Phase-3 state from a previous call.
+    g._reset_semantic_registry()
+
     # Capture this here because scale_categorical is going to insert a (null)
     # x variable even if it is empty. It's not clear whether that needs to
     # happen or if disabling that is the cleaner solution.
@@ -2850,6 +2856,10 @@ def catplot(
     p._attach(g, log_scale=log_scale)
 
     if not has_xy_data:
+        # Protocol boundary 2 – early return with no legend; tear down the
+        # registry so state populated by `_attach` / observation hooks does
+        # not leak.
+        g._reset_semantic_registry()
         return g
 
     # Deprecations to remove in v0.14.0.
@@ -3353,7 +3363,17 @@ def catplot(
         and p._hue_map is not None
         and p._hue_map.levels is not None
     ):
+        # Phase 3 registrations were placed by each kind branch above;
+        # _finalize_legend reads them and tears the full registry down in
+        # its finally block.
         g._finalize_legend(plotter=p)
+
+    else:
+        # Protocol boundary 2 – no legend will be produced.  Still tear
+        # down the semantic registry so Phase-1/2/3 state from this
+        # invocation (or from a previous reuse of this FacetGrid) cannot
+        # leak out.
+        g._reset_semantic_registry()
 
     if data is not None:
         # Replace the dataframe on the FacetGrid for any subsequent maps

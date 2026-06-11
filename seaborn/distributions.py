@@ -2152,6 +2152,12 @@ def displot(
         **facet_kws,
     )
 
+    # ---- Protocol boundary 1: reset semantic registry before Phase 1 ----
+    #
+    # Reusing the same FacetGrid across multiple displot invocations must
+    # not leak declared/observed/Phase-3 state from a previous call.
+    g._reset_semantic_registry()
+
     # Now attach the axes object to the plotter object
     if kind == "kde":
         allowed_types = ["numeric", "datetime"]
@@ -2175,6 +2181,10 @@ def displot(
 
     # Check for a specification that lacks x/y data and return early
     if not p.has_xy_data:
+        # Protocol boundary 2 – early return with no legend; tear down
+        # the registry so state populated by `_attach` / observation
+        # hooks does not leak.
+        g._reset_semantic_registry()
         return g
 
     if color is None and hue is None:
@@ -2302,7 +2312,16 @@ def displot(
 
     if legend and "hue" in p.variables and p.legend_data:
         g._register_prebuilt_legend(p.legend_data, p.legend_order, p.legend_title)
+        # _finalize_legend reads the Phase-3 registry and then tears the
+        # full registry down in its finally block.
         g._finalize_legend(p)
+
+    else:
+        # Protocol boundary 2 – no legend will be produced.  Still tear
+        # down the semantic registry so Phase-1/2/3 state from this
+        # invocation (or from a previous reuse of this FacetGrid) cannot
+        # leak out.
+        g._reset_semantic_registry()
 
     if data is not None and (x is not None or y is not None):
         if not isinstance(data, pd.DataFrame):
