@@ -129,14 +129,37 @@ class Mark:
 
     def _start_hover_tracking(
         self,
-        source_data: DataFrame | None = None,
-        draw_order_counter: itertools.count | None = None,
+        source_index_mapping: dict | None = None,
+        artist_registry: Any | None = None,
+        all_artists: list | None = None,
+        layer_idx: int = 0,
+        pairing_idx: int = 0,
     ) -> None:
-        """Initialize hover tracking for this mark's _plot call."""
+        """Initialize hover tracking for this mark's _plot call.
+
+        Parameters
+        ----------
+        source_index_mapping : dict or None
+            Mapping from pandas index values (as passed in stat_indices)
+            to original source row indices (_source_row_idx).
+            None for aggregated/stat-transformed data where original
+            row identity is lost.
+        artist_registry : ArtistRegistry or None
+            Registry for assigning stable element IDs to artists.
+        all_artists : list or None
+            List to collect all created artists for lookup.
+        layer_idx : int
+            Index of this layer in the plot.
+        pairing_idx : int
+            Index of this pairing (for pair/facet grids).
+        """
         self._hover_element_data = []
         self._hover_tracking_enabled = True
-        self._hover_source_data = source_data
-        self._hover_draw_order_counter = draw_order_counter
+        self._hover_source_index_mapping = source_index_mapping
+        self._hover_artist_registry = artist_registry
+        self._hover_all_artists = all_artists
+        self._hover_layer_idx = layer_idx
+        self._hover_pairing_idx = pairing_idx
         self._hover_local_draw_order = 0
 
     def _stop_hover_tracking(self) -> list[dict[str, Any]]:
@@ -144,8 +167,11 @@ class Mark:
         self._hover_tracking_enabled = False
         element_data = self._hover_element_data.copy()
         self._hover_element_data = []
-        self._hover_source_data = None
-        self._hover_draw_order_counter = None
+        self._hover_source_index_mapping = None
+        self._hover_artist_registry = None
+        self._hover_all_artists = None
+        self._hover_layer_idx = 0
+        self._hover_pairing_idx = 0
         self._hover_local_draw_order = 0
         return element_data
 
@@ -157,38 +183,67 @@ class Mark:
     ) -> None:
         """Record a visual element for hover metadata.
 
+        Uses the stable artist registry and preserved source index mapping
+        to ensure accurate, serializable element identification.
+
         Parameters
         ----------
         artist : matplotlib Artist
             The artist object representing this visual element.
         stat_indices : list or array
-            Indices into the stat_output data for this element.
+            Row index values from the split_generator's data chunk
+            (i.e., data.index or data.index.tolist()). These serve as
+            identifiers for which rows in the pairing-level DataFrame
+            this element represents. For per-subplot variable arrays
+            (source_values, stat_output_values), the position within
+            the filtered view corresponds to the element's position
+            within the per-subplot data.
         group_key : dict
             The grouping key for this element (from split_generator).
         """
         if not self._hover_tracking_enabled:
             return
 
-        if self._hover_draw_order_counter is not None:
-            draw_order = next(self._hover_draw_order_counter)
-        else:
-            draw_order = self._hover_local_draw_order
-            self._hover_local_draw_order += 1
+        # Track artist for reverse lookup
+        if self._hover_all_artists is not None:
+            self._hover_all_artists.append(artist)
+
+        # Register artist and get stable element ID
+        element_id = ""
+        if self._hover_artist_registry is not None:
+            elem_idx = self._hover_artist_registry.next_elem_idx(
+                self._hover_layer_idx, self._hover_pairing_idx
+            )
+            element_id = self._hover_artist_registry.register(
+                artist, self._hover_layer_idx, self._hover_pairing_idx, elem_idx
+            )
+
+        # Global draw order from registry, or local fallback
+        draw_order = self._hover_local_draw_order
+        self._hover_local_draw_order += 1
 
         stat_indices = list(map(int, np.asarray(stat_indices).ravel()))
 
-        source_indices = None
-        if self._hover_source_data is not None and not self._hover_source_data.empty:
+        # Map stat_index -> source_index using preserved mapping
+        # stat_indices are pandas index values; source_index_mapping maps
+        # those to original source row indices (_source_row_idx)
+        source_indices: list[int] | None = None
+        if self._hover_source_index_mapping is not None:
             try:
-                if len(self._hover_source_data) >= max(stat_indices) + 1:
-                    source_indices = list(stat_indices)
-                else:
-                    source_indices = None
+                mapped_indices = []
+                for idx_val in stat_indices:
+                    src_idx = self._hover_source_index_mapping.get(idx_val)
+                    if src_idx is not None:
+                        mapped_indices.append(int(src_idx))
+                    else:
+                        mapped_indices.append(None)
+                if all(si is not None for si in mapped_indices):
+                    source_indices = mapped_indices
             except Exception:
                 source_indices = None
 
-        element_info = {
-            "artist_id": id(artist),
+        element_info: dict[str, Any] = {
+            "element_id": element_id,
             "draw_order": draw_order,
             "stat_index": stat_indices,
             "source_index": source_indices,

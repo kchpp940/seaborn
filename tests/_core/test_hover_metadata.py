@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import re
 
 from seaborn._core.plot import Plot
 from seaborn._core.scales import Nominal, Continuous
@@ -632,7 +633,7 @@ class TestHoverMetadataEdgeCases:
 
 
 class TestHoverMetadataElementTracking:
-    """Tests for element-level tracking (artist_id, indices, draw_order, group_key)."""
+    """Tests for element-level tracking (element_id, indices, draw_order, group_key)."""
 
     def test_elements_field_present(self):
         df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
@@ -647,12 +648,13 @@ class TestHoverMetadataElementTracking:
         meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
         layer = meta["subplots"][0]["layers"][0]
         elem = layer["elements"][0]
-        assert "artist_id" in elem
+        assert "element_id" in elem
         assert "draw_order" in elem
         assert "stat_index" in elem
         assert "source_index" in elem
         assert "group_key" in elem
-        assert isinstance(elem["artist_id"], int)
+        assert isinstance(elem["element_id"], str)
+        assert elem["element_id"].startswith("L")
         assert isinstance(elem["draw_order"], int)
         assert isinstance(elem["stat_index"], list)
         assert elem["group_key"] is not None
@@ -727,13 +729,18 @@ class TestHoverMetadataElementTracking:
         assert len(subplot_a["layers"][0]["elements"]) == 3
         assert len(subplot_b["layers"][0]["elements"]) == 3
 
+        # stat_index contains pandas index values (global row labels)
+        # For subplot "a", rows have index 0,1,2
         for i, elem in enumerate(subplot_a["layers"][0]["elements"]):
             assert elem["group_key"]["col"] == "a"
             assert elem["stat_index"] == [i]
 
+        # For subplot "b", rows have index 3,4,5
         for i, elem in enumerate(subplot_b["layers"][0]["elements"]):
             assert elem["group_key"]["col"] == "b"
             assert elem["stat_index"] == [i + 3]
+            # source_index maps back to original rows
+            assert elem["source_index"] == [i + 3]
 
     def test_facet_empty_subset_no_elements(self):
         df = pd.DataFrame({
@@ -786,10 +793,12 @@ class TestHoverMetadataElementTracking:
         assert len(dot_layer["elements"]) == 1
 
         for elem in bar_layer["elements"]:
-            assert "Bar" in str(type(elem["artist_id"])) or isinstance(elem["artist_id"], int)
+            assert isinstance(elem["element_id"], str)
+            assert elem["element_id"].startswith("L")
 
         for elem in dot_layer["elements"]:
-            assert isinstance(elem["artist_id"], int)
+            assert isinstance(elem["element_id"], str)
+            assert elem["element_id"].startswith("L")
 
     def test_draw_order_is_sequential(self):
         df = pd.DataFrame({"x": ["a", "b", "c", "d"], "y": [1, 2, 3, 4]})
@@ -859,3 +868,160 @@ class TestHoverMetadataElementTracking:
             gk = elem["group_key"]
             assert "color" in gk
             assert "linestyle" in gk
+
+    def test_artist_registry_structure(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        meta = Plot(df, "x", "y").add(Dot()).hover_metadata()
+
+        assert "artist_registry" in meta
+        assert "element_registry" in meta
+        assert isinstance(meta["artist_registry"], dict)
+        assert isinstance(meta["element_registry"], dict)
+
+        layer = meta["subplots"][0]["layers"][0]
+        elem_id = layer["elements"][0]["element_id"]
+
+        assert elem_id in meta["artist_registry"]
+        artist_id = meta["artist_registry"][elem_id]
+        assert isinstance(artist_id, int)
+        assert artist_id in meta["element_registry"]
+        assert meta["element_registry"][artist_id] == elem_id
+
+    def test_element_id_format(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+
+        for elem in layer["elements"]:
+            elem_id = elem["element_id"]
+            assert re.match(r"^L\d{3}-P\d{3}-E\d{3}$", elem_id), elem_id
+
+    def test_lookup_artist(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        p = Plot(df, "x", "y").add(Bar())
+        plotter = p.plot()
+        meta = plotter._hover_metadata
+
+        layer = meta["subplots"][0]["layers"][0]
+        elem_id = layer["elements"][0]["element_id"]
+
+        artist = plotter.lookup_artist(elem_id)
+        assert artist is not None
+        assert id(artist) == meta["artist_registry"][elem_id]
+
+        assert plotter.lookup_artist("nonexistent") is None
+
+    def test_lookup_element(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        p = Plot(df, "x", "y").add(Bar())
+        plotter = p.plot()
+        meta = plotter._hover_metadata
+
+        layer = meta["subplots"][0]["layers"][0]
+        elem_id = layer["elements"][0]["element_id"]
+        artist = plotter.lookup_artist(elem_id)
+
+        elem_meta = plotter.lookup_element(artist)
+        assert elem_meta is not None
+        assert elem_meta["element_id"] == elem_id
+        assert elem_meta["stat_index"] == [0]
+
+        class FakeArtist:
+            pass
+        assert plotter.lookup_element(FakeArtist()) is None
+
+    def test_source_index_after_filtering(self):
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [1, 2, 3, 4, 5, 6],
+            "g": ["a", "a", "a", "b", "b", "b"],
+        })
+        meta = Plot(df, "x", "y").facet(col="g").add(Bar()).hover_metadata()
+
+        subplot_a = [s for s in meta["subplots"] if s["col"] == "a"][0]
+        subplot_b = [s for s in meta["subplots"] if s["col"] == "b"][0]
+
+        # source_index points to the original (global) row indices
+        # For subplot "a", original rows are 0, 1, 2
+        a_source_indices = sorted([e["source_index"][0] for e in subplot_a["layers"][0]["elements"]])
+        assert a_source_indices == [0, 1, 2]
+
+        # For subplot "b", original rows are 3, 4, 5
+        b_source_indices = sorted([e["source_index"][0] for e in subplot_b["layers"][0]["elements"]])
+        assert b_source_indices == [3, 4, 5]
+
+        # source_values are per-subplot arrays (filtered), indexed by
+        # local position (0-based). Use source_index to map back to
+        # the global original data for verification.
+        x_var_b = subplot_b["layers"][0]["variables"]["x"]
+        b_x_vals = list(x_var_b["source_values"])
+        assert b_x_vals == [4, 5, 6]
+
+    def test_element_ids_unique_across_layers(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        meta = (
+            Plot(df, "x", "y")
+            .add(Bar(), label="bars")
+            .add(Dot(), label="dots")
+            .hover_metadata()
+        )
+
+        all_ids = []
+        for subplot in meta["subplots"]:
+            for layer in subplot["layers"]:
+                for elem in layer["elements"]:
+                    all_ids.append(elem["element_id"])
+
+        assert len(all_ids) == len(set(all_ids))
+
+    def test_stable_element_ids(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        p = Plot(df, "x", "y").add(Bar())
+
+        meta1 = p.hover_metadata()
+        meta2 = p.hover_metadata()
+
+        ids1 = [elem["element_id"] for elem in meta1["subplots"][0]["layers"][0]["elements"]]
+        ids2 = [elem["element_id"] for elem in meta2["subplots"][0]["layers"][0]["elements"]]
+
+        assert ids1 == ids2
+
+    def test_source_index_with_non_contiguous_index(self):
+        df = pd.DataFrame({
+            "x": [10, 20, 30, 40],
+            "y": [1, 2, 3, 4],
+        }, index=[5, 10, 15, 20])
+        meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+
+        # stat_index contains pandas index values (5, 10, 15, 20)
+        stat_indices = [elem["stat_index"][0] for elem in layer["elements"]]
+        assert sorted(stat_indices) == [5, 10, 15, 20]
+
+        # source_index should map to 0-based original row positions
+        source_indices = [elem["source_index"][0] for elem in layer["elements"]]
+        assert sorted(source_indices) == [0, 1, 2, 3]
+
+    def test_source_index_with_sorted_data(self):
+        df = pd.DataFrame({
+            "x": [30, 10, 20],
+            "y": [3, 1, 2],
+        })
+        meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
+        layer = meta["subplots"][0]["layers"][0]
+
+        # stat_index follows pandas index (0, 1, 2 after default reset)
+        # source_index maps to original 0-based positions
+        for elem in layer["elements"]:
+            assert isinstance(elem["source_index"][0], int)
+            assert 0 <= elem["source_index"][0] <= 2
+
+    def test_registry_serializable(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "y": [1, 2, 3]})
+        meta = Plot(df, "x", "y").add(Bar()).hover_metadata()
+
+        import json
+        registry = meta["artist_registry"]
+        serialized = json.dumps(registry)
+        deserialized = json.loads(serialized)
+        assert deserialized == registry

@@ -112,9 +112,19 @@ class HoverElementMetadata(TypedDict, total=False):
 
     This allows interactive backends to map hover events back to specific
     visual elements and their corresponding data values.
+
+    Fields:
+        element_id: Stable, serializable identifier for the visual element.
+            Can be used with Plotter.lookup_artist() to get the matplotlib Artist.
+        draw_order: Global rendering order across all layers and subplots.
+        source_index: Indices into the original user-provided data (source_values).
+            None for aggregated/stat-transformed data where original rows are lost.
+        stat_index: Indices into the post-stat data (stat_output_values/scaled_values).
+        group_key: The semantic grouping key (color, linestyle, col, row, etc.)
+            with raw, unscaled values.
     """
 
-    artist_id: int
+    element_id: str
     draw_order: int
     source_index: list[int] | None
     stat_index: list[int]
@@ -152,9 +162,65 @@ class HoverMetadata(TypedDict, total=False):
     facet_spec: FacetSpec
     pair_spec: PairSpec
     labels: dict[str, str | Callable[[str], str]]
+    artist_registry: dict[str, int]
+    element_registry: dict[int, str]
 
 
 # --- Local helpers ---------------------------------------------------------------- #
+
+
+class ArtistRegistry:
+    """Stable registry for mapping between visual elements and matplotlib Artists.
+
+    Provides serializable, deterministic element IDs that remain consistent
+    across re-renders of the same Plot spec, unlike Python's id(artist) which
+    changes with object identity.
+
+    The registry maintains bidirectional mappings:
+      - element_id -> artist_id (id(artist)) for quick Artist lookup
+      - artist_id -> element_id for reverse lookup from hover events
+
+    Element IDs have the format: "L{layer_idx}-P{pairing_idx}-E{elem_idx}"
+    where each component is a 0-padded integer.
+    """
+
+    def __init__(self) -> None:
+        self._element_to_artist: dict[str, int] = {}
+        self._artist_to_element: dict[int, str] = {}
+        self._element_counter: dict[str, int] = {}
+
+    def register(
+        self, artist: Any, layer_idx: int, pairing_idx: int, elem_idx: int
+    ) -> str:
+        """Register an artist and return its stable element ID."""
+        element_id = f"L{layer_idx:03d}-P{pairing_idx:03d}-E{elem_idx:03d}"
+        artist_id = id(artist)
+        self._element_to_artist[element_id] = artist_id
+        self._artist_to_element[artist_id] = element_id
+        return element_id
+
+    def lookup_artist_id(self, element_id: str) -> int | None:
+        """Lookup the Python id(artist) for a given element ID."""
+        return self._element_to_artist.get(element_id)
+
+    def lookup_element_id(self, artist: Any) -> str | None:
+        """Lookup the element ID for a given matplotlib Artist."""
+        return self._artist_to_element.get(id(artist))
+
+    def get_artist_registry(self) -> dict[str, int]:
+        """Return serializable mapping: element_id -> id(artist)."""
+        return dict(self._element_to_artist)
+
+    def get_element_registry(self) -> dict[int, str]:
+        """Return reverse mapping: id(artist) -> element_id."""
+        return dict(self._artist_to_element)
+
+    def next_elem_idx(self, layer_idx: int, pairing_idx: int) -> int:
+        """Get the next element index for a given layer and pairing."""
+        key = f"{layer_idx:03d}-{pairing_idx:03d}"
+        idx = self._element_counter.get(key, 0)
+        self._element_counter[key] = idx + 1
+        return idx
 
 
 @contextmanager
@@ -1102,9 +1168,26 @@ class Plot:
 
         # Save pre-stat layer data for hover metadata (source values)
         import copy
-        plotter._pre_stat_layer_data = [
-            copy.deepcopy(layer["data"]) for layer in layers
-        ]
+        pre_stat_data = []
+        for layer in layers:
+            source_data = copy.deepcopy(layer["data"])
+            # Add a column to preserve original source row indices (0-based integers)
+            # This survives filtering, sorting, and pair/facet operations so we
+            # can always map stat data rows back to their original source rows
+            if hasattr(source_data, "frame"):
+                if "_source_row_idx" not in source_data.frame.columns:
+                    source_data.frame = source_data.frame.copy()
+                    source_data.frame["_source_row_idx"] = np.arange(len(source_data.frame))
+            if hasattr(source_data, "frames") and source_data.frames:
+                new_frames = {}
+                for key, df in source_data.frames.items():
+                    if "_source_row_idx" not in df.columns:
+                        df = df.copy()
+                        df["_source_row_idx"] = np.arange(len(df))
+                    new_frames[key] = df
+                source_data.frames = new_frames
+            pre_stat_data.append(source_data)
+        plotter._pre_stat_layer_data = pre_stat_data
 
         # Apply statistical transform(s)
         plotter._compute_stats(self, layers)
@@ -1156,6 +1239,8 @@ class Plotter:
         self._scales: dict[str, Scale] = {}
         self._hover_metadata: HoverMetadata | None = None
         self._pre_stat_layer_data: list = []
+        self._artist_registry: ArtistRegistry = ArtistRegistry()
+        self._all_artists: list[Artist] = []
 
     def save(self, loc, **kwargs) -> Plotter:  # TODO type args
         kwargs.setdefault("dpi", 96)
@@ -1179,6 +1264,57 @@ class Plotter:
         import matplotlib.pyplot as plt
         with theme_context(self._theme):
             plt.show(**kwargs)
+
+    def lookup_artist(self, element_id: str) -> Artist | None:
+        """Look up the matplotlib Artist for a given element ID.
+
+        Parameters
+        ----------
+        element_id : str
+            The stable element ID from hover metadata.
+
+        Returns
+        -------
+        Artist or None
+            The matplotlib Artist object, or None if not found.
+
+        Notes
+        -----
+        This lookup is by Python object identity (id(artist)), so it only works
+        during the lifetime of the Plotter object that created the artists.
+        For cross-process or post-hoc lookup, use the element_id to find matching
+        metadata in the hover metadata structure.
+        """
+        artist_id = self._artist_registry.lookup_artist_id(element_id)
+        if artist_id is None:
+            return None
+        for artist in self._all_artists:
+            if id(artist) == artist_id:
+                return artist
+        return None
+
+    def lookup_element(self, artist: Artist) -> HoverElementMetadata | None:
+        """Look up the hover metadata for a given matplotlib Artist.
+
+        Parameters
+        ----------
+        artist : matplotlib Artist
+            The artist object to look up (e.g., from a pick event).
+
+        Returns
+        -------
+        HoverElementMetadata or None
+            The element metadata, or None if not found.
+        """
+        element_id = self._artist_registry.lookup_element_id(artist)
+        if element_id is None or self._hover_metadata is None:
+            return None
+        for subplot in self._hover_metadata["subplots"]:
+            for layer in subplot["layers"]:
+                for elem in layer["elements"]:
+                    if elem.get("element_id") == element_id:
+                        return elem
+        return None
 
     # TODO API for accessing the underlying matplotlib objects
     # TODO what else is useful in the public API for this class?
@@ -1420,6 +1556,13 @@ class Plotter:
                 groupby = GroupBy(grouper)
                 res = stat(df, groupby, orient, scales)
 
+                # Preserve _source_row_idx only if stat output has same number of rows
+                # (non-aggregating stat). For aggregating stats (Hist, Agg), the
+                # row mapping is lost and source_index will be None.
+                if "_source_row_idx" in df.columns and len(res) == len(df):
+                    res = res.copy()
+                    res["_source_row_idx"] = df["_source_row_idx"].values
+
                 if pair_vars:
                     data.frames[coord_vars] = res
                 else:
@@ -1590,7 +1733,7 @@ class Plotter:
 
         pair_variables = p._pair_spec.get("structure", {})
 
-        draw_order_counter = itertools.count()
+        layer_idx = self._layers.index(layer)
 
         for layer_pairing_idx, (subplots, df, scales) in enumerate(
             self._generate_pairings(data, pair_variables)
@@ -1654,30 +1797,39 @@ class Plotter:
             grouping_vars = mark._grouping_props + default_grouping_vars
             split_generator = self._setup_split_generator(grouping_vars, df, subplots)
 
-            source_data = None
-            try:
-                layer_idx = self._layers.index(layer)
-                if layer_idx < len(self._pre_stat_layer_data):
-                    source_layer_data = self._pre_stat_layer_data[layer_idx]
-                    if source_layer_data is not None:
-                        source_pairings = list(
-                            self._generate_pairings(source_layer_data, pair_variables)
-                        )
-                        # For pair grids, the source pairings correspond 1:1 with the stat pairings
-                        if layer_pairing_idx < len(source_pairings):
-                            _, source_df, _ = source_pairings[layer_pairing_idx]
-                            if len(source_df) == len(df):
-                                source_data = source_df
-                        # Fallback: try to find by length match
-                        if source_data is None:
-                            for _, source_df, _ in source_pairings:
-                                if len(source_df) == len(df):
-                                    source_data = source_df
-                                    break
-            except (ValueError, IndexError):
-                pass
+            # Build source_index mapping: stat_index -> original source row index
+            # stat_index values come from data.index (pandas row labels), which may
+            # not be 0-based after filtering/sorting. So we build a dict mapping
+            # from data.index -> _source_row_idx for reliable lookup.
+            source_index_mapping: dict[Any, int] | None = None
+            if "_source_row_idx" in df.columns:
+                source_index_mapping = dict(
+                    zip(df.index, df["_source_row_idx"])
+                )
+            else:
+                try:
+                    if layer_idx < len(self._pre_stat_layer_data):
+                        source_layer_data = self._pre_stat_layer_data[layer_idx]
+                        if source_layer_data is not None:
+                            source_pairings = list(
+                                self._generate_pairings(source_layer_data, pair_variables)
+                            )
+                            if layer_pairing_idx < len(source_pairings):
+                                _, source_df, _ = source_pairings[layer_pairing_idx]
+                                if len(source_df) == len(df) and "_source_row_idx" in source_df.columns:
+                                    source_index_mapping = dict(
+                                        zip(source_df.index, source_df["_source_row_idx"])
+                                    )
+                except (ValueError, IndexError):
+                    pass
 
-            mark._start_hover_tracking(source_data, draw_order_counter)
+            mark._start_hover_tracking(
+                source_index_mapping=source_index_mapping,
+                artist_registry=self._artist_registry,
+                all_artists=self._all_artists,
+                layer_idx=layer_idx,
+                pairing_idx=layer_pairing_idx,
+            )
             mark._plot(split_generator, scales, orient)
 
             pairing_elements = mark._stop_hover_tracking()
@@ -2143,6 +2295,8 @@ class Plotter:
             "facet_spec": p._facet_spec,
             "pair_spec": p._pair_spec,
             "labels": p._labels,
+            "artist_registry": self._artist_registry.get_artist_registry(),
+            "element_registry": self._artist_registry.get_element_registry(),
         }
 
     def _subplot_position(self, view: dict) -> tuple[int, int]:
