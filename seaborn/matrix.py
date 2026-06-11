@@ -145,10 +145,17 @@ def _matrix_mask(data, mask):
                             index=data.index, columns=data.columns)
 
     if isinstance(mask, pd.DataFrame):
-        if not mask.index.equals(data.index) \
-           or not mask.columns.equals(data.columns):
-            err = "Mask must have the same index and columns as data."
+        # DataFrame mask aligns by label (pandas semantics): same label set,
+        # order can differ; reindex ensures alignment with data.
+        if not set(mask.index) == set(data.index):
+            err = "Mask must have the same index labels as data."
             raise ValueError(err)
+        if not set(mask.columns) == set(data.columns):
+            err = "Mask must have the same column labels as data."
+            raise ValueError(err)
+
+        # Reindex mask to match data order, then handle pd.NA etc.
+        mask = mask.reindex(index=data.index, columns=data.columns)
 
         mask_arr = np.zeros(mask.shape, dtype=bool)
         for i, col in enumerate(mask.columns):
@@ -279,15 +286,21 @@ class _MatrixContext:
     def _align_annot_df(self, annot):
         """Align a DataFrame annot by index/columns without numeric coercion.
 
-        Raises ValueError if original shapes differ (even if index labels are
-        a subset), for backward compatibility. If shapes match but indices
-        are in different order, reindex to align.
+        DataFrame annot follows label-based alignment (pandas semantics):
+        same label set is required, order can differ, and reindex aligns
+        the annot to match this context's index/column order.
+
+        Raises ValueError if label sets differ, for consistency with mask
+        and color alignment rules.
         """
-        if annot.shape != self.df.shape:
-            err = "`data` and `annot` must have same shape."
+        if not set(annot.index) == set(self.df.index):
+            err = "`data` and `annot` must have the same index labels."
             raise ValueError(err)
-        # Use the provided annot values but reindex to match context
-        # Preserve original dtype including strings, objects etc.
+        if not set(annot.columns) == set(self.df.columns):
+            err = "`data` and `annot` must have the same column labels."
+            raise ValueError(err)
+        # Use the provided annot values but reindex to match context order.
+        # Preserves original dtype including strings, objects etc.
         reindexed = annot.reindex(index=self.df.index, columns=self.df.columns)
         return reindexed.values
 
