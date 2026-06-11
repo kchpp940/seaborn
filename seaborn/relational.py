@@ -203,7 +203,8 @@ class _LinePlotter(_RelationalPlotter):
         self, *,
         data=None, variables={},
         estimator=None, n_boot=None, seed=None, errorbar=None,
-        sort=True, orient="x", err_style=None, err_kws=None, legend=None
+        sort=True, orient="x", err_style=None, err_kws=None, legend=None,
+        semantic_order="data",
     ):
 
         # TODO this is messy, we want the mapping to be agnostic about
@@ -213,7 +214,8 @@ class _LinePlotter(_RelationalPlotter):
             np.r_[.5, 2] * mpl.rcParams["lines.linewidth"]
         )
 
-        super().__init__(data=data, variables=variables)
+        super().__init__(data=data, variables=variables,
+                         semantic_order=semantic_order)
 
         self.estimator = estimator
         self.errorbar = errorbar
@@ -384,7 +386,8 @@ class _ScatterPlotter(_RelationalPlotter):
 
     _legend_attributes = ["color", "s", "marker"]
 
-    def __init__(self, *, data=None, variables={}, legend=None):
+    def __init__(self, *, data=None, variables={}, legend=None,
+                 semantic_order="data"):
 
         # TODO this is messy, we want the mapping to be agnostic about
         # the kind of plot to draw, but for the time being we need to set
@@ -393,7 +396,8 @@ class _ScatterPlotter(_RelationalPlotter):
             np.r_[.5, 2] * np.square(mpl.rcParams["lines.markersize"])
         )
 
-        super().__init__(data=data, variables=variables)
+        super().__init__(data=data, variables=variables,
+                         semantic_order=semantic_order)
 
         self.legend = legend
 
@@ -476,7 +480,7 @@ def lineplot(
     dashes=True, markers=None, style_order=None,
     estimator="mean", errorbar=("ci", 95), n_boot=1000, seed=None,
     orient="x", sort=True, err_style="band", err_kws=None,
-    legend="auto", ci="deprecated", ax=None, **kwargs
+    legend="auto", ci="deprecated", ax=None, semantic_order="data", **kwargs
 ):
 
     # Handle deprecation of ci parameter
@@ -489,7 +493,7 @@ def lineplot(
         ),
         estimator=estimator, n_boot=n_boot, seed=seed, errorbar=errorbar,
         sort=sort, orient=orient, err_style=err_style, err_kws=err_kws,
-        legend=legend,
+        legend=legend, semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -609,13 +613,13 @@ def scatterplot(
     palette=None, hue_order=None, hue_norm=None,
     sizes=None, size_order=None, size_norm=None,
     markers=True, style_order=None, legend="auto", ax=None,
-    **kwargs
+    semantic_order="data", **kwargs
 ):
 
     p = _ScatterPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, size=size, style=style),
-        legend=legend
+        legend=legend, semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -705,7 +709,7 @@ def relplot(
     sizes=None, size_order=None, size_norm=None,
     markers=None, dashes=None, style_order=None,
     legend="auto", kind="scatter", height=5, aspect=1, facet_kws=None,
-    **kwargs
+    semantic_order="data", **kwargs
 ):
 
     if kind == "scatter":
@@ -749,6 +753,7 @@ def relplot(
         data=data,
         variables=variables,
         legend=legend,
+        semantic_order=semantic_order,
     )
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
     p.map_size(sizes=sizes, order=size_order, norm=size_norm)
@@ -789,7 +794,7 @@ def relplot(
         palette=palette, hue_order=hue_order, hue_norm=hue_norm,
         sizes=sizes, size_order=size_order, size_norm=size_norm,
         markers=markers, dashes=dashes, style_order=style_order,
-        legend=False,
+        legend=False, semantic_order=semantic_order,
     )
     plot_kws.update(kwargs)
     if kind == "scatter":
@@ -831,6 +836,7 @@ def relplot(
         **grid_kws,
         col_wrap=col_wrap, row_order=row_order, col_order=col_order,
         height=height, aspect=aspect, dropna=False,
+        semantic_order=semantic_order,
         **facet_kws
     )
 

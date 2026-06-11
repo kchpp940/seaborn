@@ -47,12 +47,12 @@ class Path(Mark):
 
     def _plot(self, split_gen, scales, orient):
 
-        for group_key, data, ax in split_gen(keep_na=not self._sort):
+        for keys, data, ax in split_gen(keep_na=not self._sort):
 
-            vals = resolve_properties(self, group_key, scales)
-            vals["color"] = resolve_color(self, group_key, scales=scales)
-            vals["fillcolor"] = resolve_color(self, group_key, prefix="fill", scales=scales)
-            vals["edgecolor"] = resolve_color(self, group_key, prefix="edge", scales=scales)
+            vals = resolve_properties(self, keys, scales)
+            vals["color"] = resolve_color(self, keys, scales=scales)
+            vals["fillcolor"] = resolve_color(self, keys, prefix="fill", scales=scales)
+            vals["edgecolor"] = resolve_color(self, keys, prefix="edge", scales=scales)
 
             if self._sort:
                 data = data.sort_values(orient, kind="mergesort")
@@ -74,7 +74,6 @@ class Path(Mark):
                 **artist_kws,
             )
             ax.add_line(line)
-            self._record_element(line, data.index.tolist(), group_key)
 
     def _legend_artist(self, variables, value, scales):
 
@@ -161,7 +160,7 @@ class Paths(Mark):
     def _plot(self, split_gen, scales, orient):
 
         line_data = {}
-        for group_key, data, ax in split_gen(keep_na=not self._sort):
+        for keys, data, ax in split_gen(keep_na=not self._sort):
 
             if ax not in line_data:
                 line_data[ax] = {
@@ -169,32 +168,24 @@ class Paths(Mark):
                     "colors": [],
                     "linewidths": [],
                     "linestyles": [],
-                    "indices": [],
-                    "group_keys": [],
                 }
 
             segments = self._setup_segments(data, orient)
             line_data[ax]["segments"].extend(segments)
-            line_data[ax]["indices"].extend([data.index.tolist()] * len(segments))
-            line_data[ax]["group_keys"].extend([group_key] * len(segments))
             n = len(segments)
 
-            vals = resolve_properties(self, group_key, scales)
-            vals["color"] = resolve_color(self, group_key, scales=scales)
+            vals = resolve_properties(self, keys, scales)
+            vals["color"] = resolve_color(self, keys, scales=scales)
 
             line_data[ax]["colors"].extend([vals["color"]] * n)
             line_data[ax]["linewidths"].extend([vals["linewidth"]] * n)
             line_data[ax]["linestyles"].extend([vals["linestyle"]] * n)
 
         for ax, ax_data in line_data.items():
-            indices_list = ax_data.pop("indices")
-            group_keys_list = ax_data.pop("group_keys")
             lines = mpl.collections.LineCollection(**ax_data, **self.artist_kws)
             # Handle datalim update manually
             # https://github.com/matplotlib/matplotlib/issues/23129
             ax.add_collection(lines, autolim=False)
-            for indices, gk in zip(indices_list, group_keys_list):
-                self._record_element(lines, indices, gk)
             if ax_data["segments"]:
                 xy = np.concatenate(ax_data["segments"])
                 ax.update_datalim(xy)

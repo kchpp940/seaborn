@@ -62,9 +62,11 @@ class _CategoricalPlotter(VectorPlotter):
         require_numeric=False,
         color=None,
         legend="auto",
+        semantic_order="data",
     ):
 
-        super().__init__(data=data, variables=variables)
+        super().__init__(data=data, variables=variables,
+                         semantic_order=semantic_order)
 
         # This method takes care of some bookkeeping that is necessary because the
         # original categorical plots (prior to the 2021 refactor) had some rules that
@@ -1599,7 +1601,7 @@ def boxplot(
     orient=None, color=None, palette=None, saturation=.75, fill=True,
     dodge="auto", width=.8, gap=0, whis=1.5, linecolor="auto", linewidth=None,
     fliersize=None, hue_norm=None, native_scale=False, log_scale=None, formatter=None,
-    legend="auto", ax=None, **kwargs
+    legend="auto", semantic_order="data", ax=None, **kwargs
 ):
 
     p = _CategoricalPlotter(
@@ -1609,6 +1611,7 @@ def boxplot(
         orient=orient,
         color=color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -1622,7 +1625,7 @@ def boxplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -1727,7 +1730,7 @@ def violinplot(
     bw_method="scott", bw_adjust=1, density_norm="area", common_norm=False,
     hue_norm=None, formatter=None, log_scale=None, native_scale=False,
     legend="auto", scale=deprecated, scale_hue=deprecated, bw=deprecated,
-    inner_kws=None, ax=None, **kwargs,
+    inner_kws=None, semantic_order="data", ax=None, **kwargs,
 ):
 
     p = _CategoricalPlotter(
@@ -1737,6 +1740,7 @@ def violinplot(
         orient=orient,
         color=color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -1750,7 +1754,7 @@ def violinplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -1916,7 +1920,7 @@ def boxenplot(
     width_method="exponential", k_depth="tukey", outlier_prop=0.007, trust_alpha=0.05,
     showfliers=True, hue_norm=None, log_scale=None, native_scale=False, formatter=None,
     legend="auto", scale=deprecated, box_kws=None, flier_kws=None, line_kws=None,
-    ax=None, **kwargs,
+    semantic_order="data", ax=None, **kwargs,
 ):
 
     p = _CategoricalPlotter(
@@ -1926,6 +1930,7 @@ def boxenplot(
         orient=orient,
         color=color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -1939,7 +1944,7 @@ def boxenplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2084,7 +2089,7 @@ def stripplot(
     jitter=True, dodge=False, orient=None, color=None, palette=None,
     size=5, edgecolor=default, linewidth=0,
     hue_norm=None, log_scale=None, native_scale=False, formatter=None, legend="auto",
-    ax=None, **kwargs
+    semantic_order="data", ax=None, **kwargs
 ):
 
     p = _CategoricalPlotter(
@@ -2094,6 +2099,7 @@ def stripplot(
         orient=orient,
         color=color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2103,7 +2109,7 @@ def stripplot(
         return ax
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2209,7 +2215,7 @@ def swarmplot(
     dodge=False, orient=None, color=None, palette=None,
     size=5, edgecolor=None, linewidth=0, hue_norm=None, log_scale=None,
     native_scale=False, formatter=None, legend="auto", warn_thresh=.05,
-    ax=None, **kwargs
+    semantic_order="data", ax=None, **kwargs
 ):
 
     p = _CategoricalPlotter(
@@ -2219,6 +2225,7 @@ def swarmplot(
         orient=orient,
         color=color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2228,7 +2235,7 @@ def swarmplot(
         return ax
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2339,7 +2346,7 @@ def barplot(
     weights=None, orient=None, color=None, palette=None, saturation=.75,
     fill=True, hue_norm=None, width=.8, dodge="auto", gap=0, log_scale=None,
     native_scale=False, formatter=None, legend="auto", capsize=0, err_kws=None,
-    ci=deprecated, errcolor=deprecated, errwidth=deprecated, ax=None, **kwargs,
+    ci=deprecated, errcolor=deprecated, errwidth=deprecated, semantic_order="data", ax=None, **kwargs,
 ):
 
     errorbar = utils._deprecate_ci(errorbar, ci)
@@ -2356,6 +2363,7 @@ def barplot(
         orient=orient,
         color=color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2369,7 +2377,7 @@ def barplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2482,7 +2490,7 @@ def pointplot(
     linestyles=default, dodge=False, log_scale=None, native_scale=False,
     orient=None, capsize=0, formatter=None, legend="auto", err_kws=None,
     ci=deprecated, errwidth=deprecated, join=deprecated, scale=deprecated,
-    ax=None, **kwargs,
+    semantic_order="data", ax=None, **kwargs,
 ):
 
     errorbar = utils._deprecate_ci(errorbar, ci)
@@ -2496,6 +2504,7 @@ def pointplot(
         # did *not* default to multi-colored unless a palette was specified.
         color="C0" if (color is None and palette is None) else color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2505,7 +2514,7 @@ def pointplot(
         return ax
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2628,7 +2637,7 @@ def countplot(
     data=None, *, x=None, y=None, hue=None, order=None, hue_order=None,
     orient=None, color=None, palette=None, saturation=.75, fill=True, hue_norm=None,
     stat="count", width=.8, dodge="auto", gap=0, log_scale=None, native_scale=False,
-    formatter=None, legend="auto", ax=None, **kwargs
+    formatter=None, legend="auto", semantic_order="data", ax=None, **kwargs
 ):
 
     if x is None and y is not None:
@@ -2647,6 +2656,7 @@ def countplot(
         orient=orient,
         color=color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2660,7 +2670,7 @@ def countplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2765,7 +2775,8 @@ def catplot(
     col_wrap=None, height=5, aspect=1, log_scale=None, native_scale=False,
     formatter=None, orient=None, color=None, palette=None, hue_norm=None,
     legend="auto", legend_out=True, sharex=True, sharey=True,
-    margin_titles=False, facet_kws=None, ci=deprecated, **kwargs
+    margin_titles=False, facet_kws=None, ci=deprecated, semantic_order="data",
+    **kwargs
 ):
 
     # Check for attempt to plot onto specific axes and warn
@@ -2804,6 +2815,7 @@ def catplot(
         # did *not* default to multi-colored unless a palette was specified.
         color="C0" if kind == "point" and palette is None and color is None else color,
         legend=legend,
+        semantic_order=semantic_order,
     )
 
     for var in ["row", "col"]:
@@ -2826,6 +2838,7 @@ def catplot(
         row_order=row_order, col_order=col_order, sharex=sharex, sharey=sharey,
         legend_out=legend_out, margin_titles=margin_titles,
         height=height, aspect=aspect,
+        semantic_order=semantic_order,
         **facet_kws,
     )
 
@@ -2835,7 +2848,10 @@ def catplot(
     has_xy_data = p.has_xy_data
 
     if not native_scale or p.var_types[p.orient] == "categorical":
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+        p.scale_categorical(
+            p.orient, order=order, formatter=formatter,
+            semantic_order=semantic_order,
+        )
 
     p._attach(g, log_scale=log_scale)
 

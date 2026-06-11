@@ -40,7 +40,7 @@ class SemanticMapping:
     # A mapping from the data values to corresponding plot attributes
     lookup_table = None
 
-    def __init__(self, plotter):
+    def __init__(self, plotter, semantic_order="data"):
 
         # TODO Putting this here so we can continue to use a lot of the
         # logic that's built into the library, but the idea of this class
@@ -48,6 +48,7 @@ class SemanticMapping:
         # kind of plot they're going to be used to draw.
         # Fully achieving that is going to take some thinking.
         self.plotter = plotter
+        self.semantic_order = semantic_order
 
     def _check_list_length(self, levels, values, variable):
         """Input check when values are provided as a list."""
@@ -98,6 +99,7 @@ class HueMapping(SemanticMapping):
 
     def __init__(
         self, plotter, palette=None, order=None, norm=None, saturation=1,
+        semantic_order="data",
     ):
         """Map the levels of the `hue` variable to distinct colors.
 
@@ -106,7 +108,7 @@ class HueMapping(SemanticMapping):
         # TODO add generic parameters
 
         """
-        super().__init__(plotter)
+        super().__init__(plotter, semantic_order=semantic_order)
 
         data = plotter.plot_data.get("hue", pd.Series(dtype=float))
 
@@ -221,7 +223,7 @@ class HueMapping(SemanticMapping):
         """Determine colors when the hue mapping is categorical."""
         # -- Identify the order and name of the levels
 
-        levels = categorical_order(data, order)
+        levels = categorical_order(data, order, semantic_order=self.semantic_order)
         n_colors = len(levels)
 
         # -- Identify the set of colors to use
@@ -302,6 +304,7 @@ class SizeMapping(SemanticMapping):
 
     def __init__(
         self, plotter, sizes=None, order=None, norm=None,
+        semantic_order="data",
     ):
         """Map the levels of the `size` variable to distinct values.
 
@@ -310,7 +313,7 @@ class SizeMapping(SemanticMapping):
         # TODO add generic parameters
 
         """
-        super().__init__(plotter)
+        super().__init__(plotter, semantic_order=semantic_order)
 
         data = plotter.plot_data.get("size", pd.Series(dtype=float))
 
@@ -380,7 +383,7 @@ class SizeMapping(SemanticMapping):
 
     def categorical_mapping(self, data, sizes, order):
 
-        levels = categorical_order(data, order)
+        levels = categorical_order(data, order, semantic_order=self.semantic_order)
 
         if isinstance(sizes, dict):
 
@@ -522,7 +525,8 @@ class StyleMapping(SemanticMapping):
     # Style mapping is always treated as categorical
     map_type = "categorical"
 
-    def __init__(self, plotter, markers=None, dashes=None, order=None):
+    def __init__(self, plotter, markers=None, dashes=None, order=None,
+                 semantic_order="data"):
         """Map the levels of the `style` variable to distinct values.
 
         Parameters
@@ -530,7 +534,7 @@ class StyleMapping(SemanticMapping):
         # TODO add generic parameters
 
         """
-        super().__init__(plotter)
+        super().__init__(plotter, semantic_order=semantic_order)
 
         data = plotter.plot_data.get("style", pd.Series(dtype=float))
 
@@ -541,7 +545,7 @@ class StyleMapping(SemanticMapping):
                 data = list(data)
 
             # Find ordered unique values
-            levels = categorical_order(data, order)
+            levels = categorical_order(data, order, semantic_order=self.semantic_order)
 
             markers = self._map_attributes(
                 markers, levels, unique_markers(len(levels)), "markers",
@@ -623,7 +627,7 @@ class VectorPlotter:
 
     _default_size_range = 1, 2  # Unused but needed in tests, ugh
 
-    def __init__(self, data=None, variables={}):
+    def __init__(self, data=None, variables={}, semantic_order="data"):
 
         self._var_levels = {}
         # var_ordered is relevant only for categorical axis variables, and may
@@ -631,6 +635,7 @@ class VectorPlotter:
         # such information and is set up by the scale_* methods. The analogous
         # information for numeric axes would be information about log scales.
         self._var_ordered = {"x": False, "y": False}  # alt., used DefaultDict
+        self.semantic_order = semantic_order
         self.assign_variables(data, variables)
 
         # TODO Lots of tests assume that these are called to initialize the
@@ -833,16 +838,23 @@ class VectorPlotter:
 
         return plot_data, variables
 
-    def map_hue(self, palette=None, order=None, norm=None, saturation=1):
-        mapping = HueMapping(self, palette, order, norm, saturation)
+    def map_hue(self, palette=None, order=None, norm=None, saturation=1,
+                semantic_order=None):
+        if semantic_order is None:
+            semantic_order = self.semantic_order
+        mapping = HueMapping(self, palette, order, norm, saturation, semantic_order)
         self._hue_map = mapping
 
-    def map_size(self, sizes=None, order=None, norm=None):
-        mapping = SizeMapping(self, sizes, order, norm)
+    def map_size(self, sizes=None, order=None, norm=None, semantic_order=None):
+        if semantic_order is None:
+            semantic_order = self.semantic_order
+        mapping = SizeMapping(self, sizes, order, norm, semantic_order)
         self._size_map = mapping
 
-    def map_style(self, markers=None, dashes=None, order=None):
-        mapping = StyleMapping(self, markers, dashes, order)
+    def map_style(self, markers=None, dashes=None, order=None, semantic_order=None):
+        if semantic_order is None:
+            semantic_order = self.semantic_order
+        mapping = StyleMapping(self, markers, dashes, order, semantic_order)
         self._style_map = mapping
 
     def iter_data(
@@ -1354,7 +1366,8 @@ class VectorPlotter:
 
         raise NotImplementedError
 
-    def scale_categorical(self, axis, order=None, formatter=None):
+    def scale_categorical(self, axis, order=None, formatter=None,
+                          semantic_order=None):
         """
         Enforce categorical (fixed-scale) rules for the data on given axis.
 
@@ -1366,12 +1379,19 @@ class VectorPlotter:
             Order that unique values should appear in.
         formatter : callable
             Function mapping values to a string representation.
+        semantic_order : {"data", "appearance"}
+            How to order the levels. "data" uses the order levels appear in the
+            raw data (or explicit ``order``). "appearance" reverses the order
+            so it matches the drawing order in stacked/layered plots.
 
         Returns
         -------
         self
 
         """
+        if semantic_order is None:
+            semantic_order = self.semantic_order
+
         # This method both modifies the internal representation of the data
         # (converting it to string) and sets some attributes on self. It might be
         # a good idea to have a separate object attached to self that contains the
@@ -1423,7 +1443,10 @@ class VectorPlotter:
         # Track whether the order is given explicitly so that we can know
         # whether or not to use the order constructed here downstream
         self._var_ordered[axis] = order is not None or cat_data.dtype.name == "category"
-        order = pd.Index(categorical_order(cat_data, order), name=axis)
+        order = pd.Index(
+            categorical_order(cat_data, order, semantic_order=semantic_order),
+            name=axis,
+        )
 
         # Then convert data to strings. This is because in matplotlib,
         # "categorical" data really mean "string" data, so doing this artists
@@ -1740,7 +1763,7 @@ def unique_markers(n):
     return markers[:n]
 
 
-def categorical_order(vector, order=None):
+def categorical_order(vector, order=None, semantic_order="data"):
     """Return a list of unique data values.
 
     Determine an ordered list of levels in ``values``.
@@ -1752,6 +1775,11 @@ def categorical_order(vector, order=None):
     order : list-like, optional
         Desired order of category levels to override the order determined
         from the ``values`` object.
+    semantic_order : {"data", "appearance"}
+        How to order the levels. "data" uses the order levels appear in the
+        raw data (or explicit ``order``). "appearance" uses the order that
+        levels are drawn, which for stacked/layered plots is typically the
+        reverse of data order (first data level is drawn at the bottom).
 
     Returns
     -------
@@ -1759,6 +1787,8 @@ def categorical_order(vector, order=None):
         Ordered list of category levels not including null values.
 
     """
+    _check_argument("semantic_order", ["data", "appearance"], semantic_order)
+
     if order is None:
         if hasattr(vector, "categories"):
             order = vector.categories
@@ -1773,4 +1803,10 @@ def categorical_order(vector, order=None):
                     order = np.sort(order)
 
         order = filter(pd.notnull, order)
-    return list(order)
+
+    order = list(order)
+
+    if semantic_order == "appearance":
+        order = order[::-1]
+
+    return order

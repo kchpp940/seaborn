@@ -50,7 +50,7 @@ class BarBase(Mark):
         kws.pop("baseline", None)
 
         val_dim = {"x": "h", "y": "w"}[orient]
-        bars, vals, orig_indices = [], [], []
+        bars, vals = [], []
 
         for i in range(len(data)):
 
@@ -74,9 +74,8 @@ class BarBase(Mark):
             )
             bars.append(bar)
             vals.append(row[val_dim])
-            orig_indices.append(data.index[i])
 
-        return bars, vals, orig_indices
+        return bars, vals
 
     def _resolve_properties(self, data, scales):
 
@@ -140,11 +139,11 @@ class Bar(BarBase):
 
         val_idx = ["y", "x"].index(orient)
 
-        for group_key, data, ax in split_gen():
+        for _, data, ax in split_gen():
 
-            bars, vals, orig_indices = self._make_patches(data, scales, orient)
+            bars, vals = self._make_patches(data, scales, orient)
 
-            for bar, orig_idx in zip(bars, orig_indices):
+            for bar in bars:
 
                 # Because we are clipping the artist (see below), the edges end up
                 # looking half as wide as they actually are. I don't love this clumsy
@@ -168,7 +167,6 @@ class Bar(BarBase):
                     bar.set_clip_box(ax.bbox)
                 bar.sticky_edges[val_idx][:] = (0, np.inf)
                 ax.add_patch(bar)
-                self._record_element(bar, [orig_idx], group_key)
 
             # Add a container which is useful for, e.g. Axes.bar_label
             orientation = {"x": "vertical", "y": "horizontal"}[orient]
@@ -210,25 +208,17 @@ class Bars(BarBase):
         val_idx = ["y", "x"].index(orient)
 
         patches = defaultdict(list)
-        patch_indices = defaultdict(list)
-        patch_group_keys = defaultdict(list)
-        for group_key, data, ax in split_gen():
-            bars, _, orig_indices = self._make_patches(data, scales, orient)
+        for _, data, ax in split_gen():
+            bars, _ = self._make_patches(data, scales, orient)
             patches[ax].extend(bars)
-            patch_indices[ax].extend(orig_indices)
-            patch_group_keys[ax].extend([group_key] * len(bars))
 
         collections = {}
         for ax, ax_patches in patches.items():
+
             col = mpl.collections.PatchCollection(ax_patches, match_original=True)
             col.sticky_edges[val_idx][:] = (0, np.inf)
             ax.add_collection(col, autolim=False)
             collections[ax] = col
-
-            for patch, orig_idx, gk in zip(
-                ax_patches, patch_indices[ax], patch_group_keys[ax]
-            ):
-                self._record_element(patch, [orig_idx], gk)
 
             # Workaround for matplotlib autoscaling bug
             # https://github.com/matplotlib/matplotlib/issues/11898

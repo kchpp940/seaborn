@@ -84,143 +84,7 @@ class PairSpec(TypedDict, total=False):
     wrap: int | None
 
 
-# ---- Hover metadata TypedDicts ---------------------------------------------------- #
-
-
-class HoverVariableMetadata(TypedDict, total=False):
-    """Metadata for a single semantic variable within a layer.
-
-    Values are stored at three stages of the pipeline:
-      - source_values  : raw input column values, before any stat transform
-      - stat_output_values : values after stat transform (if any), same as source when no stat
-      - scaled_values  : values after scale mapping, the actual visual/display values
-    """
-
-    variable: str
-    source_values: Any
-    stat_output_values: Any
-    scaled_values: Any
-    display_labels: list[str]
-    legend_values: list[Any]
-    coord_range: tuple[float, float] | None
-    scale_type: str
-    property_type: str
-
-
-class HoverElementMetadata(TypedDict, total=False):
-    """Metadata for a single visual element (dot, bar, line segment, etc.).
-
-    This allows interactive backends to map hover events back to specific
-    visual elements and their corresponding data values.
-
-    Fields:
-        element_id: Stable, serializable identifier for the visual element.
-            Can be used with Plotter.lookup_artist() to get the matplotlib Artist.
-        draw_order: Global rendering order across all layers and subplots.
-        source_index: Indices into the original user-provided data (source_values).
-            None for aggregated/stat-transformed data where original rows are lost.
-        stat_index: Indices into the post-stat data (stat_output_values/scaled_values).
-        group_key: The semantic grouping key (color, linestyle, col, row, etc.)
-            with raw, unscaled values.
-    """
-
-    element_id: str
-    draw_order: int
-    source_index: list[int] | None
-    stat_index: list[int]
-    group_key: dict[str, Any]
-
-
-class HoverLayerMetadata(TypedDict, total=False):
-    """Metadata for a single mark layer within a subplot."""
-
-    mark_type: str
-    layer_label: str | None
-    layer_index: int
-    variables: dict[str, HoverVariableMetadata]
-    mappable_props: list[str]
-    elements: list[HoverElementMetadata]
-
-
-class HoverSubplotMetadata(TypedDict, total=False):
-    """Metadata for a single subplot (including all layers)."""
-
-    subplot_index: tuple[int, int]
-    col: Any | None
-    row: Any | None
-    x_var: str
-    y_var: str
-    x_range: tuple[float, float] | None
-    y_range: tuple[float, float] | None
-    layers: list[HoverLayerMetadata]
-
-
-class HoverMetadata(TypedDict, total=False):
-    """Top-level hover metadata for the entire plot."""
-
-    subplots: list[HoverSubplotMetadata]
-    facet_spec: FacetSpec
-    pair_spec: PairSpec
-    labels: dict[str, str | Callable[[str], str]]
-    artist_registry: dict[str, int]
-    element_registry: dict[int, str]
-
-
 # --- Local helpers ---------------------------------------------------------------- #
-
-
-class ArtistRegistry:
-    """Stable registry for mapping between visual elements and matplotlib Artists.
-
-    Provides serializable, deterministic element IDs that remain consistent
-    across re-renders of the same Plot spec, unlike Python's id(artist) which
-    changes with object identity.
-
-    The registry maintains bidirectional mappings:
-      - element_id -> artist_id (id(artist)) for quick Artist lookup
-      - artist_id -> element_id for reverse lookup from hover events
-
-    Element IDs have the format: "L{layer_idx}-P{pairing_idx}-E{elem_idx}"
-    where each component is a 0-padded integer.
-    """
-
-    def __init__(self) -> None:
-        self._element_to_artist: dict[str, int] = {}
-        self._artist_to_element: dict[int, str] = {}
-        self._element_counter: dict[str, int] = {}
-
-    def register(
-        self, artist: Any, layer_idx: int, pairing_idx: int, elem_idx: int
-    ) -> str:
-        """Register an artist and return its stable element ID."""
-        element_id = f"L{layer_idx:03d}-P{pairing_idx:03d}-E{elem_idx:03d}"
-        artist_id = id(artist)
-        self._element_to_artist[element_id] = artist_id
-        self._artist_to_element[artist_id] = element_id
-        return element_id
-
-    def lookup_artist_id(self, element_id: str) -> int | None:
-        """Lookup the Python id(artist) for a given element ID."""
-        return self._element_to_artist.get(element_id)
-
-    def lookup_element_id(self, artist: Any) -> str | None:
-        """Lookup the element ID for a given matplotlib Artist."""
-        return self._artist_to_element.get(id(artist))
-
-    def get_artist_registry(self) -> dict[str, int]:
-        """Return serializable mapping: element_id -> id(artist)."""
-        return dict(self._element_to_artist)
-
-    def get_element_registry(self) -> dict[int, str]:
-        """Return reverse mapping: id(artist) -> element_id."""
-        return dict(self._artist_to_element)
-
-    def next_elem_idx(self, layer_idx: int, pairing_idx: int) -> int:
-        """Get the next element index for a given layer and pairing."""
-        key = f"{layer_idx:03d}-{pairing_idx:03d}"
-        idx = self._element_counter.get(key, 0)
-        self._element_counter[key] = idx + 1
-        return idx
 
 
 @contextmanager
@@ -1040,90 +904,6 @@ class Plot:
             self._plot().save(loc, **kwargs)
         return self
 
-    def hover_metadata(self) -> HoverMetadata:
-        """
-        Compile the plot and return structured hover metadata.
-
-        This method returns a nested dictionary describing every subplot,
-        every mark layer, and every semantic variable. For each variable,
-        it includes values at three pipeline stages (raw source input,
-        stat-transformed output, and scale-mapped display values), plus
-        legend labels and (for coordinate variables) the data range.
-
-        This is useful for building interactive backends that want to show
-        tooltips or perform hit-testing without reverse-engineering the
-        figure artists.
-
-        Returns
-        -------
-        HoverMetadata
-            A TypedDict with the following structure::
-
-                {
-                    "subplots": [
-                        {
-                            "subplot_index": (i, j),
-                            "col": <facet column value or None>,
-                            "row": <facet row value or None>,
-                            "x_var": "x" | "x0" | "x1" | ...,
-                            "y_var": "y" | "y0" | "y1" | ...,
-                            "x_range": (min, max) | None,
-                            "y_range": (min, max) | None,
-                            "layers": [
-                                {
-                                    "mark_type": str,
-                                    "layer_label": str | None,
-                                    "layer_index": int,
-                                    "variables": {
-                                        var_name: {
-                                            "variable": str,
-                                            "source_values": np.ndarray,
-                                            "stat_output_values": np.ndarray,
-                                            "scaled_values": np.ndarray,
-                                            "display_labels": list[str],
-                                            "legend_values": list[Any],
-                                            "coord_range": (min, max) | None,
-                                            "scale_type": str,
-                                            "property_type": str,
-                                        },
-                                        ...
-                                    },
-                                    "mappable_props": list[str],
-                                },
-                                ...
-                            ],
-                        },
-                        ...
-                    ],
-                    "facet_spec": {...},
-                    "pair_spec": {...},
-                    "labels": {...},
-                }
-
-        Examples
-        --------
-        .. code-block:: python
-
-            import seaborn.objects as so
-            meta = (
-                so.Plot(penguins, "bill_length_mm", "bill_depth_mm")
-                .add(so.Dot(), color="species")
-                .facet(col="sex")
-                .hover_metadata()
-            )
-            # Access the first subplot's first layer color metadata
-            color_meta = meta["subplots"][0]["layers"][0]["variables"]["color"]
-
-        """
-        with theme_context(self._theme_with_defaults()):
-            plotter = self._plot(pyplot=False)
-            if plotter._hover_metadata is None:
-                raise RuntimeError(
-                    "Hover metadata was not collected during plot compilation. "
-                    "This should not happen — please report a bug."
-                )
-            return plotter._hover_metadata
-
     def show(self, **kwargs) -> None:
         """
         Compile the plot and display it by hooking into pyplot.
@@ -1166,29 +946,6 @@ class Plot:
         coord_vars = [v for v in self._variables if re.match(r"^x|y", v)]
         plotter._setup_scales(self, common, layers, coord_vars)
 
-        # Save pre-stat layer data for hover metadata (source values)
-        import copy
-        pre_stat_data = []
-        for layer in layers:
-            source_data = copy.deepcopy(layer["data"])
-            # Add a column to preserve original source row indices (0-based integers)
-            # This survives filtering, sorting, and pair/facet operations so we
-            # can always map stat data rows back to their original source rows
-            if hasattr(source_data, "frame"):
-                if "_source_row_idx" not in source_data.frame.columns:
-                    source_data.frame = source_data.frame.copy()
-                    source_data.frame["_source_row_idx"] = np.arange(len(source_data.frame))
-            if hasattr(source_data, "frames") and source_data.frames:
-                new_frames = {}
-                for key, df in source_data.frames.items():
-                    if "_source_row_idx" not in df.columns:
-                        df = df.copy()
-                        df["_source_row_idx"] = np.arange(len(df))
-                    new_frames[key] = df
-                source_data.frames = new_frames
-            pre_stat_data.append(source_data)
-        plotter._pre_stat_layer_data = pre_stat_data
-
         # Apply statistical transform(s)
         plotter._compute_stats(self, layers)
 
@@ -1207,9 +964,6 @@ class Plot:
         # Add various figure decorations
         plotter._make_legend(self)
         plotter._finalize_figure(self)
-
-        # Collect hover metadata from the fully compiled state
-        plotter._collect_hover_metadata_post_compile(self)
 
         return plotter
 
@@ -1237,10 +991,6 @@ class Plotter:
             tuple[str, str | int], list[Artist], list[str],
         ]] = []
         self._scales: dict[str, Scale] = {}
-        self._hover_metadata: HoverMetadata | None = None
-        self._pre_stat_layer_data: list = []
-        self._artist_registry: ArtistRegistry = ArtistRegistry()
-        self._all_artists: list[Artist] = []
 
     def save(self, loc, **kwargs) -> Plotter:  # TODO type args
         kwargs.setdefault("dpi", 96)
@@ -1264,57 +1014,6 @@ class Plotter:
         import matplotlib.pyplot as plt
         with theme_context(self._theme):
             plt.show(**kwargs)
-
-    def lookup_artist(self, element_id: str) -> Artist | None:
-        """Look up the matplotlib Artist for a given element ID.
-
-        Parameters
-        ----------
-        element_id : str
-            The stable element ID from hover metadata.
-
-        Returns
-        -------
-        Artist or None
-            The matplotlib Artist object, or None if not found.
-
-        Notes
-        -----
-        This lookup is by Python object identity (id(artist)), so it only works
-        during the lifetime of the Plotter object that created the artists.
-        For cross-process or post-hoc lookup, use the element_id to find matching
-        metadata in the hover metadata structure.
-        """
-        artist_id = self._artist_registry.lookup_artist_id(element_id)
-        if artist_id is None:
-            return None
-        for artist in self._all_artists:
-            if id(artist) == artist_id:
-                return artist
-        return None
-
-    def lookup_element(self, artist: Artist) -> HoverElementMetadata | None:
-        """Look up the hover metadata for a given matplotlib Artist.
-
-        Parameters
-        ----------
-        artist : matplotlib Artist
-            The artist object to look up (e.g., from a pick event).
-
-        Returns
-        -------
-        HoverElementMetadata or None
-            The element metadata, or None if not found.
-        """
-        element_id = self._artist_registry.lookup_element_id(artist)
-        if element_id is None or self._hover_metadata is None:
-            return None
-        for subplot in self._hover_metadata["subplots"]:
-            for layer in subplot["layers"]:
-                for elem in layer["elements"]:
-                    if elem.get("element_id") == element_id:
-                        return elem
-        return None
 
     # TODO API for accessing the underlying matplotlib objects
     # TODO what else is useful in the public API for this class?
@@ -1556,13 +1255,6 @@ class Plotter:
                 groupby = GroupBy(grouper)
                 res = stat(df, groupby, orient, scales)
 
-                # Preserve _source_row_idx only if stat output has same number of rows
-                # (non-aggregating stat). For aggregating stats (Hist, Agg), the
-                # row mapping is lost and source_index will be None.
-                if "_source_row_idx" in df.columns and len(res) == len(df):
-                    res = res.copy()
-                    res["_source_row_idx"] = df["_source_row_idx"].values
-
                 if pair_vars:
                     data.frames[coord_vars] = res
                 else:
@@ -1733,11 +1425,7 @@ class Plotter:
 
         pair_variables = p._pair_spec.get("structure", {})
 
-        layer_idx = self._layers.index(layer)
-
-        for layer_pairing_idx, (subplots, df, scales) in enumerate(
-            self._generate_pairings(data, pair_variables)
-        ):
+        for subplots, df, scales in self._generate_pairings(data, pair_variables):
 
             orient = layer["orient"] or mark._infer_orient(scales)
 
@@ -1797,48 +1485,7 @@ class Plotter:
             grouping_vars = mark._grouping_props + default_grouping_vars
             split_generator = self._setup_split_generator(grouping_vars, df, subplots)
 
-            # Build source_index mapping: stat_index -> original source row index
-            # stat_index values come from data.index (pandas row labels), which may
-            # not be 0-based after filtering/sorting. So we build a dict mapping
-            # from data.index -> _source_row_idx for reliable lookup.
-            source_index_mapping: dict[Any, int] | None = None
-            if "_source_row_idx" in df.columns:
-                source_index_mapping = dict(
-                    zip(df.index, df["_source_row_idx"])
-                )
-            else:
-                try:
-                    if layer_idx < len(self._pre_stat_layer_data):
-                        source_layer_data = self._pre_stat_layer_data[layer_idx]
-                        if source_layer_data is not None:
-                            source_pairings = list(
-                                self._generate_pairings(source_layer_data, pair_variables)
-                            )
-                            if layer_pairing_idx < len(source_pairings):
-                                _, source_df, _ = source_pairings[layer_pairing_idx]
-                                if len(source_df) == len(df) and "_source_row_idx" in source_df.columns:
-                                    source_index_mapping = dict(
-                                        zip(source_df.index, source_df["_source_row_idx"])
-                                    )
-                except (ValueError, IndexError):
-                    pass
-
-            mark._start_hover_tracking(
-                source_index_mapping=source_index_mapping,
-                artist_registry=self._artist_registry,
-                all_artists=self._all_artists,
-                layer_idx=layer_idx,
-                pairing_idx=layer_pairing_idx,
-            )
             mark._plot(split_generator, scales, orient)
-
-            pairing_elements = mark._stop_hover_tracking()
-            x_var_key = subplots[0].get("x", "x")
-            y_var_key = subplots[0].get("y", "y")
-            for elem in pairing_elements:
-                elem["x_var"] = x_var_key
-                elem["y_var"] = y_var_key
-            layer.setdefault("_hover_element_data", []).extend(pairing_elements)
 
         # TODO is this the right place for this?
         for view in self._subplots:
@@ -2181,194 +1828,3 @@ class Plotter:
                     # Should we warn / raise? Note that we don't expect to get here
                     # under any normal circumstances.
                     pass
-
-    def _collect_hover_metadata_post_compile(self, p: Plot) -> None:
-        """
-        Collect hover metadata from the fully compiled plot state.
-
-        This method is called after `_plot()` has completed the full compilation
-        pipeline, so the metadata will exactly match what was rendered. It uses
-        `self._data`, `self._layers`, `self._scales`, and `self._subplots` which
-        have already been through stat transforms, scale setup, and pair/facet
-        resolution.
-
-        The collected metadata is stored in `self._hover_metadata` for later
-        retrieval via `Plot.hover_metadata()`.
-        """
-        import numpy as np
-
-        subplot_metas: list[HoverSubplotMetadata] = []
-
-        pair_variables = p._pair_spec.get("structure", {})
-
-        for layer_idx, layer in enumerate(self._layers):
-            data = layer["data"]
-            mark = layer["mark"]
-            layer_label = layer.get("label")
-            stat = layer.get("stat")
-
-            source_layer_data = (
-                self._pre_stat_layer_data[layer_idx]
-                if layer_idx < len(self._pre_stat_layer_data)
-                else None
-            )
-
-            pairings_stat = list(
-                self._generate_pairings(data, pair_variables)
-            )
-
-            if source_layer_data is not None:
-                pairings_source = list(
-                    self._generate_pairings(source_layer_data, pair_variables)
-                )
-            else:
-                pairings_source = [None] * len(pairings_stat)
-
-            for (pairing_stat, pairing_source) in zip(pairings_stat, pairings_source):
-                subplots_stat, df_stat, scales = pairing_stat
-
-                df_source = None
-                if pairing_source is not None:
-                    _, df_source, _ = pairing_source
-
-                for i, subplot_view in enumerate(subplots_stat):
-                    subplot_idx = self._subplot_position(subplot_view)
-                    subplot_meta = self._get_or_create_subplot_meta(
-                        subplot_metas, subplot_view, subplot_idx
-                    )
-
-                    view_df = self._filter_subplot_data(df_stat, subplot_view)
-
-                    if view_df.empty:
-                        continue
-
-                    source_view_df = None
-                    if df_source is not None:
-                        source_view_df = self._filter_subplot_data(
-                            df_source, subplot_view
-                        )
-
-                    try:
-                        layer_meta = mark._get_hover_metadata(
-                            view_df, scales, layer_label, source_view_df
-                        )
-                        layer_meta["layer_index"] = layer_idx
-
-                        all_elements = layer.get("_hover_element_data", [])
-                        subplot_elements = []
-                        for elem in all_elements:
-                            gk = elem.get("group_key", {})
-                            elem_col = gk.get("col")
-                            elem_row = gk.get("row")
-                            elem_x_var = elem.get("x_var")
-                            elem_y_var = elem.get("y_var")
-                            view_col = subplot_view.get("col")
-                            view_row = subplot_view.get("row")
-                            view_x_var = subplot_meta.get("x_var")
-                            view_y_var = subplot_meta.get("y_var")
-                            col_match = elem_col == view_col
-                            row_match = elem_row == view_row
-                            x_var_match = (
-                                elem_x_var is None
-                                or view_x_var is None
-                                or elem_x_var == view_x_var
-                            )
-                            y_var_match = (
-                                elem_y_var is None
-                                or view_y_var is None
-                                or elem_y_var == view_y_var
-                            )
-                            if col_match and row_match and x_var_match and y_var_match:
-                                subplot_elements.append(elem)
-
-                        layer_meta["elements"] = subplot_elements
-                        subplot_meta["layers"].append(layer_meta)  # type: ignore
-                    except Exception:
-                        continue
-
-                    self._update_coord_ranges(subplot_meta, view_df, scales)
-
-        self._merge_subplot_coord_ranges(subplot_metas)
-
-        self._hover_metadata = {
-            "subplots": subplot_metas,
-            "facet_spec": p._facet_spec,
-            "pair_spec": p._pair_spec,
-            "labels": p._labels,
-            "artist_registry": self._artist_registry.get_artist_registry(),
-            "element_registry": self._artist_registry.get_element_registry(),
-        }
-
-    def _subplot_position(self, view: dict) -> tuple[int, int]:
-        """Return the (i, j) grid position for a subplot view dict."""
-        for idx, sub in enumerate(self._subplots):
-            if sub is view:
-                ncols = self._subplots.subplot_spec.get("ncols", 1)
-                return (idx // ncols, idx % ncols)
-        return (0, 0)
-
-    def _get_or_create_subplot_meta(
-        self,
-        metas: list[HoverSubplotMetadata],
-        view: dict,
-        idx: tuple[int, int],
-    ) -> HoverSubplotMetadata:
-        """Find existing subplot metadata or create a new one."""
-        for meta in metas:
-            if meta["subplot_index"] == idx:
-                return meta
-        new_meta: HoverSubplotMetadata = {
-            "subplot_index": idx,
-            "col": view.get("col"),
-            "row": view.get("row"),
-            "x_var": view.get("x", "x"),
-            "y_var": view.get("y", "y"),
-            "x_range": None,
-            "y_range": None,
-            "layers": [],
-        }
-        metas.append(new_meta)
-        return new_meta
-
-    def _update_coord_ranges(
-        self, subplot_meta: HoverSubplotMetadata, df: DataFrame, scales: dict
-    ) -> None:
-        """Update x_range/y_range on a subplot metadata entry from layer data."""
-        import numpy as np
-
-        for axis in ("x", "y"):
-            if axis not in df:
-                continue
-            try:
-                vals = pd.to_numeric(df[axis], errors="coerce").to_numpy()
-                finite = np.isfinite(vals)
-                if not finite.any():
-                    continue
-                vmin = float(np.min(vals[finite]))
-                vmax = float(np.max(vals[finite]))
-                key = f"{axis}_range"
-                current = subplot_meta.get(key)
-                if current is None:
-                    subplot_meta[key] = (vmin, vmax)  # type: ignore
-                else:
-                    subplot_meta[key] = (  # type: ignore
-                        min(current[0], vmin),
-                        max(current[1], vmax),
-                    )
-            except Exception:
-                continue
-
-    def _merge_subplot_coord_ranges(
-        self, metas: list[HoverSubplotMetadata]
-    ) -> None:
-        """Second pass to make sure every subplot entry has coord ranges,
-        taking them from layer variable metadata if not already filled."""
-        for meta in metas:
-            for axis in ("x", "y"):
-                key = f"{axis}_range"
-                if meta.get(key) is None:
-                    for layer in meta.get("layers", []):
-                        var_meta = layer.get("variables", {}).get(axis)
-                        if var_meta is not None and var_meta.get("coord_range"):
-                            meta[key] = var_meta["coord_range"]  # type: ignore
-                            break

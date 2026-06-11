@@ -246,13 +246,16 @@ class Grid(_BaseGrid):
         # Now clear the legend
         ax.legend_ = None
 
-    def _get_palette(self, data, hue, hue_order, palette):
+    def _get_palette(self, data, hue, hue_order, palette,
+                     semantic_order="data"):
         """Get a list of colors for the hue variable."""
         if hue is None:
             palette = color_palette(n_colors=1)
 
         else:
-            hue_names = categorical_order(data[hue], hue_order)
+            hue_names = categorical_order(
+                data[hue], hue_order, semantic_order=semantic_order,
+            )
             n_colors = len(hue_names)
 
             # By default use either the current color palette or HUSL
@@ -375,31 +378,38 @@ class FacetGrid(Grid):
         row_order=None, col_order=None, hue_order=None, hue_kws=None,
         dropna=False, legend_out=True, despine=True,
         margin_titles=False, xlim=None, ylim=None, subplot_kws=None,
-        gridspec_kws=None,
+        gridspec_kws=None, semantic_order="data",
     ):
 
         super().__init__()
         data = handle_data_source(data)
+        self.semantic_order = semantic_order
 
         # Determine the hue facet layer information
         hue_var = hue
         if hue is None:
             hue_names = None
         else:
-            hue_names = categorical_order(data[hue], hue_order)
+            hue_names = categorical_order(
+                data[hue], hue_order, semantic_order=semantic_order,
+            )
 
-        colors = self._get_palette(data, hue, hue_order, palette)
+        colors = self._get_palette(data, hue, hue_order, palette, semantic_order)
 
         # Set up the lists of names for the row and column facet variables
         if row is None:
             row_names = []
         else:
-            row_names = categorical_order(data[row], row_order)
+            row_names = categorical_order(
+                data[row], row_order, semantic_order=semantic_order,
+            )
 
         if col is None:
             col_names = []
         else:
-            col_names = categorical_order(data[col], col_order)
+            col_names = categorical_order(
+                data[col], col_order, semantic_order=semantic_order,
+            )
 
         # Additional dict of kwarg -> list of values for mapping the hue var
         hue_kws = hue_kws if hue_kws is not None else {}

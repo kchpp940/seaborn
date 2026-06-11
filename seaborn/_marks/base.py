@@ -1,6 +1,5 @@
 from __future__ import annotations
 from dataclasses import dataclass, fields, field
-import itertools
 import textwrap
 from typing import Any, Callable, Union
 from collections.abc import Generator
@@ -107,9 +106,6 @@ class Mark:
     """Base class for objects that visually represent data."""
 
     artist_kws: dict = field(default_factory=dict)
-    _hover_element_data: list[dict[str, Any]] = field(default_factory=list)
-    _hover_tracking_enabled: bool = False
-    _hover_source_data: DataFrame | None = None
 
     @property
     def _mappable_props(self):
@@ -126,130 +122,6 @@ class Mark:
             f.name for f in fields(self)
             if isinstance(f.default, Mappable) and f.default.grouping
         ]
-
-    def _start_hover_tracking(
-        self,
-        source_index_mapping: dict | None = None,
-        artist_registry: Any | None = None,
-        all_artists: list | None = None,
-        layer_idx: int = 0,
-        pairing_idx: int = 0,
-    ) -> None:
-        """Initialize hover tracking for this mark's _plot call.
-
-        Parameters
-        ----------
-        source_index_mapping : dict or None
-            Mapping from pandas index values (as passed in stat_indices)
-            to original source row indices (_source_row_idx).
-            None for aggregated/stat-transformed data where original
-            row identity is lost.
-        artist_registry : ArtistRegistry or None
-            Registry for assigning stable element IDs to artists.
-        all_artists : list or None
-            List to collect all created artists for lookup.
-        layer_idx : int
-            Index of this layer in the plot.
-        pairing_idx : int
-            Index of this pairing (for pair/facet grids).
-        """
-        self._hover_element_data = []
-        self._hover_tracking_enabled = True
-        self._hover_source_index_mapping = source_index_mapping
-        self._hover_artist_registry = artist_registry
-        self._hover_all_artists = all_artists
-        self._hover_layer_idx = layer_idx
-        self._hover_pairing_idx = pairing_idx
-        self._hover_local_draw_order = 0
-
-    def _stop_hover_tracking(self) -> list[dict[str, Any]]:
-        """Stop hover tracking and return the collected element data."""
-        self._hover_tracking_enabled = False
-        element_data = self._hover_element_data.copy()
-        self._hover_element_data = []
-        self._hover_source_index_mapping = None
-        self._hover_artist_registry = None
-        self._hover_all_artists = None
-        self._hover_layer_idx = 0
-        self._hover_pairing_idx = 0
-        self._hover_local_draw_order = 0
-        return element_data
-
-    def _record_element(
-        self,
-        artist: Artist,
-        stat_indices: list[int] | np.ndarray,
-        group_key: dict[str, Any],
-    ) -> None:
-        """Record a visual element for hover metadata.
-
-        Uses the stable artist registry and preserved source index mapping
-        to ensure accurate, serializable element identification.
-
-        Parameters
-        ----------
-        artist : matplotlib Artist
-            The artist object representing this visual element.
-        stat_indices : list or array
-            Row index values from the split_generator's data chunk
-            (i.e., data.index or data.index.tolist()). These serve as
-            identifiers for which rows in the pairing-level DataFrame
-            this element represents. For per-subplot variable arrays
-            (source_values, stat_output_values), the position within
-            the filtered view corresponds to the element's position
-            within the per-subplot data.
-        group_key : dict
-            The grouping key for this element (from split_generator).
-        """
-        if not self._hover_tracking_enabled:
-            return
-
-        # Track artist for reverse lookup
-        if self._hover_all_artists is not None:
-            self._hover_all_artists.append(artist)
-
-        # Register artist and get stable element ID
-        element_id = ""
-        if self._hover_artist_registry is not None:
-            elem_idx = self._hover_artist_registry.next_elem_idx(
-                self._hover_layer_idx, self._hover_pairing_idx
-            )
-            element_id = self._hover_artist_registry.register(
-                artist, self._hover_layer_idx, self._hover_pairing_idx, elem_idx
-            )
-
-        # Global draw order from registry, or local fallback
-        draw_order = self._hover_local_draw_order
-        self._hover_local_draw_order += 1
-
-        stat_indices = list(map(int, np.asarray(stat_indices).ravel()))
-
-        # Map stat_index -> source_index using preserved mapping
-        # stat_indices are pandas index values; source_index_mapping maps
-        # those to original source row indices (_source_row_idx)
-        source_indices: list[int] | None = None
-        if self._hover_source_index_mapping is not None:
-            try:
-                mapped_indices = []
-                for idx_val in stat_indices:
-                    src_idx = self._hover_source_index_mapping.get(idx_val)
-                    if src_idx is not None:
-                        mapped_indices.append(int(src_idx))
-                    else:
-                        mapped_indices.append(None)
-                if all(si is not None for si in mapped_indices):
-                    source_indices = mapped_indices
-            except Exception:
-                source_indices = None
-
-        element_info: dict[str, Any] = {
-            "element_id": element_id,
-            "draw_order": draw_order,
-            "stat_index": stat_indices,
-            "source_index": source_indices,
-            "group_key": group_key,
-        }
-        self._hover_element_data.append(element_info)
 
     # TODO make this method private? Would extender every need to call directly?
     def _resolve(
@@ -355,71 +227,6 @@ class Mark:
     ) -> Artist | None:
 
         return None
-
-    def _get_hover_metadata(
-        self,
-        data: DataFrame,
-        scales: dict[str, Scale],
-        layer_label: str | None = None,
-        source_data: DataFrame | None = None,
-    ) -> dict[str, Any]:
-        """
-        Collect hover metadata for this mark layer.
-
-        Parameters
-        ----------
-        data : DataFrame
-            The post-stat, pre-scale data for this layer (the input to the scales).
-        scales : dict[str, Scale]
-            Mapping from variable name to configured Scale object.
-        layer_label : str or None
-            Optional label for this layer (from Plot.add(label=...)).
-        source_data : DataFrame or None
-            Pre-stat data for this layer, used to populate source_values.
-            When None (no stat transform), source_values will be the same as
-            stat_output_values.
-
-        Returns
-        -------
-        dict with keys:
-            - mark_type: class name of this Mark
-            - layer_label: the layer label, if provided
-            - variables: dict mapping var_name -> per-variable hover metadata
-            - mappable_props: list of mappable property names for this mark
-        """
-        from seaborn._core.properties import PROPERTIES
-
-        variable_metadata: dict[str, Any] = {}
-        for var_name in data.columns:
-            if var_name in ("col", "row", "group", "width", "baseline"):
-                continue
-            if var_name not in scales:
-                continue
-            scale = scales[var_name]
-            if scale is None:
-                continue
-            prop = PROPERTIES.get(var_name)
-            if prop is None:
-                continue
-            try:
-                var_meta = scale._get_hover_metadata(var_name, data[var_name], prop)
-
-                if source_data is not None and var_name in source_data:
-                    source_values = source_data[var_name].to_numpy()
-                else:
-                    source_values = np.array([])
-
-                var_meta["source_values"] = source_values
-                variable_metadata[var_name] = var_meta
-            except Exception:
-                continue
-
-        return {
-            "mark_type": self.__class__.__name__,
-            "layer_label": layer_label,
-            "variables": variable_metadata,
-            "mappable_props": list(self._mappable_props.keys()),
-        }
 
 
 def resolve_properties(

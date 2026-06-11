@@ -105,9 +105,11 @@ class _DistributionPlotter(VectorPlotter):
         self,
         data=None,
         variables={},
+        semantic_order="data",
     ):
 
-        super().__init__(data=data, variables=variables)
+        super().__init__(data=data, variables=variables,
+                         semantic_order=semantic_order)
 
     @property
     def univariate(self):
@@ -1372,6 +1374,7 @@ def histplot(
     palette=None, hue_order=None, hue_norm=None, color=None,
     # Axes information
     log_scale=None, legend=True, ax=None,
+    semantic_order="data",
     # Other appearance keywords
     **kwargs,
 ):
@@ -1379,6 +1382,7 @@ def histplot(
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, weights=weights),
+        semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -1585,6 +1589,7 @@ def kdeplot(
     bw_method="scott", bw_adjust=1, warn_singular=True, log_scale=None,
     levels=10, thresh=.05, gridsize=200, cut=3, clip=None,
     legend=True, cbar=False, cbar_ax=None, cbar_kws=None, ax=None,
+    semantic_order="data",
     **kwargs,
 ):
 
@@ -1669,6 +1674,7 @@ def kdeplot(
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, weights=weights),
+        semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -1868,6 +1874,7 @@ def ecdfplot(
     palette=None, hue_order=None, hue_norm=None,
     # Axes information
     log_scale=None, legend=True, ax=None,
+    semantic_order="data",
     # Other appearance keywords
     **kwargs,
 ):
@@ -1875,6 +1882,7 @@ def ecdfplot(
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, weights=weights),
+        semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -1972,7 +1980,8 @@ Examples
 
 def rugplot(
     data=None, *, x=None, y=None, hue=None, height=.025, expand_margins=True,
-    palette=None, hue_order=None, hue_norm=None, legend=True, ax=None, **kwargs
+    palette=None, hue_order=None, hue_norm=None, legend=True, ax=None,
+    semantic_order="data", **kwargs
 ):
 
     # A note: I think it would make sense to add multiple= to rugplot and allow
@@ -2031,6 +2040,7 @@ def rugplot(
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue),
+        semantic_order=semantic_order,
     )
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
 
@@ -2102,12 +2112,14 @@ def displot(
     # Faceting parameters
     col_wrap=None, row_order=None, col_order=None,
     height=5, aspect=1, facet_kws=None,
+    semantic_order="data",
     **kwargs,
 ):
 
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, weights=weights, row=row, col=col),
+        semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -2144,7 +2156,7 @@ def displot(
         data=grid_data, row=row_name, col=col_name,
         col_wrap=col_wrap, row_order=row_order,
         col_order=col_order, height=height,
-        aspect=aspect,
+        aspect=aspect, semantic_order=semantic_order,
         **facet_kws,
     )
 
