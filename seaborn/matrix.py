@@ -382,8 +382,7 @@ class _HeatMapper:
                 annot_data = plot_data
             else:
                 if isinstance(annot, pd.DataFrame):
-                    annot_clean = _clean_df_for_matrix(annot)
-                    annot_data = _df_to_numeric_array(annot_clean)
+                    annot_data = self._prepare_annot_dataframe(annot)
                 elif isinstance(annot, np.ndarray):
                     annot_data = np.asarray(annot)
                 else:
