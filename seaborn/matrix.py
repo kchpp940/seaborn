@@ -192,9 +192,10 @@ def _matrix_mask(data, mask):
 class _MatrixContext:
     """Unified context holding cleaned matrix data and associated metadata.
 
-    All matrix plotting components (heatmap, dendrogram, side colors) read
-    from this single context to ensure consistency across nullable dtypes,
-    mask merging, clustering reorder, and index/column alignment.
+    All matrix plotting components (heatmap, dendrogram, side colors,
+    annotations) read from this single context to ensure consistency across
+    nullable dtypes, mask merging, clustering reorder, and index/column
+    alignment.
 
     Attributes
     ----------
@@ -203,11 +204,14 @@ class _MatrixContext:
     mask : DataFrame
         Boolean DataFrame with same index/columns as df; True = masked cell.
         Includes both explicit mask and missing values from df.
+    annot : ndarray or None
+        Optional annotation data, aligned to df's index/columns.
+        Not coerced to numeric; strings are preserved as-is.
     orig_is_frame : bool
         Whether the original user input was a DataFrame (vs ndarray).
     """
 
-    def __init__(self, data, mask=None):
+    def __init__(self, data, mask=None, annot=None):
         """Create a unified matrix context from input data.
 
         Parameters
@@ -216,6 +220,9 @@ class _MatrixContext:
             Input rectangular data.
         mask : None, array-like, or DataFrame
             Optional mask; pd.NA values are treated as True (masked).
+        annot : None, bool, or array-like
+            Optional annotation data. If a DataFrame, it is aligned by
+            index/columns but NOT coerced to numeric dtype.
         """
         if isinstance(data, pd.DataFrame):
             self.orig_is_frame = True
@@ -224,6 +231,65 @@ class _MatrixContext:
 
         self.df = _clean_df_for_matrix(data)
         self.mask = _matrix_mask(self.df, mask)
+        self.annot = self._prepare_annot(annot)
+
+    @staticmethod
+    def _prepare_annot(annot):
+        """Prepare annotation data aligned but NOT coerced to numeric.
+
+        If annot is a DataFrame, reindex it to match the matrix context's
+        index/columns but preserve the dtype (strings, etc.).
+        """
+        if annot is None or isinstance(annot, bool):
+            return annot
+
+        if isinstance(annot, pd.DataFrame):
+            if not isinstance(annot, pd.DataFrame):
+                return np.asarray(annot)
+            return None  # will be reindexed later when needed
+        elif hasattr(annot, "__array__"):
+            return np.asarray(annot)
+        else:
+            return np.asarray(annot)
+
+    def with_annot(self, annot):
+        """Return a new context with annotation data attached.
+
+        If annot is a DataFrame, align by index/columns against this
+        context's df. Annotation data is NOT coerced to numeric.
+        """
+        new_ctx = _MatrixContext.__new__(_MatrixContext)
+        new_ctx.orig_is_frame = self.orig_is_frame
+        new_ctx.df = self.df
+        new_ctx.mask = self.mask
+
+        if annot is None:
+            new_ctx.annot = None
+        elif isinstance(annot, bool):
+            new_ctx.annot = annot
+        elif isinstance(annot, pd.DataFrame):
+            new_ctx.annot = self._align_annot_df(annot)
+        elif hasattr(annot, "__array__"):
+            new_ctx.annot = np.asarray(annot)
+        else:
+            new_ctx.annot = np.asarray(annot)
+
+        return new_ctx
+
+    def _align_annot_df(self, annot):
+        """Align a DataFrame annot by index/columns without numeric coercion.
+
+        Raises ValueError if original shapes differ (even if index labels are
+        a subset), for backward compatibility. If shapes match but indices
+        are in different order, reindex to align.
+        """
+        if annot.shape != self.df.shape:
+            err = "`data` and `annot` must have same shape."
+            raise ValueError(err)
+        # Use the provided annot values but reindex to match context
+        # Preserve original dtype including strings, objects etc.
+        reindexed = annot.reindex(index=self.df.index, columns=self.df.columns)
+        return reindexed.values
 
     @property
     def values(self):
@@ -250,8 +316,16 @@ class _MatrixContext:
         """Masked array suitable for passing to matplotlib (pcolormesh etc.)."""
         return np.ma.masked_where(self.mask.values, self.values)
 
+    def annot_array(self):
+        """Return annotation array ready for use (aligned + numeric fallback)."""
+        if self.annot is None or isinstance(self.annot, bool):
+            return self.annot
+        return self.annot
+
     def reindex(self, row_ind=None, col_ind=None):
         """Return a new context with rows/columns reordered by integer indices.
+
+        Data, mask, and annot (if any) are all reordered consistently.
 
         Parameters
         ----------
@@ -263,7 +337,7 @@ class _MatrixContext:
         Returns
         -------
         _MatrixContext
-            New context with reordered data and mask.
+            New context with everything consistently reordered.
         """
         new_ctx = _MatrixContext.__new__(_MatrixContext)
         new_ctx.orig_is_frame = self.orig_is_frame
@@ -281,6 +355,18 @@ class _MatrixContext:
 
         new_ctx.df = new_df
         new_ctx.mask = new_mask
+
+        # Reorder annot consistently
+        if self.annot is None or isinstance(self.annot, bool):
+            new_ctx.annot = self.annot
+        else:
+            new_annot = self.annot
+            if row_ind is not None:
+                new_annot = new_annot[row_ind]
+            if col_ind is not None:
+                new_annot = new_annot[:, col_ind]
+            new_ctx.annot = new_annot
+
         return new_ctx
 
     def xlabel(self):
@@ -317,9 +403,16 @@ class _HeatMapper:
         use within ``ClusterGrid``.
         """
         if context is not None:
-            self.ctx = context
+            if isinstance(annot, pd.DataFrame) or not isinstance(context.annot, (type(None), bool, np.ndarray)):
+                self.ctx = context.with_annot(annot)
+            elif context.annot is None and annot is not None:
+                self.ctx = context.with_annot(annot)
+            else:
+                self.ctx = context
         else:
             self.ctx = _MatrixContext(data, mask)
+            if annot is not None:
+                self.ctx = self.ctx.with_annot(annot)
 
         plot_data = self.ctx.plot_data
         data = self.ctx.df
@@ -373,20 +466,15 @@ class _HeatMapper:
         self._determine_cmap_params(plot_data, vmin, vmax,
                                     cmap, center, robust)
 
-        # Sort out the annotations
-        if annot is None or annot is False:
+        # Sort out the annotations - consistently from the unified context
+        if self.ctx.annot is None or (isinstance(self.ctx.annot, bool) and not self.ctx.annot):
             annot = False
             annot_data = None
         else:
-            if isinstance(annot, bool):
+            if isinstance(self.ctx.annot, bool) and self.ctx.annot:
                 annot_data = plot_data
             else:
-                if isinstance(annot, pd.DataFrame):
-                    annot_data = self._prepare_annot_dataframe(annot)
-                elif isinstance(annot, np.ndarray):
-                    annot_data = np.asarray(annot)
-                else:
-                    annot_data = np.asarray(annot)
+                annot_data = self.ctx.annot_array()
                 if annot_data.shape != plot_data.shape:
                     err = "`data` and `annot` must have same shape."
                     raise ValueError(err)
@@ -953,10 +1041,17 @@ class ClusterGrid(Grid):
 
         self._figure = plt.figure(figsize=figsize)
 
-        self.row_colors, self.row_color_labels = \
-            self._preprocess_colors(row_colors, axis=0)
-        self.col_colors, self.col_color_labels = \
-            self._preprocess_colors(col_colors, axis=1)
+        # Store raw colors for later reprocessing after unified reindex
+        self._raw_row_colors = row_colors
+        self._raw_col_colors = col_colors
+
+        # Eagerly compute colors for inspection immediately after __init__.
+        # These are aligned to the pre-reorder context. After plot() does the
+        # unified reindex, they are recomputed against the reordered context.
+        self.row_colors, self.row_color_labels = self._preprocess_colors(
+            self._raw_row_colors, axis=0, align_to_context=True)
+        self.col_colors, self.col_color_labels = self._preprocess_colors(
+            self._raw_col_colors, axis=1, align_to_context=True)
 
         try:
             row_dendrogram_ratio, col_dendrogram_ratio = dendrogram_ratio
@@ -967,6 +1062,16 @@ class ClusterGrid(Grid):
             row_colors_ratio, col_colors_ratio = colors_ratio
         except TypeError:
             row_colors_ratio = col_colors_ratio = colors_ratio
+
+        # Apply defaults for ratios when not specified
+        if row_dendrogram_ratio is None:
+            row_dendrogram_ratio = .2
+        if col_dendrogram_ratio is None:
+            col_dendrogram_ratio = .2
+        if row_colors_ratio is None:
+            row_colors_ratio = .03
+        if col_colors_ratio is None:
+            col_colors_ratio = .03
 
         width_ratios = self.dim_ratios(self.row_colors,
                                        row_dendrogram_ratio,
@@ -1010,15 +1115,30 @@ class ClusterGrid(Grid):
         self.dendrogram_row = None
         self.dendrogram_col = None
 
-    def _preprocess_colors(self, colors, axis):
+    def _preprocess_colors(self, colors, axis, align_to_context=True):
         """Preprocess {row/col}_colors to extract labels and convert colors.
 
-        Colors are aligned to the unified matrix context's index/columns,
-        ensuring consistency after pivot/z_score/standard_scale transforms.
+        Parameters
+        ----------
+        colors : DataFrame, Series, array-like, list of Series, or None
+        axis : 0 (row) or 1 (col)
+        align_to_context : bool
+            If True, align color index/columns to self.ctx.index/columns.
+            Set to False when the context has already been reordered and
+            you want to re-align to a fresh context.
+
+        Returns
+        -------
+        (colors_converted, labels)
         """
         labels = None
 
         if colors is not None:
+            # Handle list of Series/DataFrames: treat as a single DataFrame
+            if (isinstance(colors, (list, tuple)) and len(colors) > 0
+                    and isinstance(colors[0], (pd.Series, pd.DataFrame))):
+                colors = pd.concat(colors, axis=1)
+
             if isinstance(colors, (pd.DataFrame, pd.Series)):
 
                 # If original data was unindexed (not a DataFrame), raise
@@ -1030,10 +1150,11 @@ class ClusterGrid(Grid):
                     raise TypeError(msg)
 
                 # Ensure colors match the context's index/columns
-                if axis == 0:
-                    colors = colors.reindex(self.ctx.index)
-                else:
-                    colors = colors.reindex(self.ctx.columns)
+                if align_to_context:
+                    if axis == 0:
+                        colors = colors.reindex(self.ctx.index)
+                    else:
+                        colors = colors.reindex(self.ctx.columns)
 
                 # Replace na's (including pd.NA) with white color
                 # TODO We should set these to transparent instead
@@ -1331,40 +1452,26 @@ class ClusterGrid(Grid):
             despine(self.ax_col_colors, left=True, bottom=True)
 
     def plot_matrix(self, colorbar_kws, xind, yind, **kws):
-        # Reindex the unified context once: data, mask, and index/columns
-        # all stay in sync after clustering reorder
-        self.ctx = self.ctx.reindex(row_ind=yind, col_ind=xind)
+        # Context has already been reordered by the unified reindex in plot()
+        # so data, mask, annot, index, columns are all in final order here.
 
-        # Try to reorganize specified tick labels, if provided
+        # Handle user-provided tick labels (reorder them if array-like)
         xtl = kws.pop("xticklabels", "auto")
         try:
-            xtl = np.asarray(xtl)[xind]
+            # If user passed explicit labels, they have already been reordered
+            # before the unified reindex, so just use as-is.
+            pass
         except (TypeError, IndexError):
             pass
         ytl = kws.pop("yticklabels", "auto")
-        try:
-            ytl = np.asarray(ytl)[yind]
-        except (TypeError, IndexError):
-            pass
 
-        # Reorganize the annotations to match the heatmap
-        annot = kws.pop("annot", None)
-        if annot is None or annot is False:
-            pass
-        else:
-            if isinstance(annot, bool):
+        # Annotation comes from the already-reordered ctx
+        annot = None
+        if self.ctx.annot is not None and not (isinstance(self.ctx.annot, bool) and not self.ctx.annot):
+            if isinstance(self.ctx.annot, bool):
                 annot = True
             else:
-                if isinstance(annot, pd.DataFrame):
-                    annot_clean = _clean_df_for_matrix(annot)
-                    annot_data = _df_to_numeric_array(annot_clean)
-                else:
-                    annot_data = np.asarray(annot)
-                if annot_data.shape != self.ctx.shape:
-                    err = "`data` and `annot` must have same shape."
-                    raise ValueError(err)
-                annot_data = annot_data[yind][:, xind]
-                annot = annot_data
+                annot = self.ctx.annot  # Already reordered via ctx.reindex()
 
         # Setting ax_cbar=None in clustermap call implies no colorbar
         kws.setdefault("cbar", self.ax_cbar is not None)
@@ -1410,14 +1517,94 @@ class ClusterGrid(Grid):
         try:
             xind = self.dendrogram_col.reordered_ind
         except AttributeError:
-            xind = np.arange(self.data2d.shape[1])
+            xind = np.arange(self.ctx.shape[1])
         try:
             yind = self.dendrogram_row.reordered_ind
         except AttributeError:
-            yind = np.arange(self.data2d.shape[0])
+            yind = np.arange(self.ctx.shape[0])
 
-        self.plot_colors(xind, yind, **kws)
-        self.plot_matrix(colorbar_kws, xind, yind, **kws)
+        # Reorganize user-specified tick labels before the unified reindex so
+        # they match the dendrogram order. The context will then supply the
+        # correct default labels if explicit ones are not given.
+        xtl = kws.pop("xticklabels", "auto")
+        if not isinstance(xtl, str) and xtl is not True and xtl is not False:
+            try:
+                xtl = np.asarray(xtl)[xind].tolist()
+            except (TypeError, IndexError):
+                pass
+        kws["xticklabels"] = xtl
+
+        ytl = kws.pop("yticklabels", "auto")
+        if not isinstance(ytl, str) and ytl is not True and ytl is not False:
+            try:
+                ytl = np.asarray(ytl)[yind].tolist()
+            except (TypeError, IndexError):
+                pass
+        kws["yticklabels"] = ytl
+
+        # === UNIFIED REINDEX ===
+        # Everything (data, mask, annot) is reordered ONCE here.
+        # Colors are then aligned against the reordered context.
+        # This guarantees all downstream components stay in sync.
+        annot_input = kws.pop("annot", None)
+        self.ctx = self.ctx.with_annot(annot_input) if annot_input is not None else self.ctx
+        self.ctx = self.ctx.reindex(row_ind=yind, col_ind=xind)
+
+        # Now align colors against the reordered context for plotting purposes.
+        # Two cases:
+        #   1. DataFrame/Series: align by index/columns against reordered ctx
+        #      (because the user expects label-based alignment)
+        #   2. Plain list/ndarray: reorder by position using xind/yind directly
+        #      (since there is no index to align by)
+        # Note: self.row_colors / self.col_colors remain as the __init__-time
+        # converted arrays (aligned against ORIGINAL context) for user inspection.
+        if isinstance(self._raw_col_colors, (pd.DataFrame, pd.Series)) or (
+                isinstance(self._raw_col_colors, (list, tuple)) and len(self._raw_col_colors) > 0
+                and isinstance(self._raw_col_colors[0], (pd.Series, pd.DataFrame))):
+            _plot_col_colors, _plot_col_color_labels = self._preprocess_colors(
+                self._raw_col_colors, axis=1, align_to_context=True)
+        else:
+            _plot_col_colors, _plot_col_color_labels = self._preprocess_colors(
+                self._raw_col_colors, axis=1, align_to_context=False)
+            if _plot_col_colors is not None:
+                if np.ndim(_plot_col_colors) > 2:
+                    _plot_col_colors = [list(map(tuple, np.asarray(lvl)[xind])) for lvl in _plot_col_colors]
+                else:
+                    _plot_col_colors = list(map(tuple, np.asarray(_plot_col_colors)[xind]))
+
+        if isinstance(self._raw_row_colors, (pd.DataFrame, pd.Series)) or (
+                isinstance(self._raw_row_colors, (list, tuple)) and len(self._raw_row_colors) > 0
+                and isinstance(self._raw_row_colors[0], (pd.Series, pd.DataFrame))):
+            _plot_row_colors, _plot_row_color_labels = self._preprocess_colors(
+                self._raw_row_colors, axis=0, align_to_context=True)
+        else:
+            _plot_row_colors, _plot_row_color_labels = self._preprocess_colors(
+                self._raw_row_colors, axis=0, align_to_context=False)
+            if _plot_row_colors is not None:
+                if np.ndim(_plot_row_colors) > 2:
+                    _plot_row_colors = [list(map(tuple, np.asarray(lvl)[yind])) for lvl in _plot_row_colors]
+                else:
+                    _plot_row_colors = list(map(tuple, np.asarray(_plot_row_colors)[yind]))
+
+        # xind/yind are now identity relative to reordered context
+        _xid = np.arange(self.ctx.shape[1])
+        _yid = np.arange(self.ctx.shape[0])
+
+        # Temporarily swap in plot-time colors
+        _orig_row_colors, self.row_colors = self.row_colors, _plot_row_colors
+        _orig_col_colors, self.col_colors = self.col_colors, _plot_col_colors
+        _orig_row_labels, self.row_color_labels = self.row_color_labels, _plot_row_color_labels
+        _orig_col_labels, self.col_color_labels = self.col_color_labels, _plot_col_color_labels
+
+        self.plot_colors(_xid, _yid, **kws)
+        self.plot_matrix(colorbar_kws, _xid, _yid, **kws)
+
+        # Restore __init__-time colors for post-plot inspection
+        self.row_colors = _orig_row_colors
+        self.col_colors = _orig_col_colors
+        self.row_color_labels = _orig_row_labels
+        self.col_color_labels = _orig_col_labels
+
         return self
 
 
