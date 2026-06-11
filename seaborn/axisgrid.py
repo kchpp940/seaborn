@@ -114,31 +114,51 @@ class Grid(_BaseGrid):
         # don't add proxy artists onto the Axes. We need an overall cleaner approach.
         self._extract_legend_handles = False
 
-        # ---- Figure-level semantic context ----
+        # ================================================================
+        # Figure-level semantic context (unified protocol)
+        # ================================================================
         #
-        # Each entry is keyed by the seaborn semantic role ("hue", "size",
-        # "style") and stores:
-        #   - declared_levels : list
-        #       Levels as computed by the global VectorPlotter from the full
-        #       dataset (respecting any explicit *order argument the user
-        #       passed).  These may include levels that have no observations
-        #       after faceting, or that are otherwise never actually drawn.
-        #   - variable_name : str or None
-        #       The original column name in the dataset (e.g. "species" when
-        #       hue="species"), used for axis/dataframe lookups and legend
-        #       titles.
-        #   - data_column : str or None
-        #       The actual column name that carries this semantic inside
-        #       FacetGrid.data.  For relplot, the plotter renames columns to
-        #       have a leading underscore, so this allows _facet_plot to
-        #       extract observed levels correctly.  When None, variable_name
-        #       is used as a fallback.
-        #   - observed : set
-        #       Level values actually observed across all facet drawing calls.
-        #       Populated either by VectorPlotter.iter_data (attach mode, for
-        #       catplot/displot) or by FacetGrid._facet_plot (map_dataframe
-        #       mode, for relplot).  A level must be present here AND in
-        #       declared_levels to make it into the final legend.
+        # Four-phase protocol for every figure-level function:
+        #
+        #   Phase 1 – DECLARATION (before drawing)
+        #     _register_declared_semantics(role, levels, var_name, data_column)
+        #     Tells the Grid which levels each semantic *should* have,
+        #     respecting any user-passed *_order.
+        #
+        #   Phase 2 – OBSERVATION (during drawing, automatic)
+        #     _observe_semantic_level(_levels)(role, level(s))
+        #     Populated by VectorPlotter.iter_data (attach mode) or by
+        #     FacetGrid._facet_plot (map_dataframe mode).  Records which
+        #     levels were actually drawn in at least one facet.
+        #
+        #   Phase 3 – LEGEND ARTIST REGISTRATION (after drawing, before finalize)
+        #     _register_legend_artist(legend_artist, common_kws, attrs, semantic_kws)
+        #         – for the standard add_legend_data path (relplot, catplot)
+        #     _register_prebuilt_legend(legend_data, legend_order, legend_title)
+        #         – for plotters that build legend_data themselves (displot)
+        #
+        #   Phase 4 – FINALIZATION
+        #     _finalize_legend(plotter)
+        #         – reads all state from the registry, computes
+        #           effective_levels = declared ∩ observed (preserving order),
+        #           filters legend_data, and renders the figure legend.
+        #
+        # INVARIANTS:
+        #   * declared_levels is the sole source of ORDERING.  The user's
+        #     explicit *_order is encoded here and never overridden.
+        #   * observed is the sole source of INCLUSION.  A level must be
+        #     present in both declared_levels AND observed to appear in
+        #     the final legend.
+        #   * If observed is empty (observation hooks didn't fire for this
+        #     code path), the full declared_levels is used as a graceful
+        #     fallback — equivalent to "trust the plotter."
+        #   * If the strict intersection produces an empty result (e.g.
+        #     numeric/continuous semantics where declared tick values are
+        #     synthetic), we fall back through string-tolerant matching to
+        #     the full declared set, so the legend is never silently lost.
+        # ================================================================
+
+        # Per-semantic role storage
         self._semantic_registry: dict = {
             "hue":   {"declared_levels": None, "variable_name": None,
                       "data_column": None, "observed": set()},
@@ -148,12 +168,33 @@ class Grid(_BaseGrid):
                       "data_column": None, "observed": set()},
         }
 
-    def _reset_legend_state(self):
-        """Reset internal legend state to prevent stale entries between calls.
+        # Phase-3 legend-artist registration (for add_legend_data path)
+        self._legend_artist_registry = {
+            "legend_artist": None,
+            "common_kws": None,
+            "attrs": None,
+            "semantic_kws": None,
+        }
 
-        This clears `_legend_data` and removes any previously drawn legend,
-        ensuring that figure-level functions start from a clean slate when
-        assembling the legend.
+        # Phase-3 prebuilt-legend registration (for plotters that build
+        # their own legend_data, e.g. _DistributionPlotter)
+        self._prebuilt_legend = {
+            "legend_data": None,
+            "legend_order": None,
+            "legend_title": None,
+        }
+
+    def _reset_legend_state(self):
+        """Reset the rendered-legend state to prevent stale entries between calls.
+
+        This clears `_legend_data` and removes any previously drawn legend so
+        that `add_legend` can render a fresh legend from scratch.
+
+        NOTE – this intentionally does **not** clear the Phase-3 registries
+        (`_legend_artist_registry` / `_prebuilt_legend`).  Those are populated
+        *before* `_finalize_legend` is called, and `_finalize_legend` itself
+        is the only consumer.  Clearing them here would clobber the state we
+        are about to read.
         """
         self._legend_data = {}
         if self._legend is not None:
@@ -163,9 +204,11 @@ class Grid(_BaseGrid):
                 pass
             self._legend = None
 
-    # ------------------------------------------------------------------
-    # Figure-level semantic context
-    # ------------------------------------------------------------------
+    # ================================================================
+    # Figure-level semantic context – unified protocol implementation
+    # ================================================================
+
+    # ---- Phase 1: Declaration ------------------------------------------------
 
     def _register_declared_semantics(self, var, declared_levels, variable_name,
                                      data_column=None):
@@ -175,6 +218,10 @@ class Grid(_BaseGrid):
         global VectorPlotter and FacetGrid.  ``declared_levels`` should be
         the level list from the plotter's SemanticMapping (i.e. the order
         that respects any user-passed ``*_order`` argument).
+
+        This is the **sole** source of legend ordering — the returned
+        effective-level list from `_get_effective_levels` always preserves
+        this ordering.
         """
         if var not in self._semantic_registry:
             self._semantic_registry[var] = {
@@ -189,8 +236,16 @@ class Grid(_BaseGrid):
         # on the same FacetGrid object don't leak through.
         reg["observed"] = set()
 
+    # ---- Phase 2: Observation ------------------------------------------------
+
     def _observe_semantic_level(self, var, level):
-        """Record a single semantic level as actually drawn in some facet."""
+        """Record a single semantic level as actually drawn in some facet.
+
+        Populated automatically by `VectorPlotter.iter_data` (attach mode) or
+        `FacetGrid._facet_plot` (map_dataframe mode).  A level must be both
+        *declared* (Phase 1) and *observed* (Phase 2) to appear in the
+        final legend.
+        """
         if var in self._semantic_registry:
             reg = self._semantic_registry[var]
             if reg["declared_levels"] is not None and level is not None:
@@ -202,24 +257,80 @@ class Grid(_BaseGrid):
             for lvl in levels:
                 self._observe_semantic_level(var, lvl)
 
+    # ---- Phase 3: Legend-artist registration ---------------------------------
+
+    def _register_legend_artist(self, legend_artist, common_kws=None,
+                                attrs=None, semantic_kws=None):
+        """Register how legend proxy artists should be constructed.
+
+        Used by the *standard* path — figure-level functions whose plotters
+        delegate to `VectorPlotter.add_legend_data` (relplot, catplot).
+        The four arguments match the signature of `add_legend_data`; they
+        are stored in the Grid registry so that `_finalize_legend` can be
+        called without any parameters.
+
+        Calling this method atomically overwrites any previously registered
+        Phase-3 state, including a prebuilt-legend registration from the
+        alternate path — the two paths are mutually exclusive.
+        """
+        self._legend_artist_registry.update(
+            legend_artist=legend_artist,
+            common_kws=common_kws,
+            attrs=attrs,
+            semantic_kws=semantic_kws,
+        )
+        self._prebuilt_legend.update(
+            legend_data=None, legend_order=None, legend_title=None,
+        )
+
+    def _register_prebuilt_legend(self, legend_data, legend_order, legend_title):
+        """Register an already-assembled legend_data dict for later filtering.
+
+        Used by the *prebuilt* path — plotters that need to use their own
+        artist factory (e.g. `_DistributionPlotter._artist_kws`) and so
+        populate ``legend_data`` / ``legend_order`` / ``legend_title``
+        themselves before reaching finalization.  As with the standard
+        path, the data is only *stored* here; filtering and rendering
+        happen later in `_finalize_legend`.
+
+        Calling this method atomically overwrites any previously registered
+        Phase-3 state, including a legend-artist registration from the
+        alternate path — the two paths are mutually exclusive.
+        """
+        self._prebuilt_legend.update(
+            legend_data=legend_data,
+            legend_order=legend_order,
+            legend_title=legend_title,
+        )
+        self._legend_artist_registry.update(
+            legend_artist=None, common_kws=None, attrs=None, semantic_kws=None,
+        )
+
+    # ---- Effective levels ----------------------------------------------------
+
     def _get_effective_levels(self, var):
         """Return the ordered list of levels that should appear in the legend.
 
-        The result is always a subset of ``declared_levels`` (preserving the
-        user-specified order) restricted to those levels that were actually
-        observed during drawing.  If *no* levels were ever explicitly
-        observed (e.g. because a plotting path doesn't call the observation
-        hooks) then the full set of declared levels is returned as a
-        graceful fallback.
+        Implements the core invariant of the unified protocol:
 
-        An additional graceful fallback is provided for the case where the
-        declared levels are of a fundamentally different "shape" from the
-        observed values (e.g. numeric/continuous semantics where declared
-        levels are synthetic tick values, or when observed was populated
-        from raw float data but declared contains rounded integers).  In
-        such cases the strict intersection can be spuriously empty; when
-        that happens we return the full declared list so the legend isn't
-        silently dropped.
+            effective_levels = (declared_levels ∩ observed),
+                              ordered as declared_levels
+
+        * ``declared_levels`` is the **sole** source of ordering.  Any
+          user-passed ``*_order`` is encoded here and never overridden.
+        * ``observed`` is the **sole** source of inclusion.  A level must
+          appear in at least one facet to be kept.
+
+        Graceful fallbacks:
+          1. If nothing was ever ``observed`` (observation hooks didn't
+             fire for this code path) → return the full ``declared_levels``
+             list.  Equivalent to "trust the plotter."
+          2. If the strict intersection is **empty** (can happen with
+             numeric/continuous semantics where ``declared`` contains
+             synthetic tick values that don't literally match raw
+             observed floats) → try string-tolerant matching, then fall
+             back to the full declared set so the legend is never
+             silently dropped.
         """
         if var not in self._semantic_registry:
             return []
@@ -246,49 +357,35 @@ class Grid(_BaseGrid):
             return list(str_eff) if str_eff else list(declared)
         return effective
 
-    def _finalize_legend(self, plotter, legend_artist=None, common_kws=None,
-                         attrs=None, semantic_kws=None, prebuilt=False):
-        """Unified entry point for figure-level legend assembly.
+    def _finalize_legend(self, plotter):
+        """Phase 4 – unified entry point for figure-level legend assembly.
 
-        This method performs (up to) four steps:
-          1. ``_reset_legend_state`` – clear any prior legend state.
-          2. ``plotter.add_legend_data`` – build the full candidate
-             ``legend_data`` on the plotter using the first Axes as the
-             artist host (this includes *all* declared levels).
-             **Skip this when ``prebuilt=True``** – used by plotters such
-             as ``_DistributionPlotter`` that need distribution-specific
-             artist factories and therefore populate ``legend_data`` /
-             ``legend_order`` / ``legend_title`` in their own ``_add_legend``
-             pass before calling here.
-          3. Filter ``legend_data`` / ``legend_order`` so that only levels
-             observed in at least one facet are kept (respecting declared
+        All parameters needed for legend construction are read from the
+        Grid's internal registries, which must have been populated in
+        earlier phases:
+
+        * **Phase 1** – `_register_declared_semantics` for each semantic role
+        * **Phase 2** – observation hooks fire automatically during drawing
+        * **Phase 3** – exactly one of:
+            - `_register_legend_artist`   (standard path: relplot, catplot)
+            - `_register_prebuilt_legend` (prebuilt path: displot)
+
+        This method then:
+          1. Resets any stale legend state.
+          2. Builds the full candidate ``legend_data`` via the registered
+             path (either by calling ``plotter.add_legend_data`` or by
+             using the prebuilt data).
+          3. Computes ``effective_levels = declared ∩ observed`` (using the
+             graceful-fallback rules in `_get_effective_levels`).
+          4. Filters the candidate ``legend_data`` / ``legend_order`` to
+             keep only levels in the effective set (preserving declared
              order).
-          4. ``add_legend`` – render the filtered legend.
+          5. Renders the final figure legend via ``add_legend``.
 
         Parameters
         ----------
         plotter : VectorPlotter
             The *global* plotter that owns the full semantic mappings.
-        legend_artist : callable or None
-            Factory used by add_legend_data to construct proxy artists.
-            Must be supplied when ``prebuilt=False``; ignored otherwise.
-        common_kws : dict or None
-            Shared keyword arguments forwarded to legend_artist.  Ignored
-            when ``prebuilt=True``.
-        attrs : dict or None
-            Mapping from semantic role ("hue"/"size"/"style") to the
-            matplotlib artist kwarg that controls it (or None when the
-            semantic is expressed by the artist type itself).  Ignored
-            when ``prebuilt=True``.
-        semantic_kws : dict or None
-            Optional nested mapping ``{role: {level: artist_kwargs}}`` for
-            role-specific per-level attributes (e.g. point-plot markers
-            and linestyles that are implicitly bound to hue).  Ignored
-            when ``prebuilt=True``.
-        prebuilt : bool
-            If True, skip calling ``plotter.add_legend_data`` and operate
-            directly on whatever ``legend_data`` / ``legend_order`` /
-            ``legend_title`` the plotter has already populated itself.
 
         Returns
         -------
@@ -296,16 +393,32 @@ class Grid(_BaseGrid):
         """
         self._reset_legend_state()
 
-        # Build the complete candidate legend using the global plotter so we
-        # get hierarchical keys, correct titles, verbosity handling, etc.
-        # When *prebuilt* is True, the plotter has already populated
-        # legend_data / legend_order / legend_title via its own artist
-        # factory (e.g. distribution-specific _artist_kws patches).
-        if not prebuilt:
+        # ------------------------------------------------------------------
+        # Step 1 – obtain full candidate legend_data / legend_order / title
+        # ------------------------------------------------------------------
+        prebuilt = self._prebuilt_legend
+        artist_reg = self._legend_artist_registry
+
+        if prebuilt["legend_data"] is not None:
+            # Prebuilt path: plotter populated legend_* itself (e.g. displot
+            # which uses _artist_kws for distribution-specific patches).
+            legend_data = prebuilt["legend_data"]
+            legend_order = prebuilt["legend_order"]
+            legend_title = prebuilt["legend_title"]
+            # Sync onto the plotter so downstream code that reads from
+            # plotter.legend_* still works.
+            plotter.legend_data = legend_data
+            plotter.legend_order = legend_order
+            plotter.legend_title = legend_title
+        elif artist_reg["legend_artist"] is not None:
+            # Standard path: delegate to VectorPlotter.add_legend_data.
             host_ax = self.axes.flat[0]
             plotter.add_legend_data(
-                host_ax, legend_artist, common_kws, attrs,
-                semantic_kws=semantic_kws,
+                host_ax,
+                artist_reg["legend_artist"],
+                artist_reg["common_kws"],
+                artist_reg["attrs"],
+                semantic_kws=artist_reg["semantic_kws"],
             )
             # NOTE: we intentionally do NOT remove the proxy artists from
             # `host_ax` here.  Matplotlib legend handle factories (e.g.
@@ -321,10 +434,19 @@ class Grid(_BaseGrid):
             # invisible (subtitle entries) or positioned outside the
             # active data viewport, so they do not alter the visual
             # appearance of the plot.
-        if not plotter.legend_data:
+            legend_data = plotter.legend_data
+            legend_order = plotter.legend_order
+            legend_title = plotter.legend_title
+        else:
+            # Nothing registered – nothing to do.
             return None
 
-        # Collect the effective levels for every semantic that has them.
+        if not legend_data:
+            return None
+
+        # ------------------------------------------------------------------
+        # Step 2 – compute effective levels (declared ∩ observed)
+        # ------------------------------------------------------------------
         effective = {
             var: self._get_effective_levels(var)
             for var, reg in self._semantic_registry.items()
@@ -340,12 +462,15 @@ class Grid(_BaseGrid):
         if not (any_registered and any_observed):
             # Fast path – nothing to filter, render as-is.
             return self.add_legend(
-                legend_data=plotter.legend_data,
-                label_order=plotter.legend_order,
-                title=plotter.legend_title,
+                legend_data=legend_data,
+                label_order=legend_order,
+                title=legend_title,
                 adjust_subtitles=True,
             )
 
+        # ------------------------------------------------------------------
+        # Step 3 – filter legend_order by effective levels
+        # ------------------------------------------------------------------
         # Build a reverse lookup: semantic variable name (e.g. "species")
         # -> the plotter role it came from ("hue").
         var_name_to_role = {
@@ -354,14 +479,14 @@ class Grid(_BaseGrid):
             if reg["variable_name"] is not None
         }
 
-        # Walk through plotter.legend_order (which contains either plain
-        # strings or hierarchical (var_name, level) tuples, possibly mixed
-        # with subtitle entries) and keep only those whose levels are in
-        # the effective set.
+        # Walk through legend_order (which contains either plain strings or
+        # hierarchical (var_name, level) tuples, possibly mixed with
+        # subtitle entries) and keep only those whose levels are in the
+        # effective set.
         filtered_data = {}
         filtered_order = []
 
-        for key in plotter.legend_order:
+        for key in legend_order:
             keep = True
             if isinstance(key, tuple) and len(key) == 2:
                 var_name, level = key
@@ -380,7 +505,7 @@ class Grid(_BaseGrid):
                                 keep = False
             if keep:
                 filtered_order.append(key)
-                filtered_data[key] = plotter.legend_data[key]
+                filtered_data[key] = legend_data[key]
 
         # Drop subtitle entries that end up with no following levels for
         # their section, to avoid empty headings in the legend.
@@ -409,16 +534,16 @@ class Grid(_BaseGrid):
             # fall back to the full unfiltered legend rather than
             # silently showing no legend at all.
             return self.add_legend(
-                legend_data=plotter.legend_data,
-                label_order=plotter.legend_order,
-                title=plotter.legend_title,
+                legend_data=legend_data,
+                label_order=legend_order,
+                title=legend_title,
                 adjust_subtitles=True,
             )
 
         return self.add_legend(
             legend_data=filtered_data,
             label_order=cleaned_order,
-            title=plotter.legend_title,
+            title=legend_title,
             adjust_subtitles=True,
         )
 

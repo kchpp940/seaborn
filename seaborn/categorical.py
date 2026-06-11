@@ -2879,12 +2879,12 @@ def catplot(
             variable_name=p.variables.get("hue"),
         )
 
-    # ---- Placeholders for legend configuration ----
-    #
-    # Populated by each plot-kind branch below.  Keeping them at this
-    # scope lets the unified `_finalize_legend` call at the end of the
-    # function be the single place the external legend is assembled –
-    # matching the convention used by `relplot` and `displot`.
+    # Note: the four local variables below are DEPRECATED placeholders –
+    # each kind branch now registers its legend configuration directly on
+    # the Grid via `g._register_legend_artist(...)` (Phase 3 of the unified
+    # figure-level semantic protocol).  The variables are kept at this
+    # scope only to catch any kind branch that forgets to call the
+    # registration API; the final `_finalize_legend(p)` call ignores them.
     _legend_artist = None
     _legend_common_kws = {}
     _legend_attrs = {"hue": "color"}
@@ -2925,11 +2925,15 @@ def catplot(
         if "s" not in plot_kws:
             plot_kws["s"] = plot_kws.pop("size", 5) ** 2
 
-        _legend_artist = _scatter_legend_artist
-        _legend_common_kws = {
-            k: v for k, v in plot_kws.items()
-            if k in ("edgecolor", "linewidth", "s", "alpha", "zorder")
-        }
+        # Phase 3 – register legend artist with the unified Grid protocol
+        g._register_legend_artist(
+            legend_artist=_scatter_legend_artist,
+            common_kws={
+                k: v for k, v in plot_kws.items()
+                if k in ("edgecolor", "linewidth", "s", "alpha", "zorder")
+            },
+            attrs=_legend_attrs,
+        )
 
         p.plot_strips(
             jitter=jitter,
@@ -2949,11 +2953,15 @@ def catplot(
         if plot_kws.setdefault("linewidth", 0) is None:
             plot_kws["linewidth"] = np.sqrt(plot_kws["s"]) / 10
 
-        _legend_artist = _scatter_legend_artist
-        _legend_common_kws = {
-            k: v for k, v in plot_kws.items()
-            if k in ("edgecolor", "linewidth", "s", "alpha", "zorder")
-        }
+        # Phase 3 – register legend artist with the unified Grid protocol
+        g._register_legend_artist(
+            legend_artist=_scatter_legend_artist,
+            common_kws={
+                k: v for k, v in plot_kws.items()
+                if k in ("edgecolor", "linewidth", "s", "alpha", "zorder")
+            },
+            attrs=_legend_attrs,
+        )
 
         p.plot_swarms(
             dodge=dodge,
@@ -2974,18 +2982,23 @@ def catplot(
             plot_kws.pop("linecolor", "auto"), color, p._hue_map
         )
 
-        _legend_artist = _get_patch_legend_artist(fill)
-        _legend_common_kws = {}
+        # Phase 3 – register legend artist with the unified Grid protocol
         _legend_linewidth = linewidth
         if _legend_linewidth is None and not fill:
             _legend_linewidth = mpl.rcParams["lines.linewidth"]
+        _legend_common_kws_local = {}
         if _legend_linewidth is not None:
-            _legend_common_kws["linewidth"] = _legend_linewidth
+            _legend_common_kws_local["linewidth"] = _legend_linewidth
         if linecolor != "auto":
-            _legend_common_kws["edgecolor"] = linecolor
+            _legend_common_kws_local["edgecolor"] = linecolor
         for k in ("alpha",):
             if k in plot_kws:
-                _legend_common_kws[k] = plot_kws[k]
+                _legend_common_kws_local[k] = plot_kws[k]
+        g._register_legend_artist(
+            legend_artist=_get_patch_legend_artist(fill),
+            common_kws=_legend_common_kws_local,
+            attrs=_legend_attrs,
+        )
 
         p.plot_boxes(
             width=width,
@@ -3031,20 +3044,24 @@ def catplot(
         linecolor = plot_kws.pop("linecolor", "auto")
         linecolor = p._complement_color(linecolor, color, p._hue_map)
 
-        _legend_artist = _get_patch_legend_artist(fill)
-        _legend_common_kws = {}
+        # Phase 3 – register legend artist with the unified Grid protocol
         _legend_linewidth = linewidth
         if _legend_linewidth is None:
             if fill:
                 _legend_linewidth = 1.25 * mpl.rcParams["patch.linewidth"]
             else:
                 _legend_linewidth = mpl.rcParams["lines.linewidth"]
-        _legend_common_kws["linewidth"] = _legend_linewidth
+        _legend_common_kws_local = {"linewidth": _legend_linewidth}
         if linecolor != "auto":
-            _legend_common_kws["edgecolor"] = linecolor
+            _legend_common_kws_local["edgecolor"] = linecolor
         for k in ("alpha",):
             if k in plot_kws:
-                _legend_common_kws[k] = plot_kws[k]
+                _legend_common_kws_local[k] = plot_kws[k]
+        g._register_legend_artist(
+            legend_artist=_get_patch_legend_artist(fill),
+            common_kws=_legend_common_kws_local,
+            attrs=_legend_attrs,
+        )
 
         p.plot_violins(
             width=width,
@@ -3084,20 +3101,24 @@ def catplot(
             )
         linecolor = p._complement_color(linecolor, color, p._hue_map)
 
-        _legend_artist = _get_patch_legend_artist(fill)
-        _legend_common_kws = {}
+        # Phase 3 – register legend artist with the unified Grid protocol
         _legend_linewidth = linewidth
         if _legend_linewidth is None:
             if fill:
                 _legend_linewidth = 0.5 * mpl.rcParams["lines.linewidth"]
             else:
                 _legend_linewidth = mpl.rcParams["lines.linewidth"]
-        _legend_common_kws["linewidth"] = _legend_linewidth
+        _legend_common_kws_local = {"linewidth": _legend_linewidth}
         if linecolor != "auto":
-            _legend_common_kws["edgecolor"] = linecolor
+            _legend_common_kws_local["edgecolor"] = linecolor
         for k in ("alpha",):
             if k in plot_kws:
-                _legend_common_kws[k] = plot_kws[k]
+                _legend_common_kws_local[k] = plot_kws[k]
+        g._register_legend_artist(
+            legend_artist=_get_patch_legend_artist(fill),
+            common_kws=_legend_common_kws_local,
+            attrs=_legend_attrs,
+        )
 
         p.plot_boxens(
             width=width,
@@ -3172,14 +3193,18 @@ def catplot(
             "linestyle", linestyles, "-", _point_plot_kws
         )
 
-        _legend_artist = partial(mpl.lines.Line2D, [], [])
-        _legend_common_kws = {
-            k: v for k, v in _point_plot_kws.items()
-            if k in ("linewidth", "markeredgewidth", "markersize", "alpha", "zorder")
-        }
-        _legend_semantic_kws = {
-            "hue": {"marker": _point_markers, "linestyle": _point_linestyles}
-        }
+        # Phase 3 – register legend artist with the unified Grid protocol
+        g._register_legend_artist(
+            legend_artist=partial(mpl.lines.Line2D, [], []),
+            common_kws={
+                k: v for k, v in _point_plot_kws.items()
+                if k in ("linewidth", "markeredgewidth", "markersize", "alpha", "zorder")
+            },
+            attrs=_legend_attrs,
+            semantic_kws={
+                "hue": {"marker": _point_markers, "linestyle": _point_linestyles}
+            },
+        )
 
         p.plot_points(
             aggregator=aggregator,
@@ -3208,14 +3233,19 @@ def catplot(
         if not fill and "linewidth" not in kwargs:
             kwargs["linewidth"] = 1.5 * mpl.rcParams["lines.linewidth"]
 
-        _legend_artist = _get_patch_legend_artist(fill)
-        _legend_common_kws = {}
+        # Phase 3 – register legend artist with the unified Grid protocol
+        _legend_common_kws_local = {}
         if "edgecolor" in kwargs:
-            _legend_common_kws["edgecolor"] = kwargs["edgecolor"]
+            _legend_common_kws_local["edgecolor"] = kwargs["edgecolor"]
         if "linewidth" in kwargs:
-            _legend_common_kws["linewidth"] = kwargs["linewidth"]
+            _legend_common_kws_local["linewidth"] = kwargs["linewidth"]
         if "alpha" in kwargs:
-            _legend_common_kws["alpha"] = kwargs["alpha"]
+            _legend_common_kws_local["alpha"] = kwargs["alpha"]
+        g._register_legend_artist(
+            legend_artist=_get_patch_legend_artist(fill),
+            common_kws=_legend_common_kws_local,
+            attrs=_legend_attrs,
+        )
 
         p.plot_bars(
             aggregator=aggregator,
@@ -3249,14 +3279,19 @@ def catplot(
         if not fill and "linewidth" not in kwargs:
             kwargs["linewidth"] = 1.5 * mpl.rcParams["lines.linewidth"]
 
-        _legend_artist = _get_patch_legend_artist(fill)
-        _legend_common_kws = {}
+        # Phase 3 – register legend artist with the unified Grid protocol
+        _legend_common_kws_local = {}
         if "edgecolor" in kwargs:
-            _legend_common_kws["edgecolor"] = kwargs["edgecolor"]
+            _legend_common_kws_local["edgecolor"] = kwargs["edgecolor"]
         if "linewidth" in kwargs:
-            _legend_common_kws["linewidth"] = kwargs["linewidth"]
+            _legend_common_kws_local["linewidth"] = kwargs["linewidth"]
         if "alpha" in kwargs:
-            _legend_common_kws["alpha"] = kwargs["alpha"]
+            _legend_common_kws_local["alpha"] = kwargs["alpha"]
+        g._register_legend_artist(
+            legend_artist=_get_patch_legend_artist(fill),
+            common_kws=_legend_common_kws_local,
+            attrs=_legend_attrs,
+        )
 
         p.plot_bars(
             aggregator=aggregator,
@@ -3289,24 +3324,24 @@ def catplot(
     g.set_titles()
     g.tight_layout()
 
-    # ---- Unified legend assembly ----
+    # ---- Phase 4: finalize the figure-level legend ----
     #
-    # Each plot-kind branch above populated `_legend_artist` /
-    # `_legend_common_kws` / `_legend_attrs` / `_legend_semantic_kws`.
-    # We now delegate to `FacetGrid._finalize_legend`, which:
-    #   1. Resets any stale legend state on the grid.
-    #   2. Calls `p.add_legend_data` with the chosen artist / common_kws to
-    #      build a full set of candidate legend entries for *all* declared
-    #      hue levels (respecting `hue_order`).
-    #   3. Filters that candidate set down to the *effective* levels — the
-    #      intersection of declared levels with levels that were actually
-    #      observed while iterating the facet subsets (see the hooks in
-    #      `VectorPlotter.iter_data`).  This avoids carrying empty subsets
-    #      or never-drawn levels into the legend.
-    #   4. Renders a single external legend via `FacetGrid.add_legend`.
+    # By this point each kind branch has already called
+    # `g._register_legend_artist(...)` to store its artist factory and
+    # keyword arguments in the Grid's Phase-3 registry.  The unified
+    # `_finalize_legend` method now:
+    #   1. Resets any stale legend state.
+    #   2. Builds the full candidate legend_data via the registered
+    #      artist factory.
+    #   3. Filters candidate levels down to the effective set – the
+    #      intersection of declared levels (Phase 1) with levels that
+    #      were actually observed during drawing (Phase 2 hooks in
+    #      VectorPlotter.iter_data).
+    #   4. Renders a single external legend via FacetGrid.add_legend.
     #
-    # This is the same pipeline used by `relplot` and `displot`, ensuring
-    # consistent legend semantics across the three figure-level functions.
+    # This is the exact same pipeline used by `relplot` and `displot`,
+    # giving all three figure-level functions a single, consistent
+    # source of truth for legend composition.
 
     if legend == "auto":
         show_legend = not p._redundant_hue and p.input_format != "wide"
@@ -3317,15 +3352,8 @@ def catplot(
         show_legend
         and p._hue_map is not None
         and p._hue_map.levels is not None
-        and _legend_artist is not None
     ):
-        g._finalize_legend(
-            plotter=p,
-            legend_artist=_legend_artist,
-            common_kws=_legend_common_kws,
-            attrs=_legend_attrs,
-            semantic_kws=_legend_semantic_kws,
-        )
+        g._finalize_legend(plotter=p)
 
     if data is not None:
         # Replace the dataframe on the FacetGrid for any subsequent maps

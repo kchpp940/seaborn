@@ -888,12 +888,13 @@ def relplot(
         elif kind == "line":
             attrs["size"] = "linewidth"
 
-        # Unified legend finalization:
-        #   1. Reset any stale FacetGrid legend state
-        #   2. Build the full candidate legend via add_legend_data
-        #   3. Filter to keep only levels actually drawn in at least one facet
-        #   4. Render the final legend
-        g._finalize_legend(p, legend_artist, common_kws, attrs)
+        # ---- Phase 3 + 4: register legend artist then finalize ----
+        #
+        # All legend construction happens through the unified Grid protocol:
+        #   Phase 3 – _register_legend_artist stores the factory/kws
+        #   Phase 4 – _finalize_legend reads the registry and does the work.
+        g._register_legend_artist(legend_artist, common_kws, attrs)
+        g._finalize_legend(p)
 
     # Rename the columns of the FacetGrid's `data` attribute
     # to match the original column names

@@ -2295,13 +2295,14 @@ def displot(
     # distribution-specific artist factories (via `_artist_kws`) into
     # `p.legend_data / p.legend_order / p.legend_title`.  Because the
     # artist construction here is non-standard (facecolor/edgecolor for
-    # patch-based distribution artists), we pass ``prebuilt=True`` to
-    # `_finalize_legend` so it skips the generic `add_legend_data` step
-    # and goes straight to declared/observed level filtering +
-    # FacetGrid.add_legend rendering.
+    # patch-based distribution artists), we use the unified Phase-3
+    # ``_register_prebuilt_legend`` path on the Grid, and then call the
+    # single-argument ``_finalize_legend`` which performs the standard
+    # declared/observed level filtering + FacetGrid.add_legend render.
 
     if legend and "hue" in p.variables and p.legend_data:
-        g._finalize_legend(p, prebuilt=True)
+        g._register_prebuilt_legend(p.legend_data, p.legend_order, p.legend_title)
+        g._finalize_legend(p)
 
     if data is not None and (x is not None or y is not None):
         if not isinstance(data, pd.DataFrame):
