@@ -444,17 +444,32 @@ class ECDF:
         """Inner function for ECDF of two variables."""
         raise NotImplementedError("Bivariate ECDF is not implemented")
 
-    def _eval_univariate(self, x, weights):
+    def _eval_univariate(self, x, weights, norm_total=None):
         """Inner function for ECDF of one variable."""
-        # Delegate to the shared implementation for consistent handling of
-        # empty inputs, all-zero weights, and non-finite values.
         y, x = compute_ecdf(
-            x, weights, stat=self.stat, complementary=self.complementary,
+            x, weights, stat=self.stat,
+            complementary=self.complementary,
+            norm_total=norm_total,
         )
         return y, x
 
-    def __call__(self, x1, x2=None, weights=None):
-        """Return proportion or count of observations below each sorted datapoint."""
+    def __call__(self, x1, x2=None, weights=None, norm_total=None):
+        """Return proportion or count of observations below each sorted datapoint.
+
+        Parameters
+        ----------
+        x1 : array-like
+            Data values.
+        x2 : unused (bivariate ECDF not implemented).
+        weights : array-like, optional
+            Observation weights.
+        norm_total : float, optional
+            Total effective weight of the *normalization group*. When
+            provided (``common_norm=True``) each subset's ECDF is
+            normalised by this shared denominator instead of its own
+            total. When ``None`` (``common_norm=False``) each subset
+            normalises independently.
+        """
         x1 = np.asarray(x1, dtype=float)
         if weights is None:
             weights = np.ones_like(x1, dtype=float)
@@ -462,7 +477,7 @@ class ECDF:
             weights = np.asarray(weights, dtype=float)
 
         if x2 is None:
-            return self._eval_univariate(x1, weights)
+            return self._eval_univariate(x1, weights, norm_total=norm_total)
         else:
             return self._eval_bivariate(x1, x2, weights)
 

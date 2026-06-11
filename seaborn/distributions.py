@@ -20,6 +20,7 @@ from ._base import VectorPlotter
 # but still use the older Histogram for bivariate computation.
 from ._statistics import ECDF, Histogram, KDE
 from ._stats.counting import Hist
+from ._stats.norm_utils import normalize_histogram
 
 from .axisgrid import (
     FacetGrid,
@@ -522,38 +523,56 @@ class _DistributionPlotter(VectorPlotter):
             # Do the histogram computation
             if not (multiple_histograms and common_bins):
                 bin_kws = estimator._define_bin_params(sub_data, orient, None)
-            res = estimator._normalize(estimator._eval(sub_data, orient, bin_kws))
-            heights = res[estimator.stat].to_numpy()
-            widths = res["space"].to_numpy()
-            edges = res[orient].to_numpy() - widths / 2
+            raw = estimator._eval(sub_data, orient, bin_kws)
+            counts = raw["count"].to_numpy()
+            widths_arr = raw["space"].to_numpy()
 
-            # Rescale the smoothed curve to match the histogram
+            # Determine the normalization denominator
+            norm_weight = whole_weight if common_norm else part_weight
+
+            heights = normalize_histogram(
+                counts,
+                widths_arr,
+                estimator.stat,
+                cumulative=estimator.cumulative,
+                total_weight=norm_weight,
+            )
+            centers = raw[orient].to_numpy()
+            edges = centers - widths_arr / 2
+
+            # Rescale the smoothed curve to match the histogram.
+            # Use the *per-group* normalized heights (common_norm=False
+            # semantics) so the KDE is scaled by the group's own area
+            # before any cross-group rescaling.
             if kde and key in densities:
+                group_heights = normalize_histogram(
+                    counts,
+                    widths_arr,
+                    estimator.stat,
+                    cumulative=estimator.cumulative,
+                    total_weight=part_weight,
+                )
                 density = densities[key]
                 if estimator.cumulative:
-                    hist_norm = heights.max()
+                    hist_norm = group_heights.max()
                 else:
-                    hist_norm = (heights * widths).sum()
+                    hist_norm = (group_heights * widths_arr).sum()
                 densities[key] *= hist_norm
 
             # Convert edges back to original units for plotting
             ax = self._get_axes(sub_vars)
             _, inv = _get_transform_functions(ax, self.data_variable)
-            widths = inv(edges + widths) - inv(edges)
-            edges = inv(edges)
+            plot_widths = inv(edges + widths_arr) - inv(edges)
+            plot_edges = inv(edges)
 
             # Pack the histogram data and metadata together
-            edges = edges + (1 - shrink) / 2 * widths
-            widths *= shrink
+            plot_edges = plot_edges + (1 - shrink) / 2 * plot_widths
+            plot_widths *= shrink
             index = pd.MultiIndex.from_arrays([
-                pd.Index(edges, name="edges"),
-                pd.Index(widths, name="widths"),
+                pd.Index(plot_edges, name="edges"),
+                pd.Index(plot_widths, name="widths"),
             ])
             hist = pd.Series(heights, index=index, name="heights")
-
-            # Apply scaling to normalize across groups
-            if common_norm:
-                hist *= part_weight / whole_weight
 
             # Store the finalized histogram data for future plotting
             histograms[key] = hist
@@ -871,7 +890,16 @@ class _DistributionPlotter(VectorPlotter):
 
             # Apply scaling to normalize across groups
             if estimator.stat != "count" and common_norm:
-                heights *= len(sub_data) / len(all_data)
+                if all_data.get("weights", None) is not None:
+                    sub_w = np.nansum(
+                        np.asarray(sub_data.get("weights", 1.0), dtype=float)
+                    )
+                    all_w = np.nansum(
+                        np.asarray(all_data["weights"], dtype=float)
+                    )
+                    heights *= sub_w / all_w if all_w > 0 else 0.0
+                else:
+                    heights *= len(sub_data) / len(all_data)
 
             # Define the specific kwargs for this artist
             artist_kws = plot_kws.copy()
@@ -1261,7 +1289,9 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, fill, False, "layer", 1, artist_kws, {},
             )
 
-    def plot_univariate_ecdf(self, estimate_kws, legend, **plot_kws):
+    def plot_univariate_ecdf(
+        self, estimate_kws, common_norm, legend, **plot_kws,
+    ):
 
         estimator = ECDF(**estimate_kws)
 
@@ -1269,18 +1299,45 @@ class _DistributionPlotter(VectorPlotter):
         drawstyles = dict(x="steps-post", y="steps-pre")
         plot_kws["drawstyle"] = drawstyles[self.data_variable]
 
-        # Loop through the subsets, transform and plot the data
-        for sub_vars, sub_data in self.iter_data(
-            "hue", reverse=True, from_comp_data=True,
-        ):
+        # Simplify downstream code if we are not normalizing
+        if estimator.stat == "count":
+            common_norm = False
 
-            # Compute the ECDF
+        # When there is no hue semantic, common_norm is irrelevant
+        if not set(self.variables) - {"x", "y"}:
+            common_norm = False
+
+        # -- Pre-compute per-subset weights for common_norm -----------------
+        subsets: list[tuple[dict, "DataFrame", float, "ndarray | None"]] = []
+        whole_weight = 0.0
+        for sub_vars, sub_data in self.iter_data(
+            "hue", from_comp_data=True,
+        ):
             if sub_data.empty:
                 continue
-
             observations = sub_data[self.data_variable]
             weights = sub_data.get("weights", None)
-            stat, vals = estimator(observations, weights=weights)
+            if weights is not None:
+                w_arr = np.asarray(weights, dtype=float)
+                part_weight = float(np.where(np.isfinite(w_arr), w_arr, 0.0).sum())
+            else:
+                part_weight = float(len(observations))
+            subsets.append((sub_vars, sub_data, part_weight, weights))
+            whole_weight += part_weight
+
+        # -- Loop through the subsets, transform and plot the data -----------
+        for sub_vars, sub_data, part_weight, weights in reversed(subsets):
+
+            # Choose the normalization denominator
+            if common_norm:
+                norm_total = whole_weight
+            else:
+                norm_total = None
+
+            observations = sub_data[self.data_variable]
+            stat, vals = estimator(
+                observations, weights=weights, norm_total=norm_total,
+            )
 
             # Assign attributes based on semantic mapping
             artist_kws = plot_kws.copy()
@@ -1306,6 +1363,8 @@ class _DistributionPlotter(VectorPlotter):
 
             if estimator.stat == "count":
                 top_edge = len(observations)
+            elif common_norm:
+                top_edge = 1
             else:
                 top_edge = 1
 
@@ -1917,7 +1976,7 @@ def ecdfplot(
     # Vector variables
     x=None, y=None, hue=None, weights=None,
     # Computation parameters
-    stat="proportion", complementary=False,
+    stat="proportion", complementary=False, common_norm=True,
     # Hue mapping parameters
     palette=None, hue_order=None, hue_norm=None,
     # Axes information
@@ -1961,6 +2020,7 @@ def ecdfplot(
 
     p.plot_univariate_ecdf(
         estimate_kws=estimate_kws,
+        common_norm=common_norm,
         legend=legend,
         **kwargs,
     )
@@ -1992,6 +2052,11 @@ weights : vector or key in ``data``
     towards the cumulative distribution using these values.
 {params.ecdf.stat}
 {params.ecdf.complementary}
+common_norm : bool
+    If ``True``, scale each subset's ECDF by the total count across all
+    subsets so that the proportions sum to 1 across the full dataset.
+    If ``False``, normalize each subset independently so its own ECDF
+    reaches 1.
 {params.core.palette}
 {params.core.hue_order}
 {params.core.hue_norm}

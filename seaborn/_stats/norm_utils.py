@@ -218,6 +218,7 @@ def compute_ecdf(
     *,
     stat: str = "proportion",
     complementary: bool = False,
+    norm_total: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute ECDF with consistent handling of empty / zero-weight groups.
 
@@ -231,6 +232,12 @@ def compute_ecdf(
         Target statistic.
     complementary : bool, default False
         If True return the complementary CDF (1 - CDF).
+    norm_total : float, optional
+        Total effective weight of the *normalization group* (all subsets
+        that share a ``common_norm`` scope).  When provided it replaces
+        the per-group total as the denominator so that the ECDF of each
+        subset reflects its share of the whole.  When ``None`` (the
+        default) each group is normalised by its own total.
 
     Returns
     -------
@@ -251,12 +258,10 @@ def compute_ecdf(
     total = effective_weight_total(w)
 
     if n == 0 or (stat != "count" and total <= 0):
-        # Degenerate but safe return: a single step at -inf that stays at 0.
         y_out = np.array([0.0, 0.0])
         x_out = np.array([-np.inf, np.inf])
         return y_out, x_out
 
-    # Sort together
     order = np.argsort(x, kind="mergesort")
     x_sorted = x[order]
     w_sorted = w[order]
@@ -266,12 +271,14 @@ def compute_ecdf(
     if stat == "count":
         y = y_raw
     else:
-        # Already guarded total > 0 above.
-        y = y_raw / total
+        denom = float(norm_total) if norm_total is not None else total
+        safe_denom = denom if denom > 0 else 1.0
+        y = y_raw / safe_denom
+        if denom <= 0:
+            y = np.zeros_like(y)
         if stat == "percent":
             y = y * 100.0
 
-    # Prepend the starting point (-inf, 0)
     y_out = np.r_[0.0, y]
     x_out = np.r_[-np.inf, x_sorted]
 
