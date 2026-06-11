@@ -419,6 +419,16 @@ class _CategoricalPlotter(VectorPlotter):
                     data[col] = inv(data[col])
 
     def _configure_legend(self, ax, func, common_kws=None, semantic_kws=None):
+        # Skip entirely in figure-level mode. The FacetGrid wrapper is
+        # responsible for calling `FacetGrid._finalize_legend` with the
+        # appropriate legend artist, common kwargs, and semantic attrs.
+        # Bypassing this method in figure-level mode keeps the plotter's
+        # `legend_data` in a clean state so that `_finalize_legend` can be
+        # the single source of truth for the external legend — matching the
+        # convention used by `relplot` and `displot`.
+        if self.facets is not None:
+            return
+
         if self.legend == "auto":
             show_legend = not self._redundant_hue and self.input_format != "wide"
         else:
@@ -426,7 +436,7 @@ class _CategoricalPlotter(VectorPlotter):
         if show_legend:
             self.add_legend_data(ax, func, common_kws, semantic_kws=semantic_kws)
             handles, _ = ax.get_legend_handles_labels()
-            if handles and self.facets is None:
+            if handles:
                 ax.legend(title=self.legend_title)
 
     @property
@@ -2855,6 +2865,31 @@ def catplot(
     )
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm, saturation=saturation)
 
+    # ---- Register globally-declared hue semantics with FacetGrid ----
+    #
+    # Categorical plots only use `hue` as an explicit semantic (size/style
+    # are not exposed by catplot, and point-kind markers/linestyles are an
+    # implicit hue mapping handled via semantic_kws below).  We report the
+    # declared levels here so that the `iter_data` observation hooks and
+    # `_finalize_legend` can compute the effective level set.
+    if p._hue_map is not None and p._hue_map.levels is not None:
+        g._register_declared_semantics(
+            var="hue",
+            declared_levels=p._hue_map.levels,
+            variable_name=p.variables.get("hue"),
+        )
+
+    # ---- Placeholders for legend configuration ----
+    #
+    # Populated by each plot-kind branch below.  Keeping them at this
+    # scope lets the unified `_finalize_legend` call at the end of the
+    # function be the single place the external legend is assembled –
+    # matching the convention used by `relplot` and `displot`.
+    _legend_artist = None
+    _legend_common_kws = {}
+    _legend_attrs = {"hue": "color"}
+    _legend_semantic_kws = None
+
     # Set a default color
     # Otherwise each artist will be plotted separately and trip the color cycle
     if hue is None:
@@ -2890,6 +2925,12 @@ def catplot(
         if "s" not in plot_kws:
             plot_kws["s"] = plot_kws.pop("size", 5) ** 2
 
+        _legend_artist = _scatter_legend_artist
+        _legend_common_kws = {
+            k: v for k, v in plot_kws.items()
+            if k in ("edgecolor", "linewidth", "s", "alpha", "zorder")
+        }
+
         p.plot_strips(
             jitter=jitter,
             dodge=dodge,
@@ -2907,6 +2948,12 @@ def catplot(
 
         if plot_kws.setdefault("linewidth", 0) is None:
             plot_kws["linewidth"] = np.sqrt(plot_kws["s"]) / 10
+
+        _legend_artist = _scatter_legend_artist
+        _legend_common_kws = {
+            k: v for k, v in plot_kws.items()
+            if k in ("edgecolor", "linewidth", "s", "alpha", "zorder")
+        }
 
         p.plot_swarms(
             dodge=dodge,
@@ -2926,6 +2973,19 @@ def catplot(
         linecolor = p._complement_color(
             plot_kws.pop("linecolor", "auto"), color, p._hue_map
         )
+
+        _legend_artist = _get_patch_legend_artist(fill)
+        _legend_common_kws = {}
+        _legend_linewidth = linewidth
+        if _legend_linewidth is None and not fill:
+            _legend_linewidth = mpl.rcParams["lines.linewidth"]
+        if _legend_linewidth is not None:
+            _legend_common_kws["linewidth"] = _legend_linewidth
+        if linecolor != "auto":
+            _legend_common_kws["edgecolor"] = linecolor
+        for k in ("alpha",):
+            if k in plot_kws:
+                _legend_common_kws[k] = plot_kws[k]
 
         p.plot_boxes(
             width=width,
@@ -2971,6 +3031,21 @@ def catplot(
         linecolor = plot_kws.pop("linecolor", "auto")
         linecolor = p._complement_color(linecolor, color, p._hue_map)
 
+        _legend_artist = _get_patch_legend_artist(fill)
+        _legend_common_kws = {}
+        _legend_linewidth = linewidth
+        if _legend_linewidth is None:
+            if fill:
+                _legend_linewidth = 1.25 * mpl.rcParams["patch.linewidth"]
+            else:
+                _legend_linewidth = mpl.rcParams["lines.linewidth"]
+        _legend_common_kws["linewidth"] = _legend_linewidth
+        if linecolor != "auto":
+            _legend_common_kws["edgecolor"] = linecolor
+        for k in ("alpha",):
+            if k in plot_kws:
+                _legend_common_kws[k] = plot_kws[k]
+
         p.plot_violins(
             width=width,
             dodge=dodge,
@@ -3008,6 +3083,21 @@ def catplot(
                 plot_kws["scale"], width_method
             )
         linecolor = p._complement_color(linecolor, color, p._hue_map)
+
+        _legend_artist = _get_patch_legend_artist(fill)
+        _legend_common_kws = {}
+        _legend_linewidth = linewidth
+        if _legend_linewidth is None:
+            if fill:
+                _legend_linewidth = 0.5 * mpl.rcParams["lines.linewidth"]
+            else:
+                _legend_linewidth = mpl.rcParams["lines.linewidth"]
+        _legend_common_kws["linewidth"] = _legend_linewidth
+        if linecolor != "auto":
+            _legend_common_kws["edgecolor"] = linecolor
+        for k in ("alpha",):
+            if k in plot_kws:
+                _legend_common_kws[k] = plot_kws[k]
 
         p.plot_boxens(
             width=width,
@@ -3051,6 +3141,46 @@ def catplot(
             capsize=kwargs.pop("capsize", 0),
         )
 
+        # ---- Pre-compute marker / linestyle mappings for legend ----
+        #
+        # Replicates `_map_prop_with_hue` semantics without mutating `kwargs`
+        # (the real mapping happens again inside `plot_points`, which is
+        # idempotent because we only *read* `markers` / `linestyles` here).
+        _point_plot_kws = normalize_kwargs(kwargs, mpl.lines.Line2D)
+        _point_plot_kws.setdefault(
+            "linewidth", mpl.rcParams["lines.linewidth"] * 1.8
+        )
+        _point_plot_kws.setdefault(
+            "markeredgewidth", _point_plot_kws["linewidth"] * 0.75
+        )
+        _point_plot_kws.setdefault(
+            "markersize", _point_plot_kws["linewidth"] * np.sqrt(2 * np.pi)
+        )
+
+        def _map_point_prop(name, value, fallback, plot_kws):
+            if value is default:
+                value = plot_kws.get(name, fallback)
+            if "hue" in p.variables:
+                levels = p._hue_map.levels
+                if isinstance(value, list):
+                    return {k: v for k, v in zip(levels, value)}
+                return {k: value for k in levels}
+            return {None: value}
+
+        _point_markers = _map_point_prop("marker", markers, "o", _point_plot_kws)
+        _point_linestyles = _map_point_prop(
+            "linestyle", linestyles, "-", _point_plot_kws
+        )
+
+        _legend_artist = partial(mpl.lines.Line2D, [], [])
+        _legend_common_kws = {
+            k: v for k, v in _point_plot_kws.items()
+            if k in ("linewidth", "markeredgewidth", "markersize", "alpha", "zorder")
+        }
+        _legend_semantic_kws = {
+            "hue": {"marker": _point_markers, "linestyle": _point_linestyles}
+        }
+
         p.plot_points(
             aggregator=aggregator,
             markers=markers,
@@ -3074,6 +3204,18 @@ def catplot(
         )
         gap = kwargs.pop("gap", 0)
         fill = kwargs.pop("fill", True)
+
+        if not fill and "linewidth" not in kwargs:
+            kwargs["linewidth"] = 1.5 * mpl.rcParams["lines.linewidth"]
+
+        _legend_artist = _get_patch_legend_artist(fill)
+        _legend_common_kws = {}
+        if "edgecolor" in kwargs:
+            _legend_common_kws["edgecolor"] = kwargs["edgecolor"]
+        if "linewidth" in kwargs:
+            _legend_common_kws["linewidth"] = kwargs["linewidth"]
+        if "alpha" in kwargs:
+            _legend_common_kws["alpha"] = kwargs["alpha"]
 
         p.plot_bars(
             aggregator=aggregator,
@@ -3103,6 +3245,18 @@ def catplot(
 
         gap = kwargs.pop("gap", 0)
         fill = kwargs.pop("fill", True)
+
+        if not fill and "linewidth" not in kwargs:
+            kwargs["linewidth"] = 1.5 * mpl.rcParams["lines.linewidth"]
+
+        _legend_artist = _get_patch_legend_artist(fill)
+        _legend_common_kws = {}
+        if "edgecolor" in kwargs:
+            _legend_common_kws["edgecolor"] = kwargs["edgecolor"]
+        if "linewidth" in kwargs:
+            _legend_common_kws["linewidth"] = kwargs["linewidth"]
+        if "alpha" in kwargs:
+            _legend_common_kws["alpha"] = kwargs["alpha"]
 
         p.plot_bars(
             aggregator=aggregator,
@@ -3137,30 +3291,40 @@ def catplot(
 
     # ---- Unified legend assembly ----
     #
-    # The plot_* methods above have already called `_configure_legend` ->
-    # `add_legend_data` on the global plotter `p`.  That populates
-    # `p.legend_data` with hierarchical keys `(var, level)` -> artist
-    # handles, `p.legend_order` with the desired key ordering, and
-    # `p.legend_title` with the appropriate (single) semantic title or ""
-    # for multi-semantic legends.  Because `_configure_legend` skips
-    # `ax.legend()` in figure-level mode (see `self.facets is None` guard),
-    # no per-Axes legend was drawn.  All we need to do here is:
-    #   1. Clear any stale state that may have accumulated on the FacetGrid
-    #   2. Delegate to `FacetGrid.add_legend` with the plotter's data,
-    #      producing a single external legend that is consistent with
-    #      `relplot` / `displot`.
-    g._reset_legend_state()
+    # Each plot-kind branch above populated `_legend_artist` /
+    # `_legend_common_kws` / `_legend_attrs` / `_legend_semantic_kws`.
+    # We now delegate to `FacetGrid._finalize_legend`, which:
+    #   1. Resets any stale legend state on the grid.
+    #   2. Calls `p.add_legend_data` with the chosen artist / common_kws to
+    #      build a full set of candidate legend entries for *all* declared
+    #      hue levels (respecting `hue_order`).
+    #   3. Filters that candidate set down to the *effective* levels — the
+    #      intersection of declared levels with levels that were actually
+    #      observed while iterating the facet subsets (see the hooks in
+    #      `VectorPlotter.iter_data`).  This avoids carrying empty subsets
+    #      or never-drawn levels into the legend.
+    #   4. Renders a single external legend via `FacetGrid.add_legend`.
+    #
+    # This is the same pipeline used by `relplot` and `displot`, ensuring
+    # consistent legend semantics across the three figure-level functions.
 
     if legend == "auto":
         show_legend = not p._redundant_hue and p.input_format != "wide"
     else:
         show_legend = bool(legend)
-    if show_legend and p.legend_data:
-        g.add_legend(
-            legend_data=p.legend_data,
-            label_order=p.legend_order,
-            title=p.legend_title,
-            adjust_subtitles=True,
+
+    if (
+        show_legend
+        and p._hue_map is not None
+        and p._hue_map.levels is not None
+        and _legend_artist is not None
+    ):
+        g._finalize_legend(
+            plotter=p,
+            legend_artist=_legend_artist,
+            common_kws=_legend_common_kws,
+            attrs=_legend_attrs,
+            semantic_kws=_legend_semantic_kws,
         )
 
     if data is not None:

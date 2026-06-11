@@ -2159,6 +2159,20 @@ def displot(
         allowed_types = None
     p._attach(g, allowed_types=allowed_types, log_scale=log_scale)
 
+    # ---- Register globally-declared hue semantics with FacetGrid.
+    #
+    # Distribution plots only use `hue` as a semantic (size/style are
+    # not exposed by displot).  The `p._hue_map` has been populated by
+    # the `map_hue` call above; we now pass its levels to the Grid so that
+    # the `iter_data` observation hooks and `_finalize_legend` can
+    # compute the effective level set (declared ∩ observed).
+    if p._hue_map is not None and p._hue_map.levels is not None:
+        g._register_declared_semantics(
+            var="hue",
+            declared_levels=p._hue_map.levels,
+            variable_name=p.variables.get("hue"),
+        )
+
     # Check for a specification that lacks x/y data and return early
     if not p.has_xy_data:
         return g
@@ -2277,23 +2291,17 @@ def displot(
     #
     # The plot_* method (histogram/kde/ecdf) has already called
     # `_add_legend` with the FacetGrid object, which *collected* legend
-    # metadata (handles + labels) onto the plotter instance instead of
-    # rendering it directly.  This two-step approach keeps the structure
-    # consistent with `relplot` / `catplot` and lets us clear any stale
-    # FacetGrid legend state before producing the single external legend.
-    g._reset_legend_state()
+    # metadata (handles + labels) onto the plotter instance using
+    # distribution-specific artist factories (via `_artist_kws`) into
+    # `p.legend_data / p.legend_order / p.legend_title`.  Because the
+    # artist construction here is non-standard (facecolor/edgecolor for
+    # patch-based distribution artists), we pass ``prebuilt=True`` to
+    # `_finalize_legend` so it skips the generic `add_legend_data` step
+    # and goes straight to declared/observed level filtering +
+    # FacetGrid.add_legend rendering.
 
-    legend_data = getattr(p, "legend_data", None)
-    legend_order = getattr(p, "legend_order", None)
-    legend_title = getattr(p, "legend_title", None)
-
-    if legend and "hue" in p.variables and legend_data:
-        g.add_legend(
-            legend_data=legend_data,
-            label_order=legend_order,
-            title=legend_title,
-            adjust_subtitles=True,
-        )
+    if legend and "hue" in p.variables and p.legend_data:
+        g._finalize_legend(p, prebuilt=True)
 
     if data is not None and (x is not None or y is not None):
         if not isinstance(data, pd.DataFrame):

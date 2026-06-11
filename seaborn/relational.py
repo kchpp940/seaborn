@@ -834,6 +834,22 @@ def relplot(
         **facet_kws
     )
 
+    # ---- Register globally-declared semantic levels with FacetGrid ----
+    #
+    # The figure-level FacetGrid needs to know (a) which levels each
+    # semantic *should* have (respecting any user-passed *_order) and
+    # (b) the actual dataframe column used per-role so that
+    # _facet_plot can extract observed levels during map_dataframe.
+    for role in ("hue", "size", "style"):
+        mapper = getattr(p, f"_{role}_map", None)
+        if mapper is not None and mapper.levels is not None:
+            g._register_declared_semantics(
+                var=role,
+                declared_levels=mapper.levels,
+                variable_name=p.variables.get(role),
+                data_column=plot_variables.get(role),
+            )
+
     # Draw the plot
     g.map_dataframe(func, **plot_kws)
 
@@ -845,11 +861,6 @@ def relplot(
         # Replace the original plot data so the legend uses numeric data with
         # the correct type, since we force a categorical mapping above.
         p.plot_data = plot_data
-
-        # Clear any residual legend state that may have accumulated from
-        # FacetGrid.map_dataframe internal calls to _update_legend_data, or
-        # from prior uses of the same Axes objects.
-        g._reset_legend_state()
 
         # Handle the additional non-semantic keyword arguments out here.
         # We're selective because some kwargs may be seaborn function specific
@@ -876,12 +887,13 @@ def relplot(
             attrs["size"] = "s"
         elif kind == "line":
             attrs["size"] = "linewidth"
-        p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
-        if p.legend_data:
-            g.add_legend(legend_data=p.legend_data,
-                         label_order=p.legend_order,
-                         title=p.legend_title,
-                         adjust_subtitles=True)
+
+        # Unified legend finalization:
+        #   1. Reset any stale FacetGrid legend state
+        #   2. Build the full candidate legend via add_legend_data
+        #   3. Filter to keep only levels actually drawn in at least one facet
+        #   4. Render the final legend
+        g._finalize_legend(p, legend_artist, common_kws, attrs)
 
     # Rename the columns of the FacetGrid's `data` attribute
     # to match the original column names
