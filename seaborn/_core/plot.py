@@ -1415,6 +1415,9 @@ class Plotter:
 
                 seed_values = self._get_subplot_data(var_df, var, view, share_state)
                 view_scale = scale._setup(seed_values, prop)
+                view["_scales"][coord] = view_scale
+                if not seed_values.dropna().empty:
+                    view["_has_data"] = True
                 view["ax"].set(**{f"{axis}scale": view_scale._matplotlib_scale})
 
                 for layer, new_series in zip(layers, transformed_data):
@@ -1568,10 +1571,14 @@ class Plotter:
                 else:
                     out_df = data.frame.copy()
 
-            scales = self._scales.copy()
-            if x in out_df:
+            scales = {k: v for k, v in self._scales.items() if k not in "xy"}
+            if subplots and x in subplots[0]["_scales"]:
+                scales["x"] = subplots[0]["_scales"][x]
+            elif x in self._scales:
                 scales["x"] = self._scales[x]
-            if y in out_df:
+            if subplots and y in subplots[0]["_scales"]:
+                scales["y"] = subplots[0]["_scales"][y]
+            elif y in self._scales:
                 scales["y"] = self._scales[y]
 
             for axis, var in zip("xy", (x, y)):
@@ -1695,11 +1702,20 @@ class Plotter:
         """Add legend artists / labels for one layer in the plot."""
         if data.frame.empty and data.frames:
             legend_vars: list[str] = []
+            all_data_values: dict[str, set] = {}
             for frame in data.frames.values():
                 frame_vars = frame.columns.intersection(list(scales))
-                legend_vars.extend(v for v in frame_vars if v not in legend_vars)
+                for v in frame_vars:
+                    if v not in legend_vars:
+                        legend_vars.append(v)
+                    if v not in all_data_values:
+                        all_data_values[v] = set()
+                    all_data_values[v].update(frame[v].dropna().tolist())
         else:
             legend_vars = list(data.frame.columns.intersection(list(scales)))
+            all_data_values = {
+                v: set(data.frame[v].dropna().tolist()) for v in legend_vars
+            }
 
         # First handle layer legends, which occupy a single entry in legend_contents.
         if layer_label is not None:
@@ -1725,6 +1741,15 @@ class Plotter:
             var_legend = scales[var]._legend
             if var_legend is not None:
                 values, labels = var_legend
+                present_values = all_data_values.get(var, set())
+                filtered_values = []
+                filtered_labels = []
+                for val, lbl in zip(values, labels):
+                    if val in present_values:
+                        filtered_values.append(val)
+                        filtered_labels.append(lbl)
+                if not filtered_values:
+                    continue
                 for (_, part_id), part_vars, _ in schema:
                     if data.ids[var] == part_id:
                         # Allow multiple plot semantics to represent same data variable
@@ -1732,7 +1757,7 @@ class Plotter:
                         break
                 else:
                     title = self._resolve_label(p, var, data.names[var])
-                    entry = (title, data.ids[var]), [var], (values, labels)
+                    entry = (title, data.ids[var]), [var], (filtered_values, filtered_labels)
                     schema.append(entry)
 
         # Second pass, generate an artist corresponding to each value
@@ -1801,6 +1826,14 @@ class Plotter:
 
         for sub in self._subplots:
             ax = sub["ax"]
+
+            if not sub["_has_data"]:
+                for axis in "xy":
+                    axis_obj = getattr(ax, f"{axis}axis")
+                    axis_obj.set_major_locator(mpl.ticker.NullLocator())
+                    axis_obj.set_major_formatter(mpl.ticker.NullFormatter())
+                continue
+
             for axis in "xy":
                 axis_key = sub[axis]
                 axis_obj = getattr(ax, f"{axis}axis")
@@ -1817,8 +1850,8 @@ class Plotter:
                         hi = cast(float, hi) + 0.5
                     ax.set(**{f"{axis}lim": (lo, hi)})
 
-                if axis_key in self._scales:  # TODO when would it not be?
-                    self._scales[axis_key]._finalize(p, axis_obj)
+                if axis_key in sub["_scales"]:
+                    sub["_scales"][axis_key]._finalize(p, axis_obj)
 
         if (engine_name := p._layout_spec.get("engine", default)) is not default:
             # None is a valid arg for Figure.set_layout_engine, hence `default`
