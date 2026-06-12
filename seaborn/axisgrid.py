@@ -385,6 +385,7 @@ class FacetGrid(Grid):
         data = handle_data_source(data)
         _check_argument("semantic_order", ["data", "appearance"], semantic_order)
         self.semantic_order = semantic_order
+        self._appearance_levels = {}
 
         # Determine the hue facet layer information
         hue_var = hue
@@ -866,6 +867,27 @@ class FacetGrid(Grid):
 
         # Sort out the supporting information
         self._update_legend_data(ax)
+
+        # If func is a seaborn axes-level plot, it hung its plotter on the
+        # ax so we can pull back the real artist-level appearance order.
+        inner = getattr(ax, "_seaborn_plotter", None)
+        if inner is not None:
+            self._sync_appearance_levels(inner)
+
+    def _sync_appearance_levels(self, plotter):
+        """Merge appearance levels from an inner plotter into the grid registry.
+
+        When ``map_dataframe`` runs a real seaborn plot function on each facet,
+        that function creates its own plotter, computes appearance order from
+        the actual artists it drew, and then calls this method so the outer
+        figure-level plotter can read the resolved order from the grid.
+
+        Only the first call wins for each variable, because the first facet
+        processed has the full global level order in its plotter.
+        """
+        for var, levels in plotter._appearance_levels.items():
+            if var not in self._appearance_levels:
+                self._appearance_levels[var] = list(levels)
 
     def _finalize_grid(self, axlabels):
         """Finalize the annotations and layout."""

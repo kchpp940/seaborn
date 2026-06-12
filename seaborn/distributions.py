@@ -562,7 +562,7 @@ class _DistributionPlotter(VectorPlotter):
             if multiple == "dodge":
                 draw_order = list(reversed(draw_order))
             self._set_appearance_levels("hue", draw_order)
-            self._finalize_appearance()
+            self._resolve_appearance_order()
 
         # Go back through the dataset and draw the plots
         for sub_vars, _ in self.iter_data("hue", reverse=True):
@@ -988,7 +988,7 @@ class _DistributionPlotter(VectorPlotter):
                     draw_order.append(level)
                     seen.add(level)
             self._set_appearance_levels("hue", draw_order)
-            self._finalize_appearance()
+            self._resolve_appearance_order()
 
         for sub_vars, _ in self.iter_data("hue", reverse=True):
 
@@ -1479,6 +1479,8 @@ def histplot(
             **kwargs,
         )
 
+    ax._seaborn_plotter = p
+
     return ax
 
 
@@ -1762,6 +1764,8 @@ def kdeplot(
             **kwargs,
         )
 
+    ax._seaborn_plotter = p
+
     return ax
 
 
@@ -1948,6 +1952,8 @@ def ecdfplot(
         **kwargs,
     )
 
+    ax._seaborn_plotter = p
+
     return ax
 
 
@@ -2085,6 +2091,8 @@ def rugplot(
         return ax
 
     p.plot_rug(height, expand_margins, legend, **kwargs)
+
+    ax._seaborn_plotter = p
 
     return ax
 

@@ -639,6 +639,8 @@ class VectorPlotter:
         self._var_ordered = {"x": False, "y": False}  # alt., used DefaultDict
         self.semantic_order = semantic_order
         self._appearance_levels = {}
+        self.ax = None
+        self.facets = None
         self.assign_variables(data, variables)
 
         # TODO Lots of tests assume that these are called to initialize the
@@ -647,6 +649,8 @@ class VectorPlotter:
         for var in ["hue", "size", "style"]:
             if var in variables:
                 getattr(self, f"map_{var}")()
+
+        self._initialize_appearance_levels()
 
     @property
     def has_xy_data(self):
@@ -666,39 +670,64 @@ class VectorPlotter:
         """
         self._appearance_levels[var] = list(levels)
 
-    def _finalize_appearance(self):
-        """Compute and register appearance levels for all semantic variables.
+    def _initialize_appearance_levels(self):
+        """Phase 1: Initialize appearance levels from data order.
 
-        Subclasses should override this to implement plot-type-specific
-        appearance order logic (e.g. dodge vs. overlay, stack vs. layer).
-        This base implementation sets appearance order = data order for
-        axis and facet variables (which never overlap), and leaves
-        semantic variables (hue/size/style) untouched (they must be set
-        by the subclass after drawing).
+        This is called as soon as var_levels are available (after mapper
+        setup or FacetGrid attachment). Axis/facet variables (x/y/row/col)
+        keep their data order forever (categories don't overlap).
+        Semantic variables (hue/size/style) get data order as a fallback;
+        they will be overwritten in Phase 3 if ``semantic_order="appearance"``
+        and the drawing order differs from data order.
         """
-        for var in ["x", "y", "row", "col"]:
-            if var in self.variables and var not in self._appearance_levels:
-                data_levels = self.var_levels.get(var, [])
-                if len(data_levels):
+        for var in list(self.variables.keys()):
+            if var not in self._appearance_levels:
+                data_levels = self.var_levels.get(var)
+                if data_levels is not None and len(data_levels) > 0:
                     self._appearance_levels[var] = list(data_levels)
+
+    def _resolve_appearance_order(self):
+        """Phase 3: Resolve final appearance order after drawing.
+
+        The base implementation calls ``_initialize_appearance_levels`` to
+        ensure axis/facet variables are populated. Subclasses that implement
+        overlay/stack logic will call ``_set_appearance_levels`` for
+        hue/size/style *before* calling this method.
+
+        If this plotter is attached to a FacetGrid, any hue/size/style
+        levels already present in the grid registry take precedence over
+        this plotter's own values, because the grid's values come from the
+        real inner plotters that actually drew artists. Axis/facet variables
+        (x/y/row/col) are only populated from this plotter's own var_levels
+        and never overwritten by the grid.
+        """
+        self._initialize_appearance_levels()
+        if self.facets is not None:
+            for var in ["hue", "size", "style"]:
+                if var in self.facets._appearance_levels:
+                    self._appearance_levels[var] = list(
+                        self.facets._appearance_levels[var]
+                    )
+            self.facets._sync_appearance_levels(self)
 
     def _get_display_levels(self, var):
         """Return levels ordered for display (legend, ticks, etc.).
 
-        Parameters
-        ----------
-        var : str
-            Name of the variable.
-
-        Returns
-        -------
-        levels : list
-            Levels ordered according to ``semantic_order``.
-
+        If this plotter is attached to a FacetGrid *and* the grid has a
+        resolved appearance order for ``var``, that takes precedence. The
+        grid is populated by real inner plotters during ``map_dataframe``.
+        This prevents the outer, never-drawn figure-level plotter from
+        falling back on an inferred order.
         """
-        if self.semantic_order == "appearance" and var in self._appearance_levels:
+        if self.semantic_order != "appearance":
+            levels = self.var_levels.get(var)
+            return list(levels) if levels is not None else []
+        if self.facets is not None and var in self.facets._appearance_levels:
+            return self.facets._appearance_levels[var]
+        if var in self._appearance_levels:
             return self._appearance_levels[var]
-        return self.var_levels.get(var, [])
+        levels = self.var_levels.get(var)
+        return list(levels) if levels is not None else []
 
     @property
     def var_levels(self):
@@ -1029,7 +1058,7 @@ class VectorPlotter:
     @property
     def comp_data(self):
         """Dataframe with numeric x and y, after unit conversion and log scaling."""
-        if not hasattr(self, "ax"):
+        if not hasattr(self, "converters"):
             # Probably a good idea, but will need a bunch of tests updated
             # Most of these tests should just use the external interface
             # Then this can be re-enabled.
@@ -1116,6 +1145,7 @@ class VectorPlotter:
                 self.var_levels["col"] = obj.col_names
             if obj.row_names is not None:
                 self.var_levels["row"] = obj.row_names
+            self._initialize_appearance_levels()
         else:
             self.ax = obj
             self.facets = None

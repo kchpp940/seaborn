@@ -437,7 +437,7 @@ class _CategoricalPlotter(VectorPlotter):
                         seen.add(level)
                 appearance_order = list(reversed(draw_order))
             self._set_appearance_levels("hue", appearance_order)
-            self._finalize_appearance()
+            self._resolve_appearance_order()
 
         if self.legend == "auto":
             show_legend = not self._redundant_hue and self.input_format != "wide"
@@ -1677,6 +1677,7 @@ def boxplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
+    ax._seaborn_plotter = p
 
     return ax
 
@@ -1818,6 +1819,7 @@ def violinplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
+    ax._seaborn_plotter = p
 
     return ax
 
@@ -2006,6 +2008,7 @@ def boxenplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
+    ax._seaborn_plotter = p
 
     return ax
 
@@ -2162,6 +2165,7 @@ def stripplot(
     # suggesting that _attach could add default axes labels, which seems smart.
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
+    ax._seaborn_plotter = p
 
     return ax
 
@@ -2291,6 +2295,7 @@ def swarmplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
+    ax._seaborn_plotter = p
 
     return ax
 
@@ -2430,6 +2435,7 @@ def barplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
+    ax._seaborn_plotter = p
 
     return ax
 
@@ -2566,6 +2572,7 @@ def pointplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
+    ax._seaborn_plotter = p
 
     return ax
 
@@ -2728,6 +2735,7 @@ def countplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
+    ax._seaborn_plotter = p
 
     return ax
 

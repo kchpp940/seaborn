@@ -383,7 +383,7 @@ class _LinePlotter(_RelationalPlotter):
                             draw_order.append(level)
                             seen.add(level)
                     self._set_appearance_levels(var, list(reversed(draw_order)))
-            self._finalize_appearance()
+            self._resolve_appearance_order()
 
         # Finalize the axes details
         self._add_axis_labels(ax)
@@ -484,7 +484,7 @@ class _ScatterPlotter(_RelationalPlotter):
                     mapper = getattr(self, f"_{var}_map", None)
                     if mapper is not None and hasattr(mapper, "levels"):
                         self._set_appearance_levels(var, list(mapper.levels))
-            self._finalize_appearance()
+            self._resolve_appearance_order()
 
         # Finalize the axes details
         self._add_axis_labels(ax)
@@ -542,6 +542,7 @@ def lineplot(
     kwargs["color"] = _default_color(ax.plot, hue, color, kwargs)
 
     p.plot(ax, kwargs)
+    ax._seaborn_plotter = p
     return ax
 
 
@@ -663,6 +664,7 @@ def scatterplot(
     kwargs["color"] = _default_color(ax.scatter, hue, color, kwargs)
 
     p.plot(ax, kwargs)
+    ax._seaborn_plotter = p
 
     return ax
 
@@ -865,6 +867,11 @@ def relplot(
         **facet_kws
     )
 
+    # Attach p to the grid so it can read appearance levels resolved by
+    # the real inner plotters inside map_dataframe below.
+    p.facets = g
+    p._initialize_appearance_levels()
+
     # Draw the plot
     g.map_dataframe(func, **plot_kws)
 
@@ -904,20 +911,7 @@ def relplot(
             attrs["size"] = "linewidth"
 
         if p.semantic_order == "appearance":
-            for var in ["hue", "size", "style"]:
-                if var in p.variables and var not in p._appearance_levels:
-                    draw_order = []
-                    seen = set()
-                    for sub_vars, _ in p.iter_data((var,), by_facet=False):
-                        level = sub_vars[var]
-                        if level not in seen:
-                            draw_order.append(level)
-                            seen.add(level)
-                    if kind == "line":
-                        p._set_appearance_levels(var, list(reversed(draw_order)))
-                    else:
-                        p._set_appearance_levels(var, draw_order)
-            p._finalize_appearance()
+            p._resolve_appearance_order()
 
         p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
         if p.legend_data:
