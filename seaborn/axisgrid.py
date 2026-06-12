@@ -13,7 +13,6 @@ from ._base import VectorPlotter, variable_type, categorical_order
 from ._core.data import handle_data_source
 from ._compat import share_axis, get_legend_handles
 from . import utils
-from . import rcmod
 from .utils import (
     adjust_legend_subtitles,
     set_hls_values,
@@ -2015,7 +2014,6 @@ def pairplot(
     kind="scatter", diag_kind="auto", markers=None,
     height=2.5, aspect=1, corner=False, dropna=False,
     plot_kws=None, diag_kws=None, grid_kws=None, size=None,
-    profile=None,
 ):
     """Plot pairwise relationships in a dataset.
 
@@ -2074,11 +2072,6 @@ def pairplot(
         bivariate plotting function, ``diag_kws`` are passed to the univariate
         plotting function, and ``grid_kws`` are passed to the :class:`PairGrid`
         constructor.
-    profile : str, dict, or None
-        Name of a registered theme profile (see
-        :func:`register_theme_profile`), or an inline profile dict.
-        The theme is applied only for the duration of this plot
-        and does not affect global settings.
 
     Returns
     -------
@@ -2121,75 +2114,71 @@ def pairplot(
         else:
             diag_kind = "hist" if kind == "hist" else "kde"
 
-    if profile is not None:
-        rcmod._resolve_profile(profile, {})
+    # Set up the PairGrid
+    grid_kws.setdefault("diag_sharey", diag_kind == "hist")
+    grid = PairGrid(data, vars=vars, x_vars=x_vars, y_vars=y_vars, hue=hue,
+                    hue_order=hue_order, palette=palette, corner=corner,
+                    height=height, aspect=aspect, dropna=dropna, **grid_kws)
 
-    with rcmod._ThemeContext(profile):
-        # Set up the PairGrid
-        grid_kws.setdefault("diag_sharey", diag_kind == "hist")
-        grid = PairGrid(data, vars=vars, x_vars=x_vars, y_vars=y_vars, hue=hue,
-                        hue_order=hue_order, palette=palette, corner=corner,
-                        height=height, aspect=aspect, dropna=dropna, **grid_kws)
+    # Add the markers here as PairGrid has figured out how many levels of the
+    # hue variable are needed and we don't want to duplicate that process
+    if markers is not None:
+        if kind == "reg":
+            # Needed until regplot supports style
+            if grid.hue_names is None:
+                n_markers = 1
+            else:
+                n_markers = len(grid.hue_names)
+            if not isinstance(markers, list):
+                markers = [markers] * n_markers
+            if len(markers) != n_markers:
+                raise ValueError("markers must be a singleton or a list of "
+                                 "markers for each level of the hue variable")
+            grid.hue_kws = {"marker": markers}
+        elif kind == "scatter":
+            if isinstance(markers, str):
+                plot_kws["marker"] = markers
+            elif hue is not None:
+                plot_kws["style"] = data[hue]
+                plot_kws["markers"] = markers
 
-        # Add the markers here as PairGrid has figured out how many levels of the
-        # hue variable are needed and we don't want to duplicate that process
-        if markers is not None:
-            if kind == "reg":
-                # Needed until regplot supports style
-                if grid.hue_names is None:
-                    n_markers = 1
-                else:
-                    n_markers = len(grid.hue_names)
-                if not isinstance(markers, list):
-                    markers = [markers] * n_markers
-                if len(markers) != n_markers:
-                    raise ValueError("markers must be a singleton or a list of "
-                                     "markers for each level of the hue variable")
-                grid.hue_kws = {"marker": markers}
-            elif kind == "scatter":
-                if isinstance(markers, str):
-                    plot_kws["marker"] = markers
-                elif hue is not None:
-                    plot_kws["style"] = data[hue]
-                    plot_kws["markers"] = markers
+    # Draw the marginal plots on the diagonal
+    diag_kws = diag_kws.copy()
+    diag_kws.setdefault("legend", False)
+    if diag_kind == "hist":
+        grid.map_diag(histplot, **diag_kws)
+    elif diag_kind == "kde":
+        diag_kws.setdefault("fill", True)
+        diag_kws.setdefault("warn_singular", False)
+        grid.map_diag(kdeplot, **diag_kws)
 
-        # Draw the marginal plots on the diagonal
-        diag_kws = diag_kws.copy()
-        diag_kws.setdefault("legend", False)
-        if diag_kind == "hist":
-            grid.map_diag(histplot, **diag_kws)
-        elif diag_kind == "kde":
-            diag_kws.setdefault("fill", True)
-            diag_kws.setdefault("warn_singular", False)
-            grid.map_diag(kdeplot, **diag_kws)
+    # Maybe plot on the off-diagonals
+    if diag_kind is not None:
+        plotter = grid.map_offdiag
+    else:
+        plotter = grid.map
 
-        # Maybe plot on the off-diagonals
-        if diag_kind is not None:
-            plotter = grid.map_offdiag
-        else:
-            plotter = grid.map
+    if kind == "scatter":
+        from .relational import scatterplot  # Avoid circular import
+        plotter(scatterplot, **plot_kws)
+    elif kind == "reg":
+        from .regression import regplot  # Avoid circular import
+        plotter(regplot, **plot_kws)
+    elif kind == "kde":
+        from .distributions import kdeplot  # Avoid circular import
+        plot_kws.setdefault("warn_singular", False)
+        plotter(kdeplot, **plot_kws)
+    elif kind == "hist":
+        from .distributions import histplot  # Avoid circular import
+        plotter(histplot, **plot_kws)
 
-        if kind == "scatter":
-            from .relational import scatterplot  # Avoid circular import
-            plotter(scatterplot, **plot_kws)
-        elif kind == "reg":
-            from .regression import regplot  # Avoid circular import
-            plotter(regplot, **plot_kws)
-        elif kind == "kde":
-            from .distributions import kdeplot  # Avoid circular import
-            plot_kws.setdefault("warn_singular", False)
-            plotter(kdeplot, **plot_kws)
-        elif kind == "hist":
-            from .distributions import histplot  # Avoid circular import
-            plotter(histplot, **plot_kws)
+    # Add a legend
+    if hue is not None:
+        grid.add_legend()
 
-        # Add a legend
-        if hue is not None:
-            grid.add_legend()
+    grid.tight_layout()
 
-        grid.tight_layout()
-
-        return grid
+    return grid
 
 
 def jointplot(
@@ -2197,7 +2186,6 @@ def jointplot(
     height=6, ratio=5, space=.2, dropna=False, xlim=None, ylim=None,
     color=None, palette=None, hue_order=None, hue_norm=None, marginal_ticks=False,
     joint_kws=None, marginal_kws=None,
-    profile=None,
     **kwargs
 ):
     # Avoid circular imports
@@ -2251,110 +2239,106 @@ def jointplot(
     if kind == "hex":
         dropna = True
 
-    if profile is not None:
-        rcmod._resolve_profile(profile, {})
+    # Initialize the JointGrid object
+    grid = JointGrid(
+        data=data, x=x, y=y, hue=hue,
+        palette=palette, hue_order=hue_order, hue_norm=hue_norm,
+        dropna=dropna, height=height, ratio=ratio, space=space,
+        xlim=xlim, ylim=ylim, marginal_ticks=marginal_ticks,
+    )
 
-    with rcmod._ThemeContext(profile):
-        # Initialize the JointGrid object
-        grid = JointGrid(
-            data=data, x=x, y=y, hue=hue,
-            palette=palette, hue_order=hue_order, hue_norm=hue_norm,
-            dropna=dropna, height=height, ratio=ratio, space=space,
-            xlim=xlim, ylim=ylim, marginal_ticks=marginal_ticks,
-        )
+    if grid.hue is not None:
+        marginal_kws.setdefault("legend", False)
 
-        if grid.hue is not None:
-            marginal_kws.setdefault("legend", False)
+    # Plot the data using the grid
+    if kind.startswith("scatter"):
 
-        # Plot the data using the grid
-        if kind.startswith("scatter"):
+        joint_kws.setdefault("color", color)
+        grid.plot_joint(scatterplot, **joint_kws)
 
-            joint_kws.setdefault("color", color)
-            grid.plot_joint(scatterplot, **joint_kws)
+        if grid.hue is None:
+            marg_func = histplot
+        else:
+            marg_func = kdeplot
+            marginal_kws.setdefault("warn_singular", False)
+            marginal_kws.setdefault("fill", True)
 
-            if grid.hue is None:
-                marg_func = histplot
-            else:
-                marg_func = kdeplot
-                marginal_kws.setdefault("warn_singular", False)
-                marginal_kws.setdefault("fill", True)
+        marginal_kws.setdefault("color", color)
+        grid.plot_marginals(marg_func, **marginal_kws)
 
-            marginal_kws.setdefault("color", color)
-            grid.plot_marginals(marg_func, **marginal_kws)
+    elif kind.startswith("hist"):
 
-        elif kind.startswith("hist"):
+        # TODO process pair parameters for bins, etc. and pass
+        # to both joint and marginal plots
 
-            # TODO process pair parameters for bins, etc. and pass
-            # to both joint and marginal plots
+        joint_kws.setdefault("color", color)
+        grid.plot_joint(histplot, **joint_kws)
 
-            joint_kws.setdefault("color", color)
-            grid.plot_joint(histplot, **joint_kws)
+        marginal_kws.setdefault("kde", False)
+        marginal_kws.setdefault("color", color)
 
-            marginal_kws.setdefault("kde", False)
-            marginal_kws.setdefault("color", color)
+        marg_x_kws = marginal_kws.copy()
+        marg_y_kws = marginal_kws.copy()
 
-            marg_x_kws = marginal_kws.copy()
-            marg_y_kws = marginal_kws.copy()
+        pair_keys = "bins", "binwidth", "binrange"
+        for key in pair_keys:
+            if isinstance(joint_kws.get(key), tuple):
+                x_val, y_val = joint_kws[key]
+                marg_x_kws.setdefault(key, x_val)
+                marg_y_kws.setdefault(key, y_val)
 
-            pair_keys = "bins", "binwidth", "binrange"
-            for key in pair_keys:
-                if isinstance(joint_kws.get(key), tuple):
-                    x_val, y_val = joint_kws[key]
-                    marg_x_kws.setdefault(key, x_val)
-                    marg_y_kws.setdefault(key, y_val)
+        histplot(data=data, x=x, hue=hue, **marg_x_kws, ax=grid.ax_marg_x)
+        histplot(data=data, y=y, hue=hue, **marg_y_kws, ax=grid.ax_marg_y)
 
-            histplot(data=data, x=x, hue=hue, **marg_x_kws, ax=grid.ax_marg_x)
-            histplot(data=data, y=y, hue=hue, **marg_y_kws, ax=grid.ax_marg_y)
+    elif kind.startswith("kde"):
 
-        elif kind.startswith("kde"):
+        joint_kws.setdefault("color", color)
+        joint_kws.setdefault("warn_singular", False)
+        grid.plot_joint(kdeplot, **joint_kws)
 
-            joint_kws.setdefault("color", color)
-            joint_kws.setdefault("warn_singular", False)
-            grid.plot_joint(kdeplot, **joint_kws)
+        marginal_kws.setdefault("color", color)
+        if "fill" in joint_kws:
+            marginal_kws.setdefault("fill", joint_kws["fill"])
 
-            marginal_kws.setdefault("color", color)
-            if "fill" in joint_kws:
-                marginal_kws.setdefault("fill", joint_kws["fill"])
+        grid.plot_marginals(kdeplot, **marginal_kws)
 
-            grid.plot_marginals(kdeplot, **marginal_kws)
+    elif kind.startswith("hex"):
 
-        elif kind.startswith("hex"):
+        x_bins = min(_freedman_diaconis_bins(grid.x), 50)
+        y_bins = min(_freedman_diaconis_bins(grid.y), 50)
+        gridsize = int(np.mean([x_bins, y_bins]))
 
-            x_bins = min(_freedman_diaconis_bins(grid.x), 50)
-            y_bins = min(_freedman_diaconis_bins(grid.y), 50)
-            gridsize = int(np.mean([x_bins, y_bins]))
+        joint_kws.setdefault("gridsize", gridsize)
+        joint_kws.setdefault("cmap", cmap)
+        grid.plot_joint(plt.hexbin, **joint_kws)
 
-            joint_kws.setdefault("gridsize", gridsize)
-            joint_kws.setdefault("cmap", cmap)
-            grid.plot_joint(plt.hexbin, **joint_kws)
+        marginal_kws.setdefault("kde", False)
+        marginal_kws.setdefault("color", color)
+        grid.plot_marginals(histplot, **marginal_kws)
 
-            marginal_kws.setdefault("kde", False)
-            marginal_kws.setdefault("color", color)
-            grid.plot_marginals(histplot, **marginal_kws)
+    elif kind.startswith("reg"):
 
-        elif kind.startswith("reg"):
+        marginal_kws.setdefault("color", color)
+        marginal_kws.setdefault("kde", True)
+        grid.plot_marginals(histplot, **marginal_kws)
 
-            marginal_kws.setdefault("color", color)
-            marginal_kws.setdefault("kde", True)
-            grid.plot_marginals(histplot, **marginal_kws)
+        joint_kws.setdefault("color", color)
+        grid.plot_joint(regplot, **joint_kws)
 
-            joint_kws.setdefault("color", color)
-            grid.plot_joint(regplot, **joint_kws)
+    elif kind.startswith("resid"):
 
-        elif kind.startswith("resid"):
+        joint_kws.setdefault("color", color)
+        grid.plot_joint(residplot, **joint_kws)
 
-            joint_kws.setdefault("color", color)
-            grid.plot_joint(residplot, **joint_kws)
+        x, y = grid.ax_joint.collections[0].get_offsets().T
+        marginal_kws.setdefault("color", color)
+        histplot(x=x, hue=hue, ax=grid.ax_marg_x, **marginal_kws)
+        histplot(y=y, hue=hue, ax=grid.ax_marg_y, **marginal_kws)
 
-            x, y = grid.ax_joint.collections[0].get_offsets().T
-            marginal_kws.setdefault("color", color)
-            histplot(x=x, hue=hue, ax=grid.ax_marg_x, **marginal_kws)
-            histplot(y=y, hue=hue, ax=grid.ax_marg_y, **marginal_kws)
+    # Make the main axes active in the matplotlib state machine
+    plt.sca(grid.ax_joint)
 
-        # Make the main axes active in the matplotlib state machine
-        plt.sca(grid.ax_joint)
-
-        return grid
+    return grid
 
 
 jointplot.__doc__ = """\
@@ -2394,11 +2378,6 @@ kwargs
     Additional keyword arguments are passed to the function used to
     draw the plot on the joint Axes, superseding items in the
     ``joint_kws`` dictionary.
-profile : str, dict, or None
-    Name of a registered theme profile (see
-    :func:`register_theme_profile`), or an inline profile dict.
-    The theme is applied only for the duration of this plot
-    and does not affect global settings.
 
 Returns
 -------

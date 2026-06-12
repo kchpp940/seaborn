@@ -16,7 +16,6 @@ except ImportError:
 
 from . import utils
 from . import algorithms as algo
-from . import rcmod
 from .axisgrid import FacetGrid, _facet_docs
 
 
@@ -589,7 +588,6 @@ def lmplot(
     robust=False, logx=False, x_partial=None, y_partial=None,
     truncate=True, x_jitter=None, y_jitter=None, scatter_kws=None,
     line_kws=None, facet_kws=None,
-    profile=None,
 ):
 
     if facet_kws is None:
@@ -616,56 +614,51 @@ def lmplot(
     cols = np.unique([a for a in need_cols if a is not None]).tolist()
     data = data[cols]
 
-    if profile is not None:
-        rcmod._resolve_profile(profile, {})
+    # Initialize the grid
+    facets = FacetGrid(
+        data, row=row, col=col, hue=hue,
+        palette=palette,
+        row_order=row_order, col_order=col_order, hue_order=hue_order,
+        height=height, aspect=aspect, col_wrap=col_wrap,
+        **facet_kws,
+    )
 
-    with rcmod._ThemeContext(profile):
+    # Add the markers here as FacetGrid has figured out how many levels of the
+    # hue variable are needed and we don't want to duplicate that process
+    if facets.hue_names is None:
+        n_markers = 1
+    else:
+        n_markers = len(facets.hue_names)
+    if not isinstance(markers, list):
+        markers = [markers] * n_markers
+    if len(markers) != n_markers:
+        raise ValueError("markers must be a singleton or a list of markers "
+                         "for each level of the hue variable")
+    facets.hue_kws = {"marker": markers}
 
-        # Initialize the grid
-        facets = FacetGrid(
-            data, row=row, col=col, hue=hue,
-            palette=palette,
-            row_order=row_order, col_order=col_order, hue_order=hue_order,
-            height=height, aspect=aspect, col_wrap=col_wrap,
-            **facet_kws,
-        )
+    def update_datalim(data, x, y, ax, **kws):
+        xys = data[[x, y]].to_numpy().astype(float)
+        ax.update_datalim(xys, updatey=False)
+        ax.autoscale_view(scaley=False)
 
-        # Add the markers here as FacetGrid has figured out how many levels of the
-        # hue variable are needed and we don't want to duplicate that process
-        if facets.hue_names is None:
-            n_markers = 1
-        else:
-            n_markers = len(facets.hue_names)
-        if not isinstance(markers, list):
-            markers = [markers] * n_markers
-        if len(markers) != n_markers:
-            raise ValueError("markers must be a singleton or a list of markers "
-                             "for each level of the hue variable")
-        facets.hue_kws = {"marker": markers}
+    facets.map_dataframe(update_datalim, x=x, y=y)
 
-        def update_datalim(data, x, y, ax, **kws):
-            xys = data[[x, y]].to_numpy().astype(float)
-            ax.update_datalim(xys, updatey=False)
-            ax.autoscale_view(scaley=False)
+    # Draw the regression plot on each facet
+    regplot_kws = dict(
+        x_estimator=x_estimator, x_bins=x_bins, x_ci=x_ci,
+        scatter=scatter, fit_reg=fit_reg, ci=ci, n_boot=n_boot, units=units,
+        seed=seed, order=order, logistic=logistic, lowess=lowess,
+        robust=robust, logx=logx, x_partial=x_partial, y_partial=y_partial,
+        truncate=truncate, x_jitter=x_jitter, y_jitter=y_jitter,
+        scatter_kws=scatter_kws, line_kws=line_kws,
+    )
+    facets.map_dataframe(regplot, x=x, y=y, **regplot_kws)
+    facets.set_axis_labels(x, y)
 
-        facets.map_dataframe(update_datalim, x=x, y=y)
-
-        # Draw the regression plot on each facet
-        regplot_kws = dict(
-            x_estimator=x_estimator, x_bins=x_bins, x_ci=x_ci,
-            scatter=scatter, fit_reg=fit_reg, ci=ci, n_boot=n_boot, units=units,
-            seed=seed, order=order, logistic=logistic, lowess=lowess,
-            robust=robust, logx=logx, x_partial=x_partial, y_partial=y_partial,
-            truncate=truncate, x_jitter=x_jitter, y_jitter=y_jitter,
-            scatter_kws=scatter_kws, line_kws=line_kws,
-        )
-        facets.map_dataframe(regplot, x=x, y=y, **regplot_kws)
-        facets.set_axis_labels(x, y)
-
-        # Add a legend
-        if legend and (hue is not None) and (hue not in [col, row]):
-            facets.add_legend()
-        return facets
+    # Add a legend
+    if legend and (hue is not None) and (hue not in [col, row]):
+        facets.add_legend()
+    return facets
 
 
 lmplot.__doc__ = dedent("""\
@@ -739,11 +732,6 @@ lmplot.__doc__ = dedent("""\
     {scatter_line_kws}
     facet_kws : dict
         Dictionary of keyword arguments for :class:`FacetGrid`.
-    profile : str, dict, or None
-        Name of a registered theme profile (see
-        :func:`register_theme_profile`), or an inline profile dict.
-        The theme is applied only for the duration of this plot
-        and does not affect global settings.
 
     Returns
     -------

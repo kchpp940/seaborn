@@ -14,7 +14,6 @@ except ImportError:
     _no_scipy = True
 
 from . import cm
-from . import rcmod
 from .axisgrid import Grid
 from ._compat import get_colormap
 from .utils import (
@@ -100,7 +99,9 @@ class _HeatMapper:
 
     def __init__(self, data, vmin, vmax, cmap, center, robust, annot, fmt,
                  annot_kws, cbar, cbar_kws,
-                 xticklabels=True, yticklabels=True, mask=None):
+                 xticklabels=True, yticklabels=True, mask=None,
+                 annot_format=None, original_data=None,
+                 row_ind=None, col_ind=None):
         """Initialize the plotting object."""
         # We always want to have a DataFrame with semantic information
         # and an ndarray to pass to matplotlib
@@ -168,27 +169,54 @@ class _HeatMapper:
         if annot is None or annot is False:
             annot = False
             annot_data = None
+            annot_data_df = None
         else:
             if isinstance(annot, bool):
                 annot_data = plot_data
+                annot_data_df = data
             else:
-                annot_data = np.asarray(annot)
+                if isinstance(annot, pd.DataFrame):
+                    annot_data_df = annot
+                    annot_data = annot.values
+                else:
+                    annot_data = np.asarray(annot)
+                    annot_data_df = pd.DataFrame(annot_data,
+                                                 index=data.index,
+                                                 columns=data.columns)
                 if annot_data.shape != plot_data.shape:
                     err = "`data` and `annot` must have same shape."
                     raise ValueError(err)
             annot = True
 
+        # Set up original_data for label/value lookup
+        if original_data is None:
+            original_data = data
+
+        # Set up reorder indices
+        n_rows, n_cols = data.shape
+        if row_ind is None:
+            row_ind = np.arange(n_rows)
+        if col_ind is None:
+            col_ind = np.arange(n_cols)
+
         # Save other attributes to the object
         self.data = data
         self.plot_data = plot_data
+        self.mask = mask
 
         self.annot = annot
         self.annot_data = annot_data
+        self.annot_data_df = annot_data_df
 
         self.fmt = fmt
+        self.annot_format = annot_format
         self.annot_kws = {} if annot_kws is None else annot_kws.copy()
         self.cbar = cbar
         self.cbar_kws = {} if cbar_kws is None else cbar_kws.copy()
+
+        self.original_data = original_data
+        self.row_ind = row_ind
+        self.col_ind = col_ind
 
     def _determine_cmap_params(self, plot_data, vmin, vmax,
                                cmap, center, robust):
@@ -252,16 +280,55 @@ class _HeatMapper:
         mesh.update_scalarmappable()
         height, width = self.annot_data.shape
         xpos, ypos = np.meshgrid(np.arange(width) + .5, np.arange(height) + .5)
-        for x, y, m, color, val in zip(xpos.flat, ypos.flat,
-                                       mesh.get_array().flat, mesh.get_facecolors(),
-                                       self.annot_data.flat):
-            if m is not np.ma.masked:
-                lum = relative_luminance(color)
-                text_color = ".15" if lum > .408 else "w"
-                annotation = ("{:" + self.fmt + "}").format(val)
-                text_kwargs = dict(color=text_color, ha="center", va="center")
-                text_kwargs.update(self.annot_kws)
-                ax.text(x, y, annotation, **text_kwargs)
+
+        orig_index = self.original_data.index
+        orig_columns = self.original_data.columns
+
+        for i, (x, y, m, color, val) in enumerate(zip(
+                xpos.flat, ypos.flat,
+                mesh.get_array().flat, mesh.get_facecolors(),
+                self.annot_data.flat)):
+            row_idx_plot = i // width
+            col_idx_plot = i % width
+
+            orig_row_idx = self.row_ind[row_idx_plot]
+            orig_col_idx = self.col_ind[col_idx_plot]
+
+            row_label = orig_index[orig_row_idx]
+            col_label = orig_columns[orig_col_idx]
+
+            if self.annot_data_df is not None:
+                try:
+                    value = self.annot_data_df.iloc[orig_row_idx, orig_col_idx]
+                except (IndexError, AttributeError):
+                    value = val
+            else:
+                value = val
+
+            masked = bool(self.mask.iloc[orig_row_idx, orig_col_idx])
+
+            if self.annot_format is not None:
+                annotation = self.annot_format(
+                    row_label=row_label,
+                    col_label=col_label,
+                    value=value,
+                    masked=masked,
+                    row_idx=row_idx_plot,
+                    col_idx=col_idx_plot
+                )
+                if annotation is None or annotation == "":
+                    continue
+            else:
+                if m is not np.ma.masked:
+                    annotation = ("{:" + self.fmt + "}").format(val)
+                else:
+                    continue
+
+            lum = relative_luminance(color)
+            text_color = ".15" if lum > .408 else "w"
+            text_kwargs = dict(color=text_color, ha="center", va="center")
+            text_kwargs.update(self.annot_kws)
+            ax.text(x, y, annotation, **text_kwargs)
 
     def _skip_ticks(self, labels, tickevery):
         """Return ticks and labels at evenly spaced intervals."""
@@ -356,11 +423,12 @@ class _HeatMapper:
 def heatmap(
     data, *,
     vmin=None, vmax=None, cmap=None, center=None, robust=False,
-    annot=None, fmt=".2g", annot_kws=None,
+    annot=None, fmt=".2g", annot_kws=None, annot_format=None,
     linewidths=0, linecolor="white",
     cbar=True, cbar_kws=None, cbar_ax=None,
     square=False, xticklabels="auto", yticklabels="auto",
     mask=None, ax=None,
+    original_data=None, row_ind=None, col_ind=None,
     **kwargs
 ):
     """Plot rectangular data as a color-encoded matrix.
@@ -398,6 +466,24 @@ def heatmap(
     annot_kws : dict of key, value mappings, optional
         Keyword arguments for :meth:`matplotlib.axes.Axes.text` when ``annot``
         is True.
+    annot_format : callable, optional
+        A callback function to dynamically generate annotation text for each
+        cell. The function should have the signature::
+
+            def annot_format(row_label, col_label, value, masked, row_idx, col_idx):
+
+        Parameters passed to the callback:
+
+        - ``row_label``: Row label from the original DataFrame index
+        - ``col_label``: Column label from the original DataFrame columns
+        - ``value``: Original cell value (or custom annot value if provided)
+        - ``masked``: Boolean indicating if the cell is masked
+        - ``row_idx``: Row position in the plotted heatmap (after clustering)
+        - ``col_idx``: Column position in the plotted heatmap (after clustering)
+
+        The function should return a string for the annotation, or ``None`` /
+        empty string to skip annotation for that cell. When ``annot_format``
+        is provided, ``fmt`` is ignored.
     linewidths : float, optional
         Width of the lines that will divide each cell.
     linecolor : color, optional
@@ -446,7 +532,8 @@ def heatmap(
     # Initialize the plotter object
     plotter = _HeatMapper(data, vmin, vmax, cmap, center, robust, annot, fmt,
                           annot_kws, cbar, cbar_kws, xticklabels,
-                          yticklabels, mask)
+                          yticklabels, mask, annot_format, original_data,
+                          row_ind, col_ind)
 
     # Add the pcolormesh kwargs here
     kwargs["linewidths"] = linewidths
@@ -1011,6 +1098,9 @@ class ClusterGrid(Grid):
         kws.pop('norm', None)
         kws.pop('center', None)
         kws.pop('annot', None)
+        kws.pop('annot_format', None)
+        kws.pop('fmt', None)
+        kws.pop('annot_kws', None)
         kws.pop('vmin', None)
         kws.pop('vmax', None)
         kws.pop('robust', None)
@@ -1059,6 +1149,9 @@ class ClusterGrid(Grid):
             despine(self.ax_col_colors, left=True, bottom=True)
 
     def plot_matrix(self, colorbar_kws, xind, yind, **kws):
+        # Store original data before reordering for label/value lookup
+        original_data = self.data2d
+
         self.data2d = self.data2d.iloc[yind, xind]
         self.mask = self.mask.iloc[yind, xind]
 
@@ -1074,6 +1167,9 @@ class ClusterGrid(Grid):
         except (TypeError, IndexError):
             pass
 
+        # Extract annot_format before processing annot
+        annot_format = kws.pop("annot_format", None)
+
         # Reorganize the annotations to match the heatmap
         annot = kws.pop("annot", None)
         if annot is None or annot is False:
@@ -1082,18 +1178,26 @@ class ClusterGrid(Grid):
             if isinstance(annot, bool):
                 annot_data = self.data2d
             else:
-                annot_data = np.asarray(annot)
-                if annot_data.shape != self.data2d.shape:
-                    err = "`data` and `annot` must have same shape."
-                    raise ValueError(err)
-                annot_data = annot_data[yind][:, xind]
+                if isinstance(annot, pd.DataFrame):
+                    annot_data = annot.iloc[yind, xind]
+                else:
+                    annot_data = np.asarray(annot)
+                    if annot_data.shape != original_data.shape:
+                        err = "`data` and `annot` must have same shape."
+                        raise ValueError(err)
+                    annot_data = annot_data[yind][:, xind]
+                    annot_data = pd.DataFrame(annot_data,
+                                              index=self.data2d.index,
+                                              columns=self.data2d.columns)
             annot = annot_data
 
         # Setting ax_cbar=None in clustermap call implies no colorbar
         kws.setdefault("cbar", self.ax_cbar is not None)
         heatmap(self.data2d, ax=self.ax_heatmap, cbar_ax=self.ax_cbar,
                 cbar_kws=colorbar_kws, mask=self.mask,
-                xticklabels=xtl, yticklabels=ytl, annot=annot, **kws)
+                xticklabels=xtl, yticklabels=ytl, annot=annot,
+                annot_format=annot_format, original_data=original_data,
+                row_ind=yind, col_ind=xind, **kws)
 
         ytl = self.ax_heatmap.get_yticklabels()
         ytl_rot = None if not ytl else ytl[0].get_rotation()
@@ -1153,7 +1257,8 @@ def clustermap(
     row_colors=None, col_colors=None, mask=None,
     dendrogram_ratio=.2, colors_ratio=0.03,
     cbar_pos=(.02, .8, .05, .18), tree_kws=None,
-    profile=None, **kwargs
+    annot=None, fmt=".2g", annot_kws=None, annot_format=None,
+    **kwargs
 ):
     """
     Plot a matrix dataset as a hierarchically-clustered heatmap.
@@ -1215,14 +1320,22 @@ def clustermap(
     cbar_pos : tuple of (left, bottom, width, height), optional
         Position of the colorbar axes in the figure. Setting to ``None`` will
         disable the colorbar.
+    annot : bool or rectangular dataset, optional
+        If True, write the data value in each cell. If an array-like with the
+        same shape as ``data``, then use this to annotate the heatmap instead
+        of the data. Note that DataFrames will match on position, not index.
+    fmt : str, optional
+        String formatting code to use when adding annotations.
+    annot_kws : dict of key, value mappings, optional
+        Keyword arguments for :meth:`matplotlib.axes.Axes.text` when ``annot``
+        is True.
+    annot_format : callable, optional
+        A callback function to dynamically generate annotation text for each
+        cell. See :func:`heatmap` for the callback signature. When
+        ``annot_format`` is provided, ``fmt`` is ignored.
     tree_kws : dict, optional
         Parameters for the :class:`matplotlib.collections.LineCollection`
         that is used to plot the lines of the dendrogram tree.
-    profile : str, dict, or None
-        Name of a registered theme profile (see
-        :func:`register_theme_profile`), or an inline profile dict.
-        The theme is applied only for the duration of this plot
-        and does not affect global settings.
     kwargs : other keyword arguments
         All other keyword arguments are passed to :func:`heatmap`.
 
@@ -1255,18 +1368,16 @@ def clustermap(
     if _no_scipy:
         raise RuntimeError("clustermap requires scipy to be available")
 
-    if profile is not None:
-        rcmod._resolve_profile(profile, {})
+    plotter = ClusterGrid(data, pivot_kws=pivot_kws, figsize=figsize,
+                          row_colors=row_colors, col_colors=col_colors,
+                          z_score=z_score, standard_scale=standard_scale,
+                          mask=mask, dendrogram_ratio=dendrogram_ratio,
+                          colors_ratio=colors_ratio, cbar_pos=cbar_pos)
 
-    with rcmod._ThemeContext(profile):
-        plotter = ClusterGrid(data, pivot_kws=pivot_kws, figsize=figsize,
-                              row_colors=row_colors, col_colors=col_colors,
-                              z_score=z_score, standard_scale=standard_scale,
-                              mask=mask, dendrogram_ratio=dendrogram_ratio,
-                              colors_ratio=colors_ratio, cbar_pos=cbar_pos)
-
-        return plotter.plot(metric=metric, method=method,
-                            colorbar_kws=cbar_kws,
-                            row_cluster=row_cluster, col_cluster=col_cluster,
-                            row_linkage=row_linkage, col_linkage=col_linkage,
-                            tree_kws=tree_kws, **kwargs)
+    return plotter.plot(metric=metric, method=method,
+                        colorbar_kws=cbar_kws,
+                        row_cluster=row_cluster, col_cluster=col_cluster,
+                        row_linkage=row_linkage, col_linkage=col_linkage,
+                        tree_kws=tree_kws, annot=annot, fmt=fmt,
+                        annot_kws=annot_kws, annot_format=annot_format,
+                        **kwargs)
