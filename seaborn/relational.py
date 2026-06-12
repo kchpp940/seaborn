@@ -735,98 +735,100 @@ def relplot(
         warnings.warn(msg, UserWarning)
         kwargs.pop("ax")
 
-    # Use the full dataset to map the semantics
-    variables = dict(x=x, y=y, hue=hue, size=size, style=style)
-    if kind == "line":
-        variables["units"] = units
-        variables["weight"] = weights
-    else:
-        if units is not None:
-            msg = "The `units` parameter has no effect with kind='scatter'."
-            warnings.warn(msg, stacklevel=2)
-        if weights is not None:
-            msg = "The `weights` parameter has no effect with kind='scatter'."
-            warnings.warn(msg, stacklevel=2)
-    p = Plotter(
-        data=data,
-        variables=variables,
-        legend=legend,
-    )
-    p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
-    p.map_size(sizes=sizes, order=size_order, norm=size_norm)
-    p.map_style(markers=markers, dashes=dashes, order=style_order)
-
-    # Extract the semantic mappings
-    if "hue" in p.variables:
-        palette = p._hue_map.lookup_table
-        hue_order = p._hue_map.levels
-        hue_norm = p._hue_map.norm
-    else:
-        palette = hue_order = hue_norm = None
-
-    if "size" in p.variables:
-        sizes = p._size_map.lookup_table
-        size_order = p._size_map.levels
-        size_norm = p._size_map.norm
-
-    if "style" in p.variables:
-        style_order = p._style_map.levels
-        if markers:
-            markers = {k: p._style_map(k, "marker") for k in style_order}
-        else:
-            markers = None
-        if dashes:
-            dashes = {k: p._style_map(k, "dashes") for k in style_order}
-        else:
-            dashes = None
-    else:
-        markers = dashes = style_order = None
-
-    # Now extract the data that would be used to draw a single plot
-    variables = p.variables
-    plot_data = p.plot_data
-
-    # Define the common plotting parameters
-    plot_kws = dict(
-        palette=palette, hue_order=hue_order, hue_norm=hue_norm,
-        sizes=sizes, size_order=size_order, size_norm=size_norm,
-        markers=markers, dashes=dashes, style_order=style_order,
-        legend=False,
-    )
-    plot_kws.update(kwargs)
-    if kind == "scatter":
-        plot_kws.pop("dashes")
-
-    # Add the grid semantics onto the plotter
-    grid_variables = dict(
-        x=x, y=y, row=row, col=col, hue=hue, size=size, style=style,
-    )
-    if kind == "line":
-        grid_variables.update(units=units, weights=weights)
-    p.assign_variables(data, grid_variables)
-
-    # Define the named variables for plotting on each facet
-    # Rename the variables with a leading underscore to avoid
-    # collisions with faceting variable names
-    plot_variables = {v: f"_{v}" for v in variables}
-    if "weight" in plot_variables:
-        plot_variables["weights"] = plot_variables.pop("weight")
-    plot_kws.update(plot_variables)
-
-    # Pass the row/col variables to FacetGrid with their original
-    # names so that the axes titles render correctly
-    for var in ["row", "col"]:
-        # Handle faceting variables that lack name information
-        if var in p.variables and p.variables[var] is None:
-            p.variables[var] = f"_{var}_"
-    grid_kws = {v: p.variables.get(v) for v in ["row", "col"]}
-
-    # Rename the columns of the plot_data structure appropriately
-    new_cols = plot_variables.copy()
-    new_cols.update(grid_kws)
-    full_data = p.plot_data.rename(columns=new_cols)
+    if profile is not None:
+        rcmod._resolve_profile(profile, {})
 
     with rcmod._ThemeContext(profile):
+        # Use the full dataset to map the semantics
+        variables = dict(x=x, y=y, hue=hue, size=size, style=style)
+        if kind == "line":
+            variables["units"] = units
+            variables["weight"] = weights
+        else:
+            if units is not None:
+                msg = "The `units` parameter has no effect with kind='scatter'."
+                warnings.warn(msg, stacklevel=2)
+            if weights is not None:
+                msg = "The `weights` parameter has no effect with kind='scatter'."
+                warnings.warn(msg, stacklevel=2)
+        p = Plotter(
+            data=data,
+            variables=variables,
+            legend=legend,
+        )
+        p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
+        p.map_size(sizes=sizes, order=size_order, norm=size_norm)
+        p.map_style(markers=markers, dashes=dashes, order=style_order)
+
+        # Extract the semantic mappings
+        if "hue" in p.variables:
+            palette = p._hue_map.lookup_table
+            hue_order = p._hue_map.levels
+            hue_norm = p._hue_map.norm
+        else:
+            palette = hue_order = hue_norm = None
+
+        if "size" in p.variables:
+            sizes = p._size_map.lookup_table
+            size_order = p._size_map.levels
+            size_norm = p._size_map.norm
+
+        if "style" in p.variables:
+            style_order = p._style_map.levels
+            if markers:
+                markers = {k: p._style_map(k, "marker") for k in style_order}
+            else:
+                markers = None
+            if dashes:
+                dashes = {k: p._style_map(k, "dashes") for k in style_order}
+            else:
+                dashes = None
+        else:
+            markers = dashes = style_order = None
+
+        # Now extract the data that would be used to draw a single plot
+        variables = p.variables
+        plot_data = p.plot_data
+
+        # Define the common plotting parameters
+        plot_kws = dict(
+            palette=palette, hue_order=hue_order, hue_norm=hue_norm,
+            sizes=sizes, size_order=size_order, size_norm=size_norm,
+            markers=markers, dashes=dashes, style_order=style_order,
+            legend=False,
+        )
+        plot_kws.update(kwargs)
+        if kind == "scatter":
+            plot_kws.pop("dashes")
+
+        # Add the grid semantics onto the plotter
+        grid_variables = dict(
+            x=x, y=y, row=row, col=col, hue=hue, size=size, style=style,
+        )
+        if kind == "line":
+            grid_variables.update(units=units, weights=weights)
+        p.assign_variables(data, grid_variables)
+
+        # Define the named variables for plotting on each facet
+        # Rename the variables with a leading underscore to avoid
+        # collisions with faceting variable names
+        plot_variables = {v: f"_{v}" for v in variables}
+        if "weight" in plot_variables:
+            plot_variables["weights"] = plot_variables.pop("weight")
+        plot_kws.update(plot_variables)
+
+        # Pass the row/col variables to FacetGrid with their original
+        # names so that the axes titles render correctly
+        for var in ["row", "col"]:
+            # Handle faceting variables that lack name information
+            if var in p.variables and p.variables[var] is None:
+                p.variables[var] = f"_{var}_"
+        grid_kws = {v: p.variables.get(v) for v in ["row", "col"]}
+
+        # Rename the columns of the plot_data structure appropriately
+        new_cols = plot_variables.copy()
+        new_cols.update(grid_kws)
+        full_data = p.plot_data.rename(columns=new_cols)
         # Set up the FacetGrid object
         facet_kws = {} if facet_kws is None else facet_kws.copy()
         g = FacetGrid(
@@ -980,6 +982,36 @@ Returns
 
 Examples
 --------
+
+See the :doc:`relational plots tutorial <../tutorial/relational>` for more
+examples.
+
+Apply a registered theme profile to a single figure-level plot
+without affecting the global theme:
+
+.. plot::
+    :context: close-figs
+
+    >>> import seaborn as sns
+    >>> sns.register_theme_profile("viz", {{
+    ...     "style": "dark", "context": "talk",
+    ...     "palette": "flare",
+    ... }})
+    >>> tips = sns.load_dataset("tips")
+    >>> g = sns.relplot(
+    ...     data=tips, x="total_bill", y="tip", col="time", hue="smoker",
+    ...     profile="viz",  # applied only to this plot
+    ... )
+
+Pass an inline profile dict (no need to register first):
+
+.. plot::
+    :context: close-figs
+
+    >>> g = sns.relplot(
+    ...     data=tips, x="total_bill", y="tip",
+    ...     profile={{"style": "ticks", "context": "paper"}},
+    ... )
 
 .. include:: ../docstrings/relplot.rst
 

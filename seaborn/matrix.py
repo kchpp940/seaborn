@@ -1255,6 +1255,9 @@ def clustermap(
     if _no_scipy:
         raise RuntimeError("clustermap requires scipy to be available")
 
+    if profile is not None:
+        rcmod._resolve_profile(profile, {})
+
     with rcmod._ThemeContext(profile):
         plotter = ClusterGrid(data, pivot_kws=pivot_kws, figsize=figsize,
                               row_colors=row_colors, col_colors=col_colors,

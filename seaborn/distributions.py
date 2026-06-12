@@ -2107,13 +2107,6 @@ def displot(
     **kwargs,
 ):
 
-    p = _DistributionPlotter(
-        data=data,
-        variables=dict(x=x, y=y, hue=hue, weights=weights, row=row, col=col),
-    )
-
-    p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
-
     _check_argument("kind", ["hist", "kde", "ecdf"], kind)
 
     # --- Initialize the FacetGrid object
@@ -2127,22 +2120,32 @@ def displot(
         warnings.warn(msg, UserWarning)
         kwargs.pop("ax")
 
-    for var in ["row", "col"]:
-        # Handle faceting variables that lack name information
-        if var in p.variables and p.variables[var] is None:
-            p.variables[var] = f"_{var}_"
-
-    # Adapt the plot_data dataframe for use with FacetGrid
-    grid_data = p.plot_data.rename(columns=p.variables)
-    grid_data = grid_data.loc[:, ~grid_data.columns.duplicated()]
-
-    col_name = p.variables.get("col")
-    row_name = p.variables.get("row")
-
-    if facet_kws is None:
-        facet_kws = {}
+    if profile is not None:
+        rcmod._resolve_profile(profile, {})
 
     with rcmod._ThemeContext(profile):
+
+        p = _DistributionPlotter(
+            data=data,
+            variables=dict(x=x, y=y, hue=hue, weights=weights, row=row, col=col),
+        )
+
+        p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
+
+        for var in ["row", "col"]:
+            # Handle faceting variables that lack name information
+            if var in p.variables and p.variables[var] is None:
+                p.variables[var] = f"_{var}_"
+
+        # Adapt the plot_data dataframe for use with FacetGrid
+        grid_data = p.plot_data.rename(columns=p.variables)
+        grid_data = grid_data.loc[:, ~grid_data.columns.duplicated()]
+
+        col_name = p.variables.get("col")
+        row_name = p.variables.get("row")
+
+        if facet_kws is None:
+            facet_kws = {}
 
         g = FacetGrid(
             data=grid_data, row=row_name, col=col_name,

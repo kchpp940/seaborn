@@ -2121,6 +2121,9 @@ def pairplot(
         else:
             diag_kind = "hist" if kind == "hist" else "kde"
 
+    if profile is not None:
+        rcmod._resolve_profile(profile, {})
+
     with rcmod._ThemeContext(profile):
         # Set up the PairGrid
         grid_kws.setdefault("diag_sharey", diag_kind == "hist")
@@ -2247,6 +2250,9 @@ def jointplot(
     # Matplotlib's hexbin plot is not na-robust
     if kind == "hex":
         dropna = True
+
+    if profile is not None:
+        rcmod._resolve_profile(profile, {})
 
     with rcmod._ThemeContext(profile):
         # Initialize the JointGrid object

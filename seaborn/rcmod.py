@@ -662,6 +662,37 @@ def set_theme(context=None, style=None, palette=None,
     Examples
     --------
 
+    See the :doc:`aesthetics tutorial <../tutorial/aesthetics>` for more
+    examples of using :func:`set_theme` together with theme profiles.
+
+    Apply a registered theme profile globally:
+
+    .. plot::
+        :context: close-figs
+
+        >>> import seaborn as sns
+        >>> import matplotlib.pyplot as plt
+        >>> sns.register_theme_profile("corp", {
+        ...     "style": "white", "context": "talk",
+        ...     "palette": "Blues_d", "font": "serif",
+        ... })
+        >>> sns.set_theme(profile="corp")
+        >>> ax = sns.barplot(x=["A", "B"], y=[1, 2])
+
+    Override part of a profile with explicit arguments:
+
+    .. plot::
+        :context: close-figs
+
+        >>> sns.set_theme(profile="corp", context="poster", palette="Reds")
+
+    Pass an inline profile dict (no need to register first):
+
+    .. plot::
+        :context: close-figs
+
+        >>> sns.set_theme(profile={"style": "ticks", "context": "paper"})
+
     .. include:: ../docstrings/set_theme.rst
 
     """
@@ -739,6 +770,37 @@ def axes_style(style=None, rc=None, *, profile=None):
 
     Examples
     --------
+
+    See the :doc:`aesthetics tutorial <../tutorial/aesthetics>` for more
+    examples.
+
+    Use a registered profile as a temporary style context:
+
+    .. plot::
+        :context: close-figs
+
+        >>> import seaborn as sns
+        >>> import matplotlib.pyplot as plt
+        >>> sns.register_theme_profile("clean", {"style": "white", "context": "talk"})
+        >>> with sns.axes_style(profile="clean"):
+        ...     fig, ax = plt.subplots()
+        ...     ax.plot([1, 2, 3])
+
+    Override a style from the profile with an explicit argument:
+
+    .. plot::
+        :context: close-figs
+
+        >>> with sns.axes_style(style="darkgrid", profile="clean"):
+        ...     fig, ax = plt.subplots()  # uses darkgrid style, not white
+
+    Pass additional rc overrides on top of a profile:
+
+    .. plot::
+        :context: close-figs
+
+        >>> with sns.axes_style(profile="clean", rc={"axes.facecolor": "#FAFAFA"}):
+        ...     fig, ax = plt.subplots()
 
     .. include:: ../docstrings/axes_style.rst
 
@@ -944,6 +1006,44 @@ def plotting_context(context=None, font_scale=None, rc=None, *, profile=None):
 
     Examples
     --------
+
+    See the :doc:`aesthetics tutorial <../tutorial/aesthetics>` for more
+    examples.
+
+    Use a registered profile as a temporary scaling context:
+
+    .. plot::
+        :context: close-figs
+
+        >>> import seaborn as sns
+        >>> import matplotlib.pyplot as plt
+        >>> sns.register_theme_profile("poster_p", {
+        ...     "context": "poster", "font_scale": 1.2,
+        ... })
+        >>> with sns.plotting_context(profile="poster_p"):
+        ...     fig, ax = plt.subplots()
+        ...     ax.plot([1, 2, 3])
+
+    Override font_scale on top of a profile:
+
+    .. plot::
+        :context: close-figs
+
+        >>> with sns.plotting_context(profile="poster_p", font_scale=0.8):
+        ...     fig, ax = plt.subplots()
+
+    Apply a profile as a decorator to wrap an entire plotting function:
+
+    .. plot::
+        :context: close-figs
+
+        >>> @sns.plotting_context(profile="poster_p")
+        ... def make_plot():
+        ...     fig, ax = plt.subplots()
+        ...     ax.plot([1, 2, 3])
+        ...     return fig
+        ...
+        >>> fig = make_plot()
 
     .. include:: ../docstrings/plotting_context.rst
 

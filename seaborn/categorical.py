@@ -2795,35 +2795,37 @@ def catplot(
         elif x is not None and y is not None:
             raise ValueError("Cannot pass values for both `x` and `y`.")
 
-    p = Plotter(
-        data=data,
-        variables=dict(
-            x=x, y=y, hue=hue, row=row, col=col, units=units, weight=weights
-        ),
-        order=order,
-        orient=orient,
-        # Handle special backwards compatibility where pointplot originally
-        # did *not* default to multi-colored unless a palette was specified.
-        color="C0" if kind == "point" and palette is None and color is None else color,
-        legend=legend,
-    )
-
-    for var in ["row", "col"]:
-        # Handle faceting variables that lack name information
-        if var in p.variables and p.variables[var] is None:
-            p.variables[var] = f"_{var}_"
-
-    # Adapt the plot_data dataframe for use with FacetGrid
-    facet_data = p.plot_data.rename(columns=p.variables)
-    facet_data = facet_data.loc[:, ~facet_data.columns.duplicated()]
-
-    col_name = p.variables.get("col", None)
-    row_name = p.variables.get("row", None)
-
-    if facet_kws is None:
-        facet_kws = {}
+    if profile is not None:
+        rcmod._resolve_profile(profile, {})
 
     with rcmod._ThemeContext(profile):
+        p = Plotter(
+            data=data,
+            variables=dict(
+                x=x, y=y, hue=hue, row=row, col=col, units=units, weight=weights
+            ),
+            order=order,
+            orient=orient,
+            # Handle special backwards compatibility where pointplot originally
+            # did *not* default to multi-colored unless a palette was specified.
+            color="C0" if kind == "point" and palette is None and color is None else color,
+            legend=legend,
+        )
+
+        for var in ["row", "col"]:
+            # Handle faceting variables that lack name information
+            if var in p.variables and p.variables[var] is None:
+                p.variables[var] = f"_{var}_"
+
+        # Adapt the plot_data dataframe for use with FacetGrid
+        facet_data = p.plot_data.rename(columns=p.variables)
+        facet_data = facet_data.loc[:, ~facet_data.columns.duplicated()]
+
+        col_name = p.variables.get("col", None)
+        row_name = p.variables.get("row", None)
+
+        if facet_kws is None:
+            facet_kws = {}
         g = FacetGrid(
             data=facet_data, row=row_name, col=col_name, col_wrap=col_wrap,
             row_order=row_order, col_order=col_order, sharex=sharex, sharey=sharey,

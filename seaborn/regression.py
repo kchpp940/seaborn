@@ -616,6 +616,9 @@ def lmplot(
     cols = np.unique([a for a in need_cols if a is not None]).tolist()
     data = data[cols]
 
+    if profile is not None:
+        rcmod._resolve_profile(profile, {})
+
     with rcmod._ThemeContext(profile):
 
         # Initialize the grid
