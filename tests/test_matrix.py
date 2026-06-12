@@ -493,6 +493,167 @@ class TestHeatmap:
                     cbar_kws=dict(drawedges=True))
         assert len(ax2.collections) == 2
 
+    def test_heatmap_annot_format_basic(self):
+
+        def to_str(row_label, col_label, value, masked, row_idx, col_idx):
+            return str(value)
+
+        ax = mat.heatmap(self.df_norm, annot=True, annot_format=to_str)
+        texts = [t.get_text() for t in ax.texts]
+        for val, text in zip(self.x_norm.flat, texts):
+            assert text == str(val)
+
+    def test_heatmap_annot_format_callback_args(self):
+
+        data = pd.DataFrame(
+            [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+            index=['alpha', 'beta', 'gamma'],
+            columns=['x', 'y', 'z']
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'value': value,
+                'masked': masked,
+                'row_idx': row_idx,
+                'col_idx': col_idx,
+            })
+            return f"{row_label}-{col_label}"
+
+        ax = mat.heatmap(data, annot=True, annot_format=fmt)
+
+        assert len(contexts) == 9
+
+        assert contexts[0] == {
+            'row_label': 'alpha', 'col_label': 'x',
+            'value': 1, 'masked': False,
+            'row_idx': 0, 'col_idx': 0,
+        }
+        assert contexts[4] == {
+            'row_label': 'beta', 'col_label': 'y',
+            'value': 5, 'masked': False,
+            'row_idx': 1, 'col_idx': 1,
+        }
+        assert contexts[8] == {
+            'row_label': 'gamma', 'col_label': 'z',
+            'value': 9, 'masked': False,
+            'row_idx': 2, 'col_idx': 2,
+        }
+
+    def test_heatmap_annot_format_with_mask(self):
+
+        data = pd.DataFrame(
+            [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+            index=['a', 'b', 'c'],
+            columns=['x', 'y', 'z']
+        )
+        mask = pd.DataFrame(
+            [[False, False, True],
+             [False, True, False],
+             [True, False, False]],
+            index=data.index, columns=data.columns
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'value': value,
+                'masked': masked,
+            })
+            return "X" if masked else f"{value}"
+
+        ax = mat.heatmap(data, mask=mask, annot=True, annot_format=fmt)
+
+        assert len(contexts) == 9
+        assert contexts[0]['masked'] is False
+        assert contexts[2]['masked'] is True
+        assert contexts[4]['masked'] is True
+        assert contexts[6]['masked'] is True
+
+    def test_heatmap_annot_format_custom_annot(self):
+
+        data = pd.DataFrame(
+            [[1.0, 2.0], [3.0, 4.0]],
+            index=['a', 'b'],
+            columns=['x', 'y']
+        )
+        annot = pd.DataFrame(
+            [['up', 'down'], ['left', 'right']],
+            index=data.index, columns=data.columns
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'value': value,
+            })
+            return value
+
+        ax = mat.heatmap(data, annot=annot, annot_format=fmt)
+
+        assert len(contexts) == 4
+        assert contexts[0]['value'] == 'up'
+        assert contexts[1]['value'] == 'down'
+        assert contexts[2]['value'] == 'left'
+        assert contexts[3]['value'] == 'right'
+
+    def test_heatmap_annot_format_multiindex(self):
+
+        arrays = [['A', 'A', 'B', 'B'],
+                  ['one', 'two', 'one', 'two']]
+        index = pd.MultiIndex.from_arrays(arrays)
+        data = pd.DataFrame(np.arange(8).reshape(4, 2),
+                            index=index, columns=['X', 'Y'])
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({'row_label': row_label, 'col_label': col_label})
+            return ""
+
+        ax = mat.heatmap(data, annot=True, annot_format=fmt)
+
+        assert contexts[0]['row_label'] == ('A', 'one')
+        assert contexts[0]['col_label'] == 'X'
+
+    def test_heatmap_annot_format_skip_none(self):
+
+        data = pd.DataFrame(np.arange(9).reshape(3, 3))
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            if value % 2 == 0:
+                return None
+            return f"{value}"
+
+        ax = mat.heatmap(data, annot=True, annot_format=fmt)
+
+        texts = [t.get_text() for t in ax.texts]
+        assert all(int(t) % 2 != 0 for t in texts if t)
+
+    def test_heatmap_annot_format_skip_empty_string(self):
+
+        data = pd.DataFrame(np.arange(9).reshape(3, 3))
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            if value < 3:
+                return ""
+            return f"{value}"
+
+        ax = mat.heatmap(data, annot=True, annot_format=fmt)
+
+        texts = [t.get_text() for t in ax.texts]
+        assert all(int(t) >= 3 for t in texts if t)
+
 
 @pytest.mark.skipif(_no_scipy, reason="Test requires scipy")
 class TestDendrogram:
@@ -1339,6 +1500,217 @@ class TestClustermap:
         g = mat.clustermap(self.df_norm, annot=self.df_norm, fmt=".1f")
         for val, text in zip(np.asarray(g.data2d).flat, g.ax_heatmap.texts):
             assert text.get_text() == f"{val:.1f}"
+
+    def test_clustermap_annot_format_labels_after_reorder(self):
+
+        np.random.seed(0)
+        data = pd.DataFrame(
+            np.random.randn(6, 5),
+            index=[f'r{i}' for i in range(6)],
+            columns=[f'c{i}' for i in range(5)]
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'row_idx': row_idx,
+                'col_idx': col_idx,
+            })
+            return f"{row_label}-{col_label}"
+
+        g = mat.clustermap(data, annot=True, annot_format=fmt)
+
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        reordered_rows = [data.index[i] for i in yind]
+        reordered_cols = [data.columns[i] for i in xind]
+
+        for ctx in contexts:
+            expected_row = reordered_rows[ctx['row_idx']]
+            expected_col = reordered_cols[ctx['col_idx']]
+            assert ctx['row_label'] == expected_row
+            assert ctx['col_label'] == expected_col
+
+    def test_clustermap_annot_format_value_after_reorder(self):
+
+        np.random.seed(0)
+        data = pd.DataFrame(
+            np.random.randn(6, 5),
+            index=[f'r{i}' for i in range(6)],
+            columns=[f'c{i}' for i in range(5)]
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'value': value,
+                'row_idx': row_idx,
+                'col_idx': col_idx,
+            })
+            return f"{value:.2f}"
+
+        g = mat.clustermap(data, annot=True, annot_format=fmt)
+
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        for ctx in contexts:
+            orig_row = yind[ctx['row_idx']]
+            orig_col = xind[ctx['col_idx']]
+            expected_value = data.iloc[orig_row, orig_col]
+            npt.assert_almost_equal(ctx['value'], expected_value)
+
+    def test_clustermap_annot_format_custom_annot_no_double_map(self):
+
+        np.random.seed(0)
+        data = pd.DataFrame(
+            np.random.randn(6, 5),
+            index=[f'r{i}' for i in range(6)],
+            columns=[f'c{i}' for i in range(5)]
+        )
+        annot = pd.DataFrame(
+            [[f'{r}{c}' for c in data.columns] for r in data.index],
+            index=data.index, columns=data.columns
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'value': value,
+                'row_idx': row_idx,
+                'col_idx': col_idx,
+            })
+            return value
+
+        g = mat.clustermap(data, annot=annot, annot_format=fmt)
+
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        for ctx in contexts:
+            orig_row = yind[ctx['row_idx']]
+            orig_col = xind[ctx['col_idx']]
+            expected_value = annot.iloc[orig_row, orig_col]
+            assert ctx['value'] == expected_value, (
+                f"Double-mapping bug: at plot pos ({ctx['row_idx']}, "
+                f"{ctx['col_idx']}), orig ({orig_row}, {orig_col}), "
+                f"got '{ctx['value']}', expected '{expected_value}'"
+            )
+
+    def test_clustermap_annot_format_mask_after_reorder(self):
+
+        np.random.seed(0)
+        data = pd.DataFrame(
+            np.random.randn(6, 5),
+            index=[f'r{i}' for i in range(6)],
+            columns=[f'c{i}' for i in range(5)]
+        )
+        mask = pd.DataFrame(
+            np.random.choice([True, False], data.shape, p=[0.3, 0.7]),
+            index=data.index, columns=data.columns
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'masked': masked,
+                'row_idx': row_idx,
+                'col_idx': col_idx,
+            })
+            return "X" if masked else f"{value:.1f}"
+
+        g = mat.clustermap(data, mask=mask, annot=True, annot_format=fmt)
+
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        for ctx in contexts:
+            orig_row = yind[ctx['row_idx']]
+            orig_col = xind[ctx['col_idx']]
+            expected_masked = bool(mask.iloc[orig_row, orig_col])
+            assert ctx['masked'] == expected_masked
+
+    def test_clustermap_annot_format_custom_annot_mask_reorder(self):
+
+        np.random.seed(0)
+        data = pd.DataFrame(
+            np.random.randn(6, 5),
+            index=[f'r{i}' for i in range(6)],
+            columns=[f'c{i}' for i in range(5)]
+        )
+        annot = pd.DataFrame(
+            [[f'{r}{c}' for c in data.columns] for r in data.index],
+            index=data.index, columns=data.columns
+        )
+        mask = pd.DataFrame(
+            np.random.choice([True, False], data.shape, p=[0.3, 0.7]),
+            index=data.index, columns=data.columns
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'value': value,
+                'masked': masked,
+                'row_idx': row_idx,
+                'col_idx': col_idx,
+            })
+            return "X" if masked else value
+
+        g = mat.clustermap(data, mask=mask, annot=annot,
+                           annot_format=fmt)
+
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        for ctx in contexts:
+            orig_row = yind[ctx['row_idx']]
+            orig_col = xind[ctx['col_idx']]
+            expected_value = annot.iloc[orig_row, orig_col]
+            expected_masked = bool(mask.iloc[orig_row, orig_col])
+            assert ctx['value'] == expected_value
+            assert ctx['masked'] == expected_masked
+
+    def test_clustermap_annot_format_no_cluster(self):
+
+        np.random.seed(0)
+        data = pd.DataFrame(
+            np.random.randn(4, 4),
+            index=[f'r{i}' for i in range(4)],
+            columns=[f'c{i}' for i in range(4)]
+        )
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'row_idx': row_idx,
+                'col_idx': col_idx,
+            })
+            return ""
+
+        g = mat.clustermap(data, row_cluster=False, col_cluster=False,
+                           annot=True, annot_format=fmt)
+
+        for i, ctx in enumerate(contexts):
+            row = i // 4
+            col = i % 4
+            assert ctx['row_label'] == f'r{row}'
+            assert ctx['col_label'] == f'c{col}'
+            assert ctx['row_idx'] == row
+            assert ctx['col_idx'] == col
 
     def test_tree_kws(self):
 
