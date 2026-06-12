@@ -383,6 +383,7 @@ class _LinePlotter(_RelationalPlotter):
                             draw_order.append(level)
                             seen.add(level)
                     self._set_appearance_levels(var, list(reversed(draw_order)))
+            self._finalize_appearance()
 
         # Finalize the axes details
         self._add_axis_labels(ax)
@@ -474,6 +475,16 @@ class _ScatterPlotter(_RelationalPlotter):
             linewidth = .08 * np.sqrt(np.percentile(sizes, 10))
             points.set_linewidths(linewidth)
             kws["linewidth"] = linewidth
+
+        # Record appearance order for semantic variables
+        # Scatter draws all points at once, so appearance = data order
+        if self.semantic_order == "appearance":
+            for var in ["hue", "size", "style"]:
+                if var in self.variables and var not in self._appearance_levels:
+                    mapper = getattr(self, f"_{var}_map", None)
+                    if mapper is not None and hasattr(mapper, "levels"):
+                        self._set_appearance_levels(var, list(mapper.levels))
+            self._finalize_appearance()
 
         # Finalize the axes details
         self._add_axis_labels(ax)
@@ -893,16 +904,20 @@ def relplot(
             attrs["size"] = "linewidth"
 
         if p.semantic_order == "appearance":
-            if kind == "line":
-                # For line plots, levels are drawn in data order (first mapper
-                # level first) and later draws appear on top, so reverse.
-                for var, mapper in [
-                    ("hue", p._hue_map if "hue" in p.variables else None),
-                    ("size", p._size_map if "size" in p.variables else None),
-                    ("style", p._style_map if "style" in p.variables else None),
-                ]:
-                    if mapper is not None and hasattr(mapper, "levels"):
-                        p._set_appearance_levels(var, list(reversed(mapper.levels)))
+            for var in ["hue", "size", "style"]:
+                if var in p.variables and var not in p._appearance_levels:
+                    draw_order = []
+                    seen = set()
+                    for sub_vars, _ in p.iter_data((var,), by_facet=False):
+                        level = sub_vars[var]
+                        if level not in seen:
+                            draw_order.append(level)
+                            seen.add(level)
+                    if kind == "line":
+                        p._set_appearance_levels(var, list(reversed(draw_order)))
+                    else:
+                        p._set_appearance_levels(var, draw_order)
+            p._finalize_appearance()
 
         p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
         if p.legend_data:

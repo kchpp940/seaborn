@@ -1930,3 +1930,15 @@ class TestSemanticOrder:
                     semantic_order="data")
         texts = [t.get_text() for t in g._legend.texts]
         assert texts == ["a", "b"]
+
+    def test_relplot_line_appearance_display_levels_registry(self):
+
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 1, 2, 3, 1, 2, 3],
+            "y": [1, 2, 3, 2, 3, 4, 3, 4, 5],
+            "hue": ["a", "a", "a", "b", "b", "b", "c", "c", "c"],
+        })
+        g = relplot(data=df, x="x", y="y", hue="hue", kind="line",
+                    semantic_order="appearance")
+        legend_texts = [t.get_text() for t in g._legend.texts]
+        assert legend_texts == ["c", "b", "a"]

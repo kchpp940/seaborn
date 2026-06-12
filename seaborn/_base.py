@@ -666,6 +666,22 @@ class VectorPlotter:
         """
         self._appearance_levels[var] = list(levels)
 
+    def _finalize_appearance(self):
+        """Compute and register appearance levels for all semantic variables.
+
+        Subclasses should override this to implement plot-type-specific
+        appearance order logic (e.g. dodge vs. overlay, stack vs. layer).
+        This base implementation sets appearance order = data order for
+        axis and facet variables (which never overlap), and leaves
+        semantic variables (hue/size/style) untouched (they must be set
+        by the subclass after drawing).
+        """
+        for var in ["x", "y", "row", "col"]:
+            if var in self.variables and var not in self._appearance_levels:
+                data_levels = self.var_levels.get(var, [])
+                if len(data_levels):
+                    self._appearance_levels[var] = list(data_levels)
+
     def _get_display_levels(self, var):
         """Return levels ordered for display (legend, ticks, etc.).
 
@@ -1173,7 +1189,9 @@ class VectorPlotter:
             for converter, seed_data in grouped:
                 if self.var_types[var] == "categorical":
                     if self._var_ordered[var]:
-                        order = self.var_levels[var]
+                        order = self._get_display_levels(var)
+                        if not len(order):
+                            order = self.var_levels[var]
                     else:
                         order = None
                     seed_data = categorical_order(seed_data, order)
@@ -1322,80 +1340,9 @@ class VectorPlotter:
             legend_data[key] = artist
             legend_order.append(key)
 
-        if self.semantic_order == "appearance":
-            legend_data, legend_order = self._reorder_legend_for_appearance(
-                legend_data, legend_order,
-            )
-
         self.legend_title = title
         self.legend_data = legend_data
         self.legend_order = legend_order
-
-    def _reorder_legend_for_appearance(self, legend_data, legend_order):
-        """Reorder legend entries to match appearance order when applicable."""
-        # Build a priority order from appearance levels for each semantic var
-        var_order = {}
-        for var in ["hue", "size", "style"]:
-            if var in self._appearance_levels:
-                var_order[var] = {
-                    level: i + 1 for i, level in enumerate(self._appearance_levels[var])
-                }
-
-        if not var_order:
-            return legend_data, legend_order
-
-        # Helper to extract (var_name, is_title, level_name) from a legend key
-        # Keys are either:
-        #   - A string (variable name like "hue") paired with a level value
-        #   - A tuple ((var_name, "title"), var_name) for subtitle entries
-        def parse_key(key):
-            if isinstance(key, tuple) and len(key) == 2:
-                part1, part2 = key
-                if isinstance(part1, tuple) and len(part1) == 2 and part1[1] == "title":
-                    # Subtitle entry: ((var_display_name, "title"), var_display_name)
-                    var_display = part1[0]
-                    return (var_display, True, var_display)
-                # Regular entry: (var_display_name, level_value)
-                var_display = part1
-                level = part2
-                return (var_display, False, level)
-            return (str(key), False, str(key))
-
-        # Map variable display names to internal var names ("hue"/"size"/"style")
-        display_to_internal = {}
-        for var in ["hue", "size", "style"]:
-            display_name = self.variables.get(var)
-            if display_name is not None:
-                display_to_internal[display_name] = var
-
-        # Determine a base priority for each semantic var (preserve original
-        # order of semantic variable groups)
-        var_base_priority = {}
-        next_priority = 0
-        seen_vars = set()
-        for key in legend_order:
-            var_display, is_title, _ = parse_key(key)
-            internal_var = display_to_internal.get(var_display)
-            if internal_var is not None and internal_var not in seen_vars and internal_var in var_order:
-                var_base_priority[internal_var] = next_priority
-                seen_vars.add(internal_var)
-                next_priority += len(var_order[internal_var]) + 1
-
-        # Sort legend_order: titles appear just before their variable's entries
-        def sort_key(key):
-            var_display, is_title, level = parse_key(key)
-            internal_var = display_to_internal.get(var_display)
-            if internal_var is None or internal_var not in var_order:
-                return (float("inf"), 0, str(level))
-            base = var_base_priority[internal_var]
-            if is_title:
-                return (base, -1, "")
-            priority = var_order[internal_var].get(level, float("inf"))
-            return (base, priority, str(level))
-
-        new_order = sorted(legend_order, key=sort_key)
-        new_data = {key: legend_data[key] for key in new_order}
-        return new_data, new_order
 
     def _update_legend_data(
         self,
@@ -1429,7 +1376,11 @@ class VectorPlotter:
         elif mapper.levels is None:
             levels = formatted_levels = []
         else:
-            levels = formatted_levels = mapper.levels
+            levels = self._get_display_levels(var)
+            if not len(levels):
+                levels = formatted_levels = mapper.levels
+            else:
+                formatted_levels = levels
 
         if not title and self.variables.get(var, None) is not None:
             update((self.variables[var], "title"), self.variables[var], **title_kws)
@@ -1558,6 +1509,10 @@ class VectorPlotter:
 
         # Update the levels list with the type-converted order variable
         self.var_levels[axis] = order
+
+        # For categorical axis variables, appearance order = data order
+        # (categories are placed side-by-side, no occlusion)
+        self._appearance_levels[axis] = order
 
         # Now ensure that seaborn will use categorical rules internally
         self.var_types[axis] = "categorical"

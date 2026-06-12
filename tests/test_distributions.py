@@ -2582,6 +2582,19 @@ class TestDisPlotSemanticOrder:
         texts = [t.get_text() for t in g._legend.texts]
         assert texts == ["a", "b", "c"]
 
+    def test_displot_hist_categorical_axis_tick_appearance(self):
+
+        df = pd.DataFrame({
+            "x": (["C", "A", "B", "C", "A", "B"] * 5)[:30],
+            "hue": (["a"] * 10 + ["b"] * 10 + ["c"] * 10),
+        })
+        g = displot(data=df, x="x", hue="hue", multiple="dodge",
+                    semantic_order="appearance")
+        tick_labels = [t.get_text() for t in g.ax.get_xticklabels()]
+        legend_texts = [t.get_text() for t in g._legend.texts]
+        assert tick_labels == ["C", "A", "B"]
+        assert legend_texts == ["a", "b", "c"]
+
 
 def integrate(y, x):
     """"Simple numerical integration for testing KDE code."""

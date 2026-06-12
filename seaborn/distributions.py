@@ -562,6 +562,7 @@ class _DistributionPlotter(VectorPlotter):
             if multiple == "dodge":
                 draw_order = list(reversed(draw_order))
             self._set_appearance_levels("hue", draw_order)
+            self._finalize_appearance()
 
         # Go back through the dataset and draw the plots
         for sub_vars, _ in self.iter_data("hue", reverse=True):
@@ -987,6 +988,7 @@ class _DistributionPlotter(VectorPlotter):
                     draw_order.append(level)
                     seen.add(level)
             self._set_appearance_levels("hue", draw_order)
+            self._finalize_appearance()
 
         for sub_vars, _ in self.iter_data("hue", reverse=True):
 

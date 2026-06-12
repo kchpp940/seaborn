@@ -3329,3 +3329,29 @@ class TestCatPlotSemanticOrder:
                     semantic_order="data")
         tick_labels = [t.get_text() for t in g.ax.get_xticklabels()]
         assert tick_labels == ["C", "A", "B"]
+
+    def test_catplot_appearance_axis_tick_matches_legend(self):
+
+        df = pd.DataFrame({
+            "x": ["C", "A", "B", "C", "A", "B"],
+            "y": [1, 2, 3, 4, 5, 6],
+            "hue": ["a", "a", "a", "b", "b", "b"],
+        })
+        g = catplot(data=df, x="x", y="y", hue="hue", kind="bar",
+                    semantic_order="appearance")
+        tick_labels = [t.get_text() for t in g.ax.get_xticklabels()]
+        legend_texts = [t.get_text() for t in g._legend.texts]
+        assert tick_labels == ["C", "A", "B"]
+        assert legend_texts == ["a", "b"]
+
+    def test_catplot_appearance_point_legend_reversed(self):
+
+        df = pd.DataFrame({
+            "x": ["A", "A", "A", "B", "B", "B"],
+            "y": [1, 2, 3, 4, 5, 6],
+            "hue": ["a", "b", "c", "a", "b", "c"],
+        })
+        g = catplot(data=df, x="x", y="y", hue="hue", kind="point",
+                    semantic_order="appearance")
+        legend_texts = [t.get_text() for t in g._legend.texts]
+        assert legend_texts == ["c", "b", "a"]

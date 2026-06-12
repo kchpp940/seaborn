@@ -420,12 +420,11 @@ class _CategoricalPlotter(VectorPlotter):
                 if (col := f"{var}{suf}") in data:
                     data[col] = inv(data[col])
 
-    def _configure_legend(self, ax, func, common_kws=None, semantic_kws=None):
+    def _configure_legend(self, ax, func, common_kws=None, semantic_kws=None,
+                          dodge=False):
         if self.semantic_order == "appearance" and "hue" in self.variables:
-            # For categorical plots with dodge, hue levels appear left-to-right
-            # in data order; for non-dodge (overlaid), later draws appear on top
-            if self._dodge_needed():
-                appearance_order = self._hue_map.levels
+            if dodge:
+                appearance_order = list(self._hue_map.levels)
             else:
                 draw_order = []
                 seen = set()
@@ -438,6 +437,7 @@ class _CategoricalPlotter(VectorPlotter):
                         seen.add(level)
                 appearance_order = list(reversed(draw_order))
             self._set_appearance_levels("hue", appearance_order)
+            self._finalize_appearance()
 
         if self.legend == "auto":
             show_legend = not self._redundant_hue and self.input_format != "wide"
@@ -532,7 +532,8 @@ class _CategoricalPlotter(VectorPlotter):
             if "hue" in self.variables:
                 points.set_facecolors(self._hue_map(sub_data["hue"]))
 
-        self._configure_legend(ax, _scatter_legend_artist, common_kws=plot_kws)
+        self._configure_legend(ax, _scatter_legend_artist, common_kws=plot_kws,
+                               dodge=dodge)
 
     def plot_swarms(
         self,
@@ -606,7 +607,7 @@ class _CategoricalPlotter(VectorPlotter):
                 points.draw = draw.__get__(points)
 
         _draw_figure(ax.figure)
-        self._configure_legend(ax, _scatter_legend_artist, plot_kws)
+        self._configure_legend(ax, _scatter_legend_artist, plot_kws, dodge=dodge)
 
     def plot_boxes(
         self,
@@ -770,7 +771,7 @@ class _CategoricalPlotter(VectorPlotter):
             ax.add_container(BoxPlotContainer(artists))
 
         legend_artist = _get_patch_legend_artist(fill)
-        self._configure_legend(ax, legend_artist, boxprops)
+        self._configure_legend(ax, legend_artist, boxprops, dodge=dodge)
 
     def plot_boxens(
         self,
@@ -911,7 +912,7 @@ class _CategoricalPlotter(VectorPlotter):
 
         legend_artist = _get_patch_legend_artist(fill)
         common_kws = {**box_kws, "linewidth": linewidth, "edgecolor": linecolor}
-        self._configure_legend(ax, legend_artist, common_kws)
+        self._configure_legend(ax, legend_artist, common_kws, dodge=dodge)
 
     def plot_violins(
         self,
@@ -1187,7 +1188,7 @@ class _CategoricalPlotter(VectorPlotter):
 
         legend_artist = _get_patch_legend_artist(fill)
         common_kws = {**plot_kws, "linewidth": linewidth, "edgecolor": linecolor}
-        self._configure_legend(ax, legend_artist, common_kws)
+        self._configure_legend(ax, legend_artist, common_kws, dodge=dodge)
 
     def plot_points(
         self,
@@ -1267,7 +1268,8 @@ class _CategoricalPlotter(VectorPlotter):
 
         legend_artist = partial(mpl.lines.Line2D, [], [])
         semantic_kws = {"hue": {"marker": markers, "linestyle": linestyles}}
-        self._configure_legend(ax, legend_artist, sub_kws, semantic_kws)
+        self._configure_legend(ax, legend_artist, sub_kws, semantic_kws,
+                               dodge=dodge)
 
     def plot_bars(
         self,
@@ -1349,7 +1351,7 @@ class _CategoricalPlotter(VectorPlotter):
                 )
 
         legend_artist = _get_patch_legend_artist(fill)
-        self._configure_legend(ax, legend_artist, plot_kws)
+        self._configure_legend(ax, legend_artist, plot_kws, dodge=dodge)
 
     def plot_errorbars(self, ax, data, capsize, err_kws):
 
@@ -3173,19 +3175,7 @@ def catplot(
         show_legend = bool(legend)
     if show_legend:
         if p.semantic_order == "appearance" and "hue" in p.variables:
-            if dodge:
-                label_order = p._hue_map.levels
-            else:
-                draw_order = []
-                seen = set()
-                for sub_vars, _ in p.iter_data(
-                    ("hue",), from_comp_data=True, allow_empty=True
-                ):
-                    level = sub_vars["hue"]
-                    if level not in seen:
-                        draw_order.append(level)
-                        seen.add(level)
-                label_order = list(reversed(draw_order))
+            label_order = p._get_display_levels("hue")
         else:
             label_order = hue_order
         g.add_legend(title=p.variables.get("hue"), label_order=label_order)
