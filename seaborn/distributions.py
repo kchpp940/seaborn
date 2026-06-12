@@ -105,11 +105,9 @@ class _DistributionPlotter(VectorPlotter):
         self,
         data=None,
         variables={},
-        semantic_order="data",
     ):
 
-        super().__init__(data=data, variables=variables,
-                         semantic_order=semantic_order)
+        super().__init__(data=data, variables=variables)
 
     @property
     def univariate(self):
@@ -142,8 +140,7 @@ class _DistributionPlotter(VectorPlotter):
         # TODO note that this doesn't handle numeric mappings like the relational plots
         handles = []
         labels = []
-        hue_levels = self._get_display_levels("hue")
-        for level in hue_levels:
+        for level in self._hue_map.levels:
             color = self._hue_map(level)
 
             kws = self._artist_kws(
@@ -166,7 +163,7 @@ class _DistributionPlotter(VectorPlotter):
             ax_obj.add_legend(
                 legend_data,
                 title=self.variables["hue"],
-                label_order=hue_levels,
+                label_order=self.var_levels["hue"],
                 **legend_kws
             )
 
@@ -546,23 +543,6 @@ class _DistributionPlotter(VectorPlotter):
         alpha = plot_kws.pop("alpha", default_alpha)  # TODO make parameter?
 
         hist_artists = []
-
-        # Record appearance order: histogram uses reverse=True iter_data,
-        # so the draw order itself is top-to-bottom appearance order.
-        if self.semantic_order == "appearance" and "hue" in self.variables:
-            draw_order = []
-            seen = set()
-            for sub_vars, _ in self.iter_data("hue", reverse=True):
-                level = sub_vars["hue"]
-                if level not in seen:
-                    draw_order.append(level)
-                    seen.add(level)
-            # For dodge, there's no layering; order by horizontal position
-            # (which matches data order after dodge offsets are applied)
-            if multiple == "dodge":
-                draw_order = list(reversed(draw_order))
-            self._set_appearance_levels("hue", draw_order)
-            self._resolve_appearance_order()
 
         # Go back through the dataset and draw the plots
         for sub_vars, _ in self.iter_data("hue", reverse=True):
@@ -979,17 +959,6 @@ class _DistributionPlotter(VectorPlotter):
 
         # Now iterate through the subsets and draw the densities
         # We go backwards so stacked densities read from top-to-bottom
-        if self.semantic_order == "appearance" and "hue" in self.variables:
-            draw_order = []
-            seen = set()
-            for sub_vars, _ in self.iter_data("hue", reverse=True):
-                level = sub_vars["hue"]
-                if level not in seen:
-                    draw_order.append(level)
-                    seen.add(level)
-            self._set_appearance_levels("hue", draw_order)
-            self._resolve_appearance_order()
-
         for sub_vars, _ in self.iter_data("hue", reverse=True):
 
             # Extract the support grid and density curve for this level
@@ -1403,7 +1372,6 @@ def histplot(
     palette=None, hue_order=None, hue_norm=None, color=None,
     # Axes information
     log_scale=None, legend=True, ax=None,
-    semantic_order="data",
     # Other appearance keywords
     **kwargs,
 ):
@@ -1411,7 +1379,6 @@ def histplot(
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, weights=weights),
-        semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -1478,8 +1445,6 @@ def histplot(
             estimate_kws=estimate_kws,
             **kwargs,
         )
-
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -1620,7 +1585,6 @@ def kdeplot(
     bw_method="scott", bw_adjust=1, warn_singular=True, log_scale=None,
     levels=10, thresh=.05, gridsize=200, cut=3, clip=None,
     legend=True, cbar=False, cbar_ax=None, cbar_kws=None, ax=None,
-    semantic_order="data",
     **kwargs,
 ):
 
@@ -1705,7 +1669,6 @@ def kdeplot(
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, weights=weights),
-        semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -1763,8 +1726,6 @@ def kdeplot(
             estimate_kws=estimate_kws,
             **kwargs,
         )
-
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -1907,7 +1868,6 @@ def ecdfplot(
     palette=None, hue_order=None, hue_norm=None,
     # Axes information
     log_scale=None, legend=True, ax=None,
-    semantic_order="data",
     # Other appearance keywords
     **kwargs,
 ):
@@ -1915,7 +1875,6 @@ def ecdfplot(
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, weights=weights),
-        semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -1951,8 +1910,6 @@ def ecdfplot(
         legend=legend,
         **kwargs,
     )
-
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -2015,8 +1972,7 @@ Examples
 
 def rugplot(
     data=None, *, x=None, y=None, hue=None, height=.025, expand_margins=True,
-    palette=None, hue_order=None, hue_norm=None, legend=True, ax=None,
-    semantic_order="data", **kwargs
+    palette=None, hue_order=None, hue_norm=None, legend=True, ax=None, **kwargs
 ):
 
     # A note: I think it would make sense to add multiple= to rugplot and allow
@@ -2075,7 +2031,6 @@ def rugplot(
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue),
-        semantic_order=semantic_order,
     )
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
 
@@ -2091,8 +2046,6 @@ def rugplot(
         return ax
 
     p.plot_rug(height, expand_margins, legend, **kwargs)
-
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -2149,14 +2102,12 @@ def displot(
     # Faceting parameters
     col_wrap=None, row_order=None, col_order=None,
     height=5, aspect=1, facet_kws=None,
-    semantic_order="data",
     **kwargs,
 ):
 
     p = _DistributionPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, weights=weights, row=row, col=col),
-        semantic_order=semantic_order,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -2193,7 +2144,7 @@ def displot(
         data=grid_data, row=row_name, col=col_name,
         col_wrap=col_wrap, row_order=row_order,
         col_order=col_order, height=height,
-        aspect=aspect, semantic_order=semantic_order,
+        aspect=aspect,
         **facet_kws,
     )
 

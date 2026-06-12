@@ -2,7 +2,6 @@ import itertools
 import warnings
 
 import numpy as np
-import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb, to_rgba
@@ -2489,111 +2488,6 @@ class TestDisPlot:
         assert set(g.data.columns) == expected_cols
         assert_array_equal(g.data["hue_var"], long_df["a"])
         assert_array_equal(g.data["_col_"], long_df["c"])
-
-
-class TestDisPlotSemanticOrder:
-
-    def test_semantic_order_invalid(self, long_df):
-
-        with pytest.raises(ValueError, match="semantic_order"):
-            displot(data=long_df, x="y", semantic_order="invalid")
-
-    def test_displot_hist_multiple_stack_hue_appearance(self):
-
-        np.random.seed(42)
-        df = pd.DataFrame({
-            "x": np.concatenate([
-                np.random.randn(50), np.random.randn(50) + 1, np.random.randn(50) + 2
-            ]),
-            "hue": ["a"] * 50 + ["b"] * 50 + ["c"] * 50,
-        })
-        g = displot(data=df, x="x", hue="hue", multiple="stack",
-                    semantic_order="appearance")
-        texts = [t.get_text() for t in g._legend.texts]
-        assert texts == ["c", "b", "a"]
-
-    def test_displot_hist_multiple_layer_hue_appearance(self):
-
-        np.random.seed(42)
-        df = pd.DataFrame({
-            "x": np.concatenate([
-                np.random.randn(50), np.random.randn(50) + 1, np.random.randn(50) + 2
-            ]),
-            "hue": ["a"] * 50 + ["b"] * 50 + ["c"] * 50,
-        })
-        g = displot(data=df, x="x", hue="hue", multiple="layer",
-                    semantic_order="appearance")
-        texts = [t.get_text() for t in g._legend.texts]
-        assert texts == ["c", "b", "a"]
-
-    def test_displot_hist_multiple_dodge_hue_appearance(self):
-
-        np.random.seed(42)
-        df = pd.DataFrame({
-            "x": np.concatenate([
-                np.random.randn(50), np.random.randn(50), np.random.randn(50)
-            ]),
-            "hue": ["a"] * 50 + ["b"] * 50 + ["c"] * 50,
-        })
-        g = displot(data=df, x="x", hue="hue", multiple="dodge",
-                    semantic_order="appearance")
-        texts = [t.get_text() for t in g._legend.texts]
-        assert texts == ["a", "b", "c"]
-
-    def test_displot_kde_layer_hue_appearance(self):
-
-        np.random.seed(42)
-        df = pd.DataFrame({
-            "x": np.concatenate([
-                np.random.randn(50), np.random.randn(50) + 1, np.random.randn(50) + 2
-            ]),
-            "hue": ["a"] * 50 + ["b"] * 50 + ["c"] * 50,
-        })
-        g = displot(data=df, x="x", hue="hue", kind="kde", multiple="layer",
-                    semantic_order="appearance")
-        texts = [t.get_text() for t in g._legend.texts]
-        assert texts == ["c", "b", "a"]
-
-    def test_displot_hue_facet_row_col(self):
-
-        np.random.seed(42)
-        df = pd.DataFrame({
-            "x": np.concatenate([np.random.randn(25), np.random.randn(25) + 1] * 4),
-            "hue": (["a"] * 25 + ["b"] * 25) * 4,
-            "row": ["p"] * 50 + ["p"] * 50 + ["q"] * 50 + ["q"] * 50,
-            "col": ["x"] * 50 + ["y"] * 50 + ["x"] * 50 + ["y"] * 50,
-        })
-        g = displot(data=df, x="x", hue="hue", row="row", col="col",
-                    semantic_order="appearance")
-        texts = [t.get_text() for t in g._legend.texts]
-        assert texts == ["b", "a"]
-
-    def test_displot_data_order_default(self):
-
-        np.random.seed(42)
-        df = pd.DataFrame({
-            "x": np.concatenate([
-                np.random.randn(50), np.random.randn(50) + 1, np.random.randn(50) + 2
-            ]),
-            "hue": ["a"] * 50 + ["b"] * 50 + ["c"] * 50,
-        })
-        g = displot(data=df, x="x", hue="hue", multiple="stack",
-                    semantic_order="data")
-        texts = [t.get_text() for t in g._legend.texts]
-        assert texts == ["a", "b", "c"]
-
-    def test_displot_hist_categorical_axis_tick_appearance(self):
-
-        df = pd.DataFrame({
-            "x": (["C", "A", "B", "C", "A", "B"] * 5)[:30],
-            "hue": (["a"] * 10 + ["b"] * 10 + ["c"] * 10),
-        })
-        g = displot(data=df, x="x", hue="hue", multiple="dodge",
-                    semantic_order="appearance")
-        tick_labels = [t.get_text() for t in g.ax.get_xticklabels()]
-        legend_texts = [t.get_text() for t in g._legend.texts]
-        assert tick_labels == ["C", "A", "B"]
-        assert legend_texts == ["a", "b", "c"]
 
 
 def integrate(y, x):

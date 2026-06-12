@@ -203,8 +203,7 @@ class _LinePlotter(_RelationalPlotter):
         self, *,
         data=None, variables={},
         estimator=None, n_boot=None, seed=None, errorbar=None,
-        sort=True, orient="x", err_style=None, err_kws=None, legend=None,
-        semantic_order="data",
+        sort=True, orient="x", err_style=None, err_kws=None, legend=None
     ):
 
         # TODO this is messy, we want the mapping to be agnostic about
@@ -214,8 +213,7 @@ class _LinePlotter(_RelationalPlotter):
             np.r_[.5, 2] * mpl.rcParams["lines.linewidth"]
         )
 
-        super().__init__(data=data, variables=variables,
-                         semantic_order=semantic_order)
+        super().__init__(data=data, variables=variables)
 
         self.estimator = estimator
         self.errorbar = errorbar
@@ -370,21 +368,6 @@ class _LinePlotter(_RelationalPlotter):
                         if isinstance(obj, mpl.collections.LineCollection):
                             obj.set_capstyle(line_capstyle)
 
-        # Record appearance order for semantic variables
-        # For line plots, later draws appear on top, so reverse the draw order
-        if self.semantic_order == "appearance":
-            for var in ["hue", "size", "style"]:
-                if var in self.variables:
-                    draw_order = []
-                    seen = set()
-                    for sub_vars, _ in self.iter_data((var,), from_comp_data=True):
-                        level = sub_vars[var]
-                        if level not in seen:
-                            draw_order.append(level)
-                            seen.add(level)
-                    self._set_appearance_levels(var, list(reversed(draw_order)))
-            self._resolve_appearance_order()
-
         # Finalize the axes details
         self._add_axis_labels(ax)
         if self.legend:
@@ -401,8 +384,7 @@ class _ScatterPlotter(_RelationalPlotter):
 
     _legend_attributes = ["color", "s", "marker"]
 
-    def __init__(self, *, data=None, variables={}, legend=None,
-                 semantic_order="data"):
+    def __init__(self, *, data=None, variables={}, legend=None):
 
         # TODO this is messy, we want the mapping to be agnostic about
         # the kind of plot to draw, but for the time being we need to set
@@ -411,8 +393,7 @@ class _ScatterPlotter(_RelationalPlotter):
             np.r_[.5, 2] * np.square(mpl.rcParams["lines.markersize"])
         )
 
-        super().__init__(data=data, variables=variables,
-                         semantic_order=semantic_order)
+        super().__init__(data=data, variables=variables)
 
         self.legend = legend
 
@@ -476,16 +457,6 @@ class _ScatterPlotter(_RelationalPlotter):
             points.set_linewidths(linewidth)
             kws["linewidth"] = linewidth
 
-        # Record appearance order for semantic variables
-        # Scatter draws all points at once, so appearance = data order
-        if self.semantic_order == "appearance":
-            for var in ["hue", "size", "style"]:
-                if var in self.variables and var not in self._appearance_levels:
-                    mapper = getattr(self, f"_{var}_map", None)
-                    if mapper is not None and hasattr(mapper, "levels"):
-                        self._set_appearance_levels(var, list(mapper.levels))
-            self._resolve_appearance_order()
-
         # Finalize the axes details
         self._add_axis_labels(ax)
         if self.legend:
@@ -505,7 +476,7 @@ def lineplot(
     dashes=True, markers=None, style_order=None,
     estimator="mean", errorbar=("ci", 95), n_boot=1000, seed=None,
     orient="x", sort=True, err_style="band", err_kws=None,
-    legend="auto", ci="deprecated", ax=None, semantic_order="data", **kwargs
+    legend="auto", ci="deprecated", ax=None, **kwargs
 ):
 
     # Handle deprecation of ci parameter
@@ -518,7 +489,7 @@ def lineplot(
         ),
         estimator=estimator, n_boot=n_boot, seed=seed, errorbar=errorbar,
         sort=sort, orient=orient, err_style=err_style, err_kws=err_kws,
-        legend=legend, semantic_order=semantic_order,
+        legend=legend,
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -542,7 +513,6 @@ def lineplot(
     kwargs["color"] = _default_color(ax.plot, hue, color, kwargs)
 
     p.plot(ax, kwargs)
-    ax._seaborn_plotter = p
     return ax
 
 
@@ -639,13 +609,13 @@ def scatterplot(
     palette=None, hue_order=None, hue_norm=None,
     sizes=None, size_order=None, size_norm=None,
     markers=True, style_order=None, legend="auto", ax=None,
-    semantic_order="data", **kwargs
+    **kwargs
 ):
 
     p = _ScatterPlotter(
         data=data,
         variables=dict(x=x, y=y, hue=hue, size=size, style=style),
-        legend=legend, semantic_order=semantic_order,
+        legend=legend
     )
 
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
@@ -664,7 +634,6 @@ def scatterplot(
     kwargs["color"] = _default_color(ax.scatter, hue, color, kwargs)
 
     p.plot(ax, kwargs)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -736,7 +705,7 @@ def relplot(
     sizes=None, size_order=None, size_norm=None,
     markers=None, dashes=None, style_order=None,
     legend="auto", kind="scatter", height=5, aspect=1, facet_kws=None,
-    semantic_order="data", **kwargs
+    **kwargs
 ):
 
     if kind == "scatter":
@@ -780,7 +749,6 @@ def relplot(
         data=data,
         variables=variables,
         legend=legend,
-        semantic_order=semantic_order,
     )
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
     p.map_size(sizes=sizes, order=size_order, norm=size_norm)
@@ -821,7 +789,7 @@ def relplot(
         palette=palette, hue_order=hue_order, hue_norm=hue_norm,
         sizes=sizes, size_order=size_order, size_norm=size_norm,
         markers=markers, dashes=dashes, style_order=style_order,
-        legend=False, semantic_order=semantic_order,
+        legend=False,
     )
     plot_kws.update(kwargs)
     if kind == "scatter":
@@ -863,14 +831,8 @@ def relplot(
         **grid_kws,
         col_wrap=col_wrap, row_order=row_order, col_order=col_order,
         height=height, aspect=aspect, dropna=False,
-        semantic_order=semantic_order,
         **facet_kws
     )
-
-    # Attach p to the grid so it can read appearance levels resolved by
-    # the real inner plotters inside map_dataframe below.
-    p.facets = g
-    p._initialize_appearance_levels()
 
     # Draw the plot
     g.map_dataframe(func, **plot_kws)
@@ -909,10 +871,6 @@ def relplot(
             attrs["size"] = "s"
         elif kind == "line":
             attrs["size"] = "linewidth"
-
-        if p.semantic_order == "appearance":
-            p._resolve_appearance_order()
-
         p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
         if p.legend_data:
             g.add_legend(legend_data=p.legend_data,

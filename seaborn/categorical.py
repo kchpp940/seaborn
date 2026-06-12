@@ -62,11 +62,9 @@ class _CategoricalPlotter(VectorPlotter):
         require_numeric=False,
         color=None,
         legend="auto",
-        semantic_order="data",
     ):
 
-        super().__init__(data=data, variables=variables,
-                         semantic_order=semantic_order)
+        super().__init__(data=data, variables=variables)
 
         # This method takes care of some bookkeeping that is necessary because the
         # original categorical plots (prior to the 2021 refactor) had some rules that
@@ -420,25 +418,7 @@ class _CategoricalPlotter(VectorPlotter):
                 if (col := f"{var}{suf}") in data:
                     data[col] = inv(data[col])
 
-    def _configure_legend(self, ax, func, common_kws=None, semantic_kws=None,
-                          dodge=False):
-        if self.semantic_order == "appearance" and "hue" in self.variables:
-            if dodge:
-                appearance_order = list(self._hue_map.levels)
-            else:
-                draw_order = []
-                seen = set()
-                for sub_vars, _ in self.iter_data(
-                    ("hue",), from_comp_data=True, allow_empty=True
-                ):
-                    level = sub_vars["hue"]
-                    if level not in seen:
-                        draw_order.append(level)
-                        seen.add(level)
-                appearance_order = list(reversed(draw_order))
-            self._set_appearance_levels("hue", appearance_order)
-            self._resolve_appearance_order()
-
+    def _configure_legend(self, ax, func, common_kws=None, semantic_kws=None):
         if self.legend == "auto":
             show_legend = not self._redundant_hue and self.input_format != "wide"
         else:
@@ -532,8 +512,7 @@ class _CategoricalPlotter(VectorPlotter):
             if "hue" in self.variables:
                 points.set_facecolors(self._hue_map(sub_data["hue"]))
 
-        self._configure_legend(ax, _scatter_legend_artist, common_kws=plot_kws,
-                               dodge=dodge)
+        self._configure_legend(ax, _scatter_legend_artist, common_kws=plot_kws)
 
     def plot_swarms(
         self,
@@ -607,7 +586,7 @@ class _CategoricalPlotter(VectorPlotter):
                 points.draw = draw.__get__(points)
 
         _draw_figure(ax.figure)
-        self._configure_legend(ax, _scatter_legend_artist, plot_kws, dodge=dodge)
+        self._configure_legend(ax, _scatter_legend_artist, plot_kws)
 
     def plot_boxes(
         self,
@@ -771,7 +750,7 @@ class _CategoricalPlotter(VectorPlotter):
             ax.add_container(BoxPlotContainer(artists))
 
         legend_artist = _get_patch_legend_artist(fill)
-        self._configure_legend(ax, legend_artist, boxprops, dodge=dodge)
+        self._configure_legend(ax, legend_artist, boxprops)
 
     def plot_boxens(
         self,
@@ -912,7 +891,7 @@ class _CategoricalPlotter(VectorPlotter):
 
         legend_artist = _get_patch_legend_artist(fill)
         common_kws = {**box_kws, "linewidth": linewidth, "edgecolor": linecolor}
-        self._configure_legend(ax, legend_artist, common_kws, dodge=dodge)
+        self._configure_legend(ax, legend_artist, common_kws)
 
     def plot_violins(
         self,
@@ -1188,7 +1167,7 @@ class _CategoricalPlotter(VectorPlotter):
 
         legend_artist = _get_patch_legend_artist(fill)
         common_kws = {**plot_kws, "linewidth": linewidth, "edgecolor": linecolor}
-        self._configure_legend(ax, legend_artist, common_kws, dodge=dodge)
+        self._configure_legend(ax, legend_artist, common_kws)
 
     def plot_points(
         self,
@@ -1268,8 +1247,7 @@ class _CategoricalPlotter(VectorPlotter):
 
         legend_artist = partial(mpl.lines.Line2D, [], [])
         semantic_kws = {"hue": {"marker": markers, "linestyle": linestyles}}
-        self._configure_legend(ax, legend_artist, sub_kws, semantic_kws,
-                               dodge=dodge)
+        self._configure_legend(ax, legend_artist, sub_kws, semantic_kws)
 
     def plot_bars(
         self,
@@ -1351,7 +1329,7 @@ class _CategoricalPlotter(VectorPlotter):
                 )
 
         legend_artist = _get_patch_legend_artist(fill)
-        self._configure_legend(ax, legend_artist, plot_kws, dodge=dodge)
+        self._configure_legend(ax, legend_artist, plot_kws)
 
     def plot_errorbars(self, ax, data, capsize, err_kws):
 
@@ -1621,7 +1599,7 @@ def boxplot(
     orient=None, color=None, palette=None, saturation=.75, fill=True,
     dodge="auto", width=.8, gap=0, whis=1.5, linecolor="auto", linewidth=None,
     fliersize=None, hue_norm=None, native_scale=False, log_scale=None, formatter=None,
-    legend="auto", semantic_order="data", ax=None, **kwargs
+    legend="auto", ax=None, **kwargs
 ):
 
     p = _CategoricalPlotter(
@@ -1631,7 +1609,6 @@ def boxplot(
         orient=orient,
         color=color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -1677,7 +1654,6 @@ def boxplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -1751,7 +1727,7 @@ def violinplot(
     bw_method="scott", bw_adjust=1, density_norm="area", common_norm=False,
     hue_norm=None, formatter=None, log_scale=None, native_scale=False,
     legend="auto", scale=deprecated, scale_hue=deprecated, bw=deprecated,
-    inner_kws=None, semantic_order="data", ax=None, **kwargs,
+    inner_kws=None, ax=None, **kwargs,
 ):
 
     p = _CategoricalPlotter(
@@ -1761,7 +1737,6 @@ def violinplot(
         orient=orient,
         color=color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -1819,7 +1794,6 @@ def violinplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -1942,7 +1916,7 @@ def boxenplot(
     width_method="exponential", k_depth="tukey", outlier_prop=0.007, trust_alpha=0.05,
     showfliers=True, hue_norm=None, log_scale=None, native_scale=False, formatter=None,
     legend="auto", scale=deprecated, box_kws=None, flier_kws=None, line_kws=None,
-    semantic_order="data", ax=None, **kwargs,
+    ax=None, **kwargs,
 ):
 
     p = _CategoricalPlotter(
@@ -1952,7 +1926,6 @@ def boxenplot(
         orient=orient,
         color=color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2008,7 +1981,6 @@ def boxenplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -2112,7 +2084,7 @@ def stripplot(
     jitter=True, dodge=False, orient=None, color=None, palette=None,
     size=5, edgecolor=default, linewidth=0,
     hue_norm=None, log_scale=None, native_scale=False, formatter=None, legend="auto",
-    semantic_order="data", ax=None, **kwargs
+    ax=None, **kwargs
 ):
 
     p = _CategoricalPlotter(
@@ -2122,7 +2094,6 @@ def stripplot(
         orient=orient,
         color=color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2165,7 +2136,6 @@ def stripplot(
     # suggesting that _attach could add default axes labels, which seems smart.
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -2239,7 +2209,7 @@ def swarmplot(
     dodge=False, orient=None, color=None, palette=None,
     size=5, edgecolor=None, linewidth=0, hue_norm=None, log_scale=None,
     native_scale=False, formatter=None, legend="auto", warn_thresh=.05,
-    semantic_order="data", ax=None, **kwargs
+    ax=None, **kwargs
 ):
 
     p = _CategoricalPlotter(
@@ -2249,7 +2219,6 @@ def swarmplot(
         orient=orient,
         color=color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2295,7 +2264,6 @@ def swarmplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -2371,7 +2339,7 @@ def barplot(
     weights=None, orient=None, color=None, palette=None, saturation=.75,
     fill=True, hue_norm=None, width=.8, dodge="auto", gap=0, log_scale=None,
     native_scale=False, formatter=None, legend="auto", capsize=0, err_kws=None,
-    ci=deprecated, errcolor=deprecated, errwidth=deprecated, semantic_order="data", ax=None, **kwargs,
+    ci=deprecated, errcolor=deprecated, errwidth=deprecated, ax=None, **kwargs,
 ):
 
     errorbar = utils._deprecate_ci(errorbar, ci)
@@ -2388,7 +2356,6 @@ def barplot(
         orient=orient,
         color=color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2435,7 +2402,6 @@ def barplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -2516,7 +2482,7 @@ def pointplot(
     linestyles=default, dodge=False, log_scale=None, native_scale=False,
     orient=None, capsize=0, formatter=None, legend="auto", err_kws=None,
     ci=deprecated, errwidth=deprecated, join=deprecated, scale=deprecated,
-    semantic_order="data", ax=None, **kwargs,
+    ax=None, **kwargs,
 ):
 
     errorbar = utils._deprecate_ci(errorbar, ci)
@@ -2530,7 +2496,6 @@ def pointplot(
         # did *not* default to multi-colored unless a palette was specified.
         color="C0" if (color is None and palette is None) else color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2572,7 +2537,6 @@ def pointplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -2664,7 +2628,7 @@ def countplot(
     data=None, *, x=None, y=None, hue=None, order=None, hue_order=None,
     orient=None, color=None, palette=None, saturation=.75, fill=True, hue_norm=None,
     stat="count", width=.8, dodge="auto", gap=0, log_scale=None, native_scale=False,
-    formatter=None, legend="auto", semantic_order="data", ax=None, **kwargs
+    formatter=None, legend="auto", ax=None, **kwargs
 ):
 
     if x is None and y is not None:
@@ -2683,7 +2647,6 @@ def countplot(
         orient=orient,
         color=color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     if ax is None:
@@ -2735,7 +2698,6 @@ def countplot(
 
     p._add_axis_labels(ax)
     p._adjust_cat_axis(ax, axis=p.orient)
-    ax._seaborn_plotter = p
 
     return ax
 
@@ -2803,8 +2765,7 @@ def catplot(
     col_wrap=None, height=5, aspect=1, log_scale=None, native_scale=False,
     formatter=None, orient=None, color=None, palette=None, hue_norm=None,
     legend="auto", legend_out=True, sharex=True, sharey=True,
-    margin_titles=False, facet_kws=None, ci=deprecated, semantic_order="data",
-    **kwargs
+    margin_titles=False, facet_kws=None, ci=deprecated, **kwargs
 ):
 
     # Check for attempt to plot onto specific axes and warn
@@ -2843,7 +2804,6 @@ def catplot(
         # did *not* default to multi-colored unless a palette was specified.
         color="C0" if kind == "point" and palette is None and color is None else color,
         legend=legend,
-        semantic_order=semantic_order,
     )
 
     for var in ["row", "col"]:
@@ -2866,7 +2826,6 @@ def catplot(
         row_order=row_order, col_order=col_order, sharex=sharex, sharey=sharey,
         legend_out=legend_out, margin_titles=margin_titles,
         height=height, aspect=aspect,
-        semantic_order=semantic_order,
         **facet_kws,
     )
 
@@ -2876,9 +2835,7 @@ def catplot(
     has_xy_data = p.has_xy_data
 
     if not native_scale or p.var_types[p.orient] == "categorical":
-        p.scale_categorical(
-            p.orient, order=order, formatter=formatter,
-        )
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(g, log_scale=log_scale)
 
@@ -3182,11 +3139,7 @@ def catplot(
     else:
         show_legend = bool(legend)
     if show_legend:
-        if p.semantic_order == "appearance" and "hue" in p.variables:
-            label_order = p._get_display_levels("hue")
-        else:
-            label_order = hue_order
-        g.add_legend(title=p.variables.get("hue"), label_order=label_order)
+        g.add_legend(title=p.variables.get("hue"), label_order=hue_order)
 
     if data is not None:
         # Replace the dataframe on the FacetGrid for any subsequent maps

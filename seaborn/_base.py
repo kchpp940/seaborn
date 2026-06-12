@@ -40,7 +40,7 @@ class SemanticMapping:
     # A mapping from the data values to corresponding plot attributes
     lookup_table = None
 
-    def __init__(self, plotter, semantic_order="data"):
+    def __init__(self, plotter):
 
         # TODO Putting this here so we can continue to use a lot of the
         # logic that's built into the library, but the idea of this class
@@ -48,7 +48,6 @@ class SemanticMapping:
         # kind of plot they're going to be used to draw.
         # Fully achieving that is going to take some thinking.
         self.plotter = plotter
-        self.semantic_order = semantic_order
 
     def _check_list_length(self, levels, values, variable):
         """Input check when values are provided as a list."""
@@ -99,7 +98,6 @@ class HueMapping(SemanticMapping):
 
     def __init__(
         self, plotter, palette=None, order=None, norm=None, saturation=1,
-        semantic_order="data",
     ):
         """Map the levels of the `hue` variable to distinct colors.
 
@@ -108,7 +106,7 @@ class HueMapping(SemanticMapping):
         # TODO add generic parameters
 
         """
-        super().__init__(plotter, semantic_order=semantic_order)
+        super().__init__(plotter)
 
         data = plotter.plot_data.get("hue", pd.Series(dtype=float))
 
@@ -304,7 +302,6 @@ class SizeMapping(SemanticMapping):
 
     def __init__(
         self, plotter, sizes=None, order=None, norm=None,
-        semantic_order="data",
     ):
         """Map the levels of the `size` variable to distinct values.
 
@@ -313,7 +310,7 @@ class SizeMapping(SemanticMapping):
         # TODO add generic parameters
 
         """
-        super().__init__(plotter, semantic_order=semantic_order)
+        super().__init__(plotter)
 
         data = plotter.plot_data.get("size", pd.Series(dtype=float))
 
@@ -525,8 +522,7 @@ class StyleMapping(SemanticMapping):
     # Style mapping is always treated as categorical
     map_type = "categorical"
 
-    def __init__(self, plotter, markers=None, dashes=None, order=None,
-                 semantic_order="data"):
+    def __init__(self, plotter, markers=None, dashes=None, order=None):
         """Map the levels of the `style` variable to distinct values.
 
         Parameters
@@ -534,7 +530,7 @@ class StyleMapping(SemanticMapping):
         # TODO add generic parameters
 
         """
-        super().__init__(plotter, semantic_order=semantic_order)
+        super().__init__(plotter)
 
         data = plotter.plot_data.get("style", pd.Series(dtype=float))
 
@@ -627,9 +623,7 @@ class VectorPlotter:
 
     _default_size_range = 1, 2  # Unused but needed in tests, ugh
 
-    def __init__(self, data=None, variables={}, semantic_order="data"):
-
-        _check_argument("semantic_order", ["data", "appearance"], semantic_order)
+    def __init__(self, data=None, variables={}):
 
         self._var_levels = {}
         # var_ordered is relevant only for categorical axis variables, and may
@@ -637,10 +631,6 @@ class VectorPlotter:
         # such information and is set up by the scale_* methods. The analogous
         # information for numeric axes would be information about log scales.
         self._var_ordered = {"x": False, "y": False}  # alt., used DefaultDict
-        self.semantic_order = semantic_order
-        self._appearance_levels = {}
-        self.ax = None
-        self.facets = None
         self.assign_variables(data, variables)
 
         # TODO Lots of tests assume that these are called to initialize the
@@ -650,84 +640,10 @@ class VectorPlotter:
             if var in variables:
                 getattr(self, f"map_{var}")()
 
-        self._initialize_appearance_levels()
-
     @property
     def has_xy_data(self):
         """Return True at least one of x or y is defined."""
         return bool({"x", "y"} & set(self.variables))
-
-    def _set_appearance_levels(self, var, levels):
-        """Record the order of levels as they appear in the plot.
-
-        Parameters
-        ----------
-        var : str
-            Name of the semantic variable (e.g. "hue", "size", "style").
-        levels : list
-            Ordered list of level values in appearance order.
-
-        """
-        self._appearance_levels[var] = list(levels)
-
-    def _initialize_appearance_levels(self):
-        """Phase 1: Initialize appearance levels from data order.
-
-        This is called as soon as var_levels are available (after mapper
-        setup or FacetGrid attachment). Axis/facet variables (x/y/row/col)
-        keep their data order forever (categories don't overlap).
-        Semantic variables (hue/size/style) get data order as a fallback;
-        they will be overwritten in Phase 3 if ``semantic_order="appearance"``
-        and the drawing order differs from data order.
-        """
-        for var in list(self.variables.keys()):
-            if var not in self._appearance_levels:
-                data_levels = self.var_levels.get(var)
-                if data_levels is not None and len(data_levels) > 0:
-                    self._appearance_levels[var] = list(data_levels)
-
-    def _resolve_appearance_order(self):
-        """Phase 3: Resolve final appearance order after drawing.
-
-        The base implementation calls ``_initialize_appearance_levels`` to
-        ensure axis/facet variables are populated. Subclasses that implement
-        overlay/stack logic will call ``_set_appearance_levels`` for
-        hue/size/style *before* calling this method.
-
-        If this plotter is attached to a FacetGrid, any hue/size/style
-        levels already present in the grid registry take precedence over
-        this plotter's own values, because the grid's values come from the
-        real inner plotters that actually drew artists. Axis/facet variables
-        (x/y/row/col) are only populated from this plotter's own var_levels
-        and never overwritten by the grid.
-        """
-        self._initialize_appearance_levels()
-        if self.facets is not None:
-            for var in ["hue", "size", "style"]:
-                if var in self.facets._appearance_levels:
-                    self._appearance_levels[var] = list(
-                        self.facets._appearance_levels[var]
-                    )
-            self.facets._sync_appearance_levels(self)
-
-    def _get_display_levels(self, var):
-        """Return levels ordered for display (legend, ticks, etc.).
-
-        If this plotter is attached to a FacetGrid *and* the grid has a
-        resolved appearance order for ``var``, that takes precedence. The
-        grid is populated by real inner plotters during ``map_dataframe``.
-        This prevents the outer, never-drawn figure-level plotter from
-        falling back on an inferred order.
-        """
-        if self.semantic_order != "appearance":
-            levels = self.var_levels.get(var)
-            return list(levels) if levels is not None else []
-        if self.facets is not None and var in self.facets._appearance_levels:
-            return self.facets._appearance_levels[var]
-        if var in self._appearance_levels:
-            return self._appearance_levels[var]
-        levels = self.var_levels.get(var)
-        return list(levels) if levels is not None else []
 
     @property
     def var_levels(self):
@@ -917,23 +833,16 @@ class VectorPlotter:
 
         return plot_data, variables
 
-    def map_hue(self, palette=None, order=None, norm=None, saturation=1,
-                semantic_order=None):
-        if semantic_order is None:
-            semantic_order = self.semantic_order
-        mapping = HueMapping(self, palette, order, norm, saturation, semantic_order)
+    def map_hue(self, palette=None, order=None, norm=None, saturation=1):
+        mapping = HueMapping(self, palette, order, norm, saturation)
         self._hue_map = mapping
 
-    def map_size(self, sizes=None, order=None, norm=None, semantic_order=None):
-        if semantic_order is None:
-            semantic_order = self.semantic_order
-        mapping = SizeMapping(self, sizes, order, norm, semantic_order)
+    def map_size(self, sizes=None, order=None, norm=None):
+        mapping = SizeMapping(self, sizes, order, norm)
         self._size_map = mapping
 
-    def map_style(self, markers=None, dashes=None, order=None, semantic_order=None):
-        if semantic_order is None:
-            semantic_order = self.semantic_order
-        mapping = StyleMapping(self, markers, dashes, order, semantic_order)
+    def map_style(self, markers=None, dashes=None, order=None):
+        mapping = StyleMapping(self, markers, dashes, order)
         self._style_map = mapping
 
     def iter_data(
@@ -1058,7 +967,7 @@ class VectorPlotter:
     @property
     def comp_data(self):
         """Dataframe with numeric x and y, after unit conversion and log scaling."""
-        if not hasattr(self, "converters"):
+        if not hasattr(self, "ax"):
             # Probably a good idea, but will need a bunch of tests updated
             # Most of these tests should just use the external interface
             # Then this can be re-enabled.
@@ -1145,7 +1054,6 @@ class VectorPlotter:
                 self.var_levels["col"] = obj.col_names
             if obj.row_names is not None:
                 self.var_levels["row"] = obj.row_names
-            self._initialize_appearance_levels()
         else:
             self.ax = obj
             self.facets = None
@@ -1219,9 +1127,7 @@ class VectorPlotter:
             for converter, seed_data in grouped:
                 if self.var_types[var] == "categorical":
                     if self._var_ordered[var]:
-                        order = self._get_display_levels(var)
-                        if not len(order):
-                            order = self.var_levels[var]
+                        order = self.var_levels[var]
                     else:
                         order = None
                     seed_data = categorical_order(seed_data, order)
@@ -1406,11 +1312,7 @@ class VectorPlotter:
         elif mapper.levels is None:
             levels = formatted_levels = []
         else:
-            levels = self._get_display_levels(var)
-            if not len(levels):
-                levels = formatted_levels = mapper.levels
-            else:
-                formatted_levels = levels
+            levels = formatted_levels = mapper.levels
 
         if not title and self.variables.get(var, None) is not None:
             update((self.variables[var], "title"), self.variables[var], **title_kws)
@@ -1521,10 +1423,7 @@ class VectorPlotter:
         # Track whether the order is given explicitly so that we can know
         # whether or not to use the order constructed here downstream
         self._var_ordered[axis] = order is not None or cat_data.dtype.name == "category"
-        order = pd.Index(
-            categorical_order(cat_data, order),
-            name=axis,
-        )
+        order = pd.Index(categorical_order(cat_data, order), name=axis)
 
         # Then convert data to strings. This is because in matplotlib,
         # "categorical" data really mean "string" data, so doing this artists
@@ -1539,10 +1438,6 @@ class VectorPlotter:
 
         # Update the levels list with the type-converted order variable
         self.var_levels[axis] = order
-
-        # For categorical axis variables, appearance order = data order
-        # (categories are placed side-by-side, no occlusion)
-        self._appearance_levels[axis] = order
 
         # Now ensure that seaborn will use categorical rules internally
         self.var_types[axis] = "categorical"
@@ -1878,5 +1773,4 @@ def categorical_order(vector, order=None):
                     order = np.sort(order)
 
         order = filter(pd.notnull, order)
-
     return list(order)

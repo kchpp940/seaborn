@@ -1,5 +1,7 @@
 """Control plot style and scaling using the matplotlib rcParams interface."""
+import copy
 import functools
+import warnings
 import matplotlib as mpl
 from cycler import cycler
 from . import palettes
@@ -7,7 +9,12 @@ from . import palettes
 
 __all__ = ["set_theme", "set", "reset_defaults", "reset_orig",
            "axes_style", "set_style", "plotting_context", "set_context",
-           "set_palette"]
+           "set_palette",
+           "register_theme_profile", "get_theme_profile",
+           "list_theme_profiles", "unregister_theme_profile"]
+
+
+_theme_profile_registry: dict = {}
 
 
 _style_keys = [
@@ -78,9 +85,385 @@ _context_keys = [
 
 ]
 
+_VALID_PROFILE_KEYS = frozenset({
+    "context", "style", "palette", "font", "font_scale",
+    "color_codes", "rc",
+})
 
-def set_theme(context="notebook", style="darkgrid", palette="deep",
-              font="sans-serif", font_scale=1, color_codes=True, rc=None):
+_STYLE_KEY_SET = frozenset(_style_keys)
+_CONTEXT_KEY_SET = frozenset(_context_keys)
+
+
+def _validate_rc_dict(rc, category=None):
+    """Validate a dict of rc parameters.
+
+    Parameters
+    ----------
+    rc : dict
+        Dictionary of rc parameter mappings to validate.
+    category : {"style", "context", None}
+        If set, only allow keys in that category and warn about others.
+
+    Returns
+    -------
+    validated : dict
+        The validated (possibly filtered) rc dict.
+
+    Raises
+    ------
+    TypeError
+        If rc is not a dict.
+    ValueError
+        If no keys are valid matplotlib rcParams.
+    """
+    if rc is None:
+        return {}
+    if not isinstance(rc, dict):
+        raise TypeError(
+            f"`rc` must be a dict of matplotlib rcParams, got {type(rc).__name__}"
+        )
+
+    if category == "style":
+        invalid = {k for k in rc if k not in _STYLE_KEY_SET}
+        if invalid:
+            warnings.warn(
+                f"Ignoring {len(invalid)} rc key(s) not in style definition: "
+                f"{', '.join(sorted(invalid))}",
+                UserWarning,
+                stacklevel=3,
+            )
+        return {k: v for k, v in rc.items() if k in _STYLE_KEY_SET}
+
+    if category == "context":
+        invalid = {k for k in rc if k not in _CONTEXT_KEY_SET}
+        if invalid:
+            warnings.warn(
+                f"Ignoring {len(invalid)} rc key(s) not in context definition: "
+                f"{', '.join(sorted(invalid))}",
+                UserWarning,
+                stacklevel=3,
+            )
+        return {k: v for k, v in rc.items() if k in _CONTEXT_KEY_SET}
+
+    bad_keys = [k for k in rc if k not in mpl.rcParams]
+    if bad_keys:
+        raise ValueError(
+            f"Unrecognized matplotlib rcParam key(s): {', '.join(sorted(bad_keys))}. "
+            "Check matplotlib.rcParams for valid keys."
+        )
+    return dict(rc)
+
+
+def _validate_profile_params(params):
+    """Validate and normalize a theme profile parameter dict.
+
+    A profile may contain any subset of the keys accepted by
+    :func:`set_theme`: context, style, palette, font, font_scale,
+    color_codes, and rc (a flat dict of matplotlib rcParams).
+
+    Parameters
+    ----------
+    params : dict
+        Profile parameter dictionary.
+
+    Returns
+    -------
+    normalized : dict
+        Normalized copy with validated values.
+    """
+    if not isinstance(params, dict):
+        raise TypeError(
+            f"Theme profile params must be a dict, got {type(params).__name__}"
+        )
+
+    unknown = frozenset(params) - _VALID_PROFILE_KEYS
+    if unknown:
+        raise ValueError(
+            f"Theme profile contains unknown key(s): {', '.join(sorted(unknown))}. "
+            f"Valid keys are: {', '.join(sorted(_VALID_PROFILE_KEYS))}"
+        )
+
+    normalized = {}
+
+    if "context" in params:
+        ctx = params["context"]
+        if not (isinstance(ctx, (str, dict)) or ctx is None):
+            raise TypeError(
+                "profile 'context' must be a string name, dict of rcParams, or None"
+            )
+        if isinstance(ctx, str) and ctx not in ["paper", "notebook", "talk", "poster"]:
+            raise ValueError(
+                f"profile 'context' string must be one of "
+                f"paper, notebook, talk, poster; got {ctx!r}"
+            )
+        normalized["context"] = ctx
+    else:
+        normalized["context"] = "notebook"
+
+    if "style" in params:
+        sty = params["style"]
+        if not (isinstance(sty, (str, dict)) or sty is None):
+            raise TypeError(
+                "profile 'style' must be a string name, dict of rcParams, or None"
+            )
+        if isinstance(sty, str) and sty not in ["white", "dark", "whitegrid", "darkgrid", "ticks"]:
+            raise ValueError(
+                f"profile 'style' string must be one of "
+                f"white, dark, whitegrid, darkgrid, ticks; got {sty!r}"
+            )
+        normalized["style"] = sty
+    else:
+        normalized["style"] = "darkgrid"
+
+    if "palette" in params:
+        normalized["palette"] = params["palette"]
+    else:
+        normalized["palette"] = "deep"
+
+    if "font" in params:
+        if not isinstance(params["font"], (str, list)):
+            raise TypeError("profile 'font' must be a string or list of strings")
+        normalized["font"] = params["font"]
+    else:
+        normalized["font"] = "sans-serif"
+
+    if "font_scale" in params:
+        fs = params["font_scale"]
+        if not isinstance(fs, (int, float)):
+            raise TypeError("profile 'font_scale' must be a number")
+        if fs <= 0:
+            raise ValueError("profile 'font_scale' must be positive")
+        normalized["font_scale"] = fs
+    else:
+        normalized["font_scale"] = 1
+
+    if "color_codes" in params:
+        if not isinstance(params["color_codes"], bool):
+            raise TypeError("profile 'color_codes' must be a bool")
+        normalized["color_codes"] = params["color_codes"]
+    else:
+        normalized["color_codes"] = True
+
+    if "rc" in params:
+        normalized["rc"] = _validate_rc_dict(params["rc"])
+    else:
+        normalized["rc"] = {}
+
+    return normalized
+
+
+def register_theme_profile(name, params, *, overwrite=False):
+    """Register a named theme profile for reuse across plots.
+
+    A theme profile bundles any of the parameters accepted by
+    :func:`set_theme` so you can refer to them by a short string name
+    in :func:`set_theme`, :func:`axes_style`, :func:`plotting_context`,
+    and figure-level plotting functions.
+
+    Registered profiles are global for the Python process and therefore
+    ideal for codifying a project's visual identity.
+
+    Parameters
+    ----------
+    name : str
+        Unique name used to look up the profile (e.g. ``"corporate"``).
+    params : dict
+        Theme parameters. Recognized keys (all optional):
+
+        - ``context`` : ``"paper"`` | ``"notebook"`` | ``"talk"`` | ``"poster"`` | dict
+        - ``style`` : ``"white"`` | ``"dark"`` | ``"whitegrid"`` | ``"darkgrid"`` | ``"ticks"`` | dict
+        - ``palette`` : palette name, list of colors, or seaborn palette
+        - ``font`` : font family name or list of family names
+        - ``font_scale`` : positive number (independent font scaling)
+        - ``color_codes`` : bool (whether to remap ``"b"``, ``"g"``, ...)
+        - ``rc`` : dict of additional matplotlib rcParams
+    overwrite : bool, default False
+        If True, replace an existing profile with the same ``name``.
+        Otherwise raise ``ValueError``.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is already registered and ``overwrite`` is False,
+        or if ``params`` contains invalid keys / values.
+    TypeError
+        If ``params`` is not a dict.
+
+    Examples
+    --------
+    Register a custom profile and apply it globally:
+
+    .. code:: python
+
+        import seaborn as sns
+
+        sns.register_theme_profile("corp", {
+            "style": "white",
+            "context": "talk",
+            "palette": "Blues_d",
+            "font": "serif",
+            "rc": {"axes.linewidth": 2},
+        })
+
+        sns.set_theme(profile="corp")
+
+    Use it inside a temporary context:
+
+    .. code:: python
+
+        with sns.axes_style(profile="corp"):
+            ...
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError("Theme profile name must be a non-empty string")
+
+    if name in ["white", "dark", "whitegrid", "darkgrid", "ticks",
+                "paper", "notebook", "talk", "poster"]:
+        raise ValueError(
+            f"Theme profile name {name!r} collides with a built-in style/context "
+            f"name; please choose a different identifier."
+        )
+
+    if name in _theme_profile_registry and not overwrite:
+        raise ValueError(
+            f"Theme profile {name!r} is already registered. "
+            "Use overwrite=True to replace it."
+        )
+
+    normalized = _validate_profile_params(params)
+    _theme_profile_registry[name] = normalized
+
+
+def get_theme_profile(name):
+    """Return a copy of the registered theme profile *name*.
+
+    Parameters
+    ----------
+    name : str
+        Name of the profile previously registered with
+        :func:`register_theme_profile`.
+
+    Returns
+    -------
+    profile : dict
+        A copy of the stored profile parameters.
+
+    Raises
+    ------
+    ValueError
+        If no profile with the given name exists.
+
+    See Also
+    --------
+    register_theme_profile, list_theme_profiles, unregister_theme_profile
+    """
+    if name not in _theme_profile_registry:
+        available = list_theme_profiles()
+        if available:
+            raise ValueError(
+                f"Unknown theme profile {name!r}. "
+                f"Available profiles: {', '.join(available)}"
+            )
+        raise ValueError(
+            f"Unknown theme profile {name!r}. "
+            "No profiles are currently registered; use "
+            "sns.register_theme_profile() to add one."
+        )
+    return copy.deepcopy(_theme_profile_registry[name])
+
+
+def list_theme_profiles():
+    """Return the names of all registered theme profiles.
+
+    Returns
+    -------
+    names : list of str
+        Alphabetically sorted list of profile names.
+
+    See Also
+    --------
+    register_theme_profile, get_theme_profile, unregister_theme_profile
+    """
+    return sorted(_theme_profile_registry)
+
+
+def unregister_theme_profile(name):
+    """Remove a theme profile from the registry.
+
+    Parameters
+    ----------
+    name : str
+        Name of the profile to remove.
+
+    Raises
+    ------
+    ValueError
+        If the profile does not exist.
+
+    See Also
+    --------
+    register_theme_profile, list_theme_profiles
+    """
+    if name not in _theme_profile_registry:
+        raise ValueError(f"Cannot unregister unknown theme profile {name!r}")
+    del _theme_profile_registry[name]
+
+
+def _resolve_profile(profile, explicit, *, kind=None):
+    """Resolve a profile (by name) and merge with explicit overrides.
+
+    Parameters
+    ----------
+    profile : str, dict, or None
+        Profile name (string), inline profile dict, or None.
+    explicit : dict
+        Explicit keyword arguments that should win over profile values.
+    kind : {None, "style", "context"}
+        If "style" or "context", only return the relevant subset of
+        parameters.  Otherwise return the full set for ``set_theme``.
+
+    Returns
+    -------
+    merged : dict
+    """
+    base = {
+        "context": "notebook", "style": "darkgrid", "palette": "deep",
+        "font": "sans-serif", "font_scale": 1, "color_codes": True, "rc": {},
+    }
+
+    if profile is None:
+        resolved = base
+    elif isinstance(profile, str):
+        resolved = get_theme_profile(profile)
+    elif isinstance(profile, dict):
+        resolved = _validate_profile_params(profile)
+    else:
+        raise TypeError(
+            f"`profile` must be a string name, dict, or None; "
+            f"got {type(profile).__name__}"
+        )
+
+    merged = {**resolved}
+
+    for k, v in explicit.items():
+        if v is None:
+            continue
+        if k == "rc" and isinstance(v, dict):
+            merged["rc"] = {**merged.get("rc", {}), **v}
+        else:
+            merged[k] = v
+
+    if kind == "style":
+        return {"style": merged["style"], "rc": merged["rc"]}
+    if kind == "context":
+        return {"context": merged["context"], "font_scale": merged["font_scale"],
+                "rc": merged["rc"]}
+    return merged
+
+
+def set_theme(context=None, style=None, palette=None,
+              font=None, font_scale=None, color_codes=None, rc=None,
+              profile=None):
     """
     Set aspects of the visual theme for all matplotlib and seaborn plots.
 
@@ -109,6 +492,10 @@ def set_theme(context="notebook", style="darkgrid", palette="deep",
         color codes (e.g. "b", "g", "r", etc.) to the colors from this palette.
     rc : dict or None
         Dictionary of rc parameter mappings to override the above.
+    profile : str, dict, or None
+        Name of a registered theme profile (see
+        :func:`register_theme_profile`), or an inline profile dict.
+        Explicit arguments above take precedence over the profile values.
 
     Examples
     --------
@@ -116,11 +503,27 @@ def set_theme(context="notebook", style="darkgrid", palette="deep",
     .. include:: ../docstrings/set_theme.rst
 
     """
-    set_context(context, font_scale)
-    set_style(style, rc={"font.family": font})
-    set_palette(palette, color_codes=color_codes)
-    if rc is not None:
-        mpl.rcParams.update(rc)
+    explicit = dict(
+        context=context, style=style, palette=palette,
+        font=font, font_scale=font_scale, color_codes=color_codes, rc=rc,
+    )
+    merged = _resolve_profile(profile, explicit)
+
+    all_rc = _validate_rc_dict(merged["rc"])
+    style_rc = {k: v for k, v in all_rc.items() if k in _STYLE_KEY_SET}
+    context_rc = {k: v for k, v in all_rc.items() if k in _CONTEXT_KEY_SET}
+    extra_rc = {k: v for k, v in all_rc.items()
+                if k not in _STYLE_KEY_SET and k not in _CONTEXT_KEY_SET}
+
+    set_context(merged["context"], merged["font_scale"], rc=context_rc)
+    set_style(merged["style"], rc={
+        **({"font.family": merged["font"]} if merged["font"] is not None else {}),
+        **style_rc,
+    })
+    set_palette(merged["palette"], color_codes=merged["color_codes"])
+
+    if extra_rc:
+        mpl.rcParams.update(extra_rc)
 
 
 def set(*args, **kwargs):
@@ -143,7 +546,7 @@ def reset_orig():
     mpl.rcParams.update(_orig_rc_params)
 
 
-def axes_style(style=None, rc=None):
+def axes_style(style=None, rc=None, *, profile=None):
     """
     Get the parameters that control the general style of the plots.
 
@@ -166,6 +569,11 @@ def axes_style(style=None, rc=None):
         Parameter mappings to override the values in the preset seaborn
         style dictionaries. This only updates parameters that are
         considered part of the style definition.
+    profile : str, dict, or None
+        Name of a registered theme profile (see
+        :func:`register_theme_profile`), or an inline profile dict.
+        The ``style`` and ``rc`` arguments (if given) take precedence
+        over values coming from the profile.
 
     Examples
     --------
@@ -173,6 +581,12 @@ def axes_style(style=None, rc=None):
     .. include:: ../docstrings/axes_style.rst
 
     """
+    if profile is not None:
+        resolved = _resolve_profile(profile, {"style": style, "rc": rc},
+                                    kind="style")
+        style = resolved["style"]
+        rc = resolved["rc"]
+
     if style is None:
         style_dict = {k: mpl.rcParams[k] for k in _style_keys}
 
@@ -285,14 +699,12 @@ def axes_style(style=None, rc=None):
                 "ytick.left": False,
             })
 
-    # Remove entries that are not defined in the base list of valid keys
-    # This lets us handle matplotlib <=/> 2.0
-    style_dict = {k: v for k, v in style_dict.items() if k in _style_keys}
+    style_dict = {k: v for k, v in style_dict.items() if k in _STYLE_KEY_SET}
 
     # Override these settings with the provided rc dictionary
     if rc is not None:
-        rc = {k: v for k, v in rc.items() if k in _style_keys}
-        style_dict.update(rc)
+        rc_valid = _validate_rc_dict(rc, category="style")
+        style_dict.update(rc_valid)
 
     # Wrap in an _AxesStyle object so this can be used in a with statement
     style_object = _AxesStyle(style_dict)
@@ -300,7 +712,7 @@ def axes_style(style=None, rc=None):
     return style_object
 
 
-def set_style(style=None, rc=None):
+def set_style(style=None, rc=None, *, profile=None):
     """
     Set the parameters that control the general style of the plots.
 
@@ -321,6 +733,9 @@ def set_style(style=None, rc=None):
         Parameter mappings to override the values in the preset seaborn
         style dictionaries. This only updates parameters that are
         considered part of the style definition.
+    profile : str, dict, or None
+        Name of a registered theme profile (see
+        :func:`register_theme_profile`), or an inline profile dict.
 
     Examples
     --------
@@ -328,11 +743,11 @@ def set_style(style=None, rc=None):
     .. include:: ../docstrings/set_style.rst
 
     """
-    style_object = axes_style(style, rc)
+    style_object = axes_style(style, rc, profile=profile)
     mpl.rcParams.update(style_object)
 
 
-def plotting_context(context=None, font_scale=1, rc=None):
+def plotting_context(context=None, font_scale=None, rc=None, *, profile=None):
     """
     Get the parameters that control the scaling of plot elements.
 
@@ -359,6 +774,11 @@ def plotting_context(context=None, font_scale=1, rc=None):
         Parameter mappings to override the values in the preset seaborn
         context dictionaries. This only updates parameters that are
         considered part of the context definition.
+    profile : str, dict, or None
+        Name of a registered theme profile (see
+        :func:`register_theme_profile`), or an inline profile dict.
+        The ``context``, ``font_scale`` and ``rc`` arguments (if given)
+        take precedence over values coming from the profile.
 
     Examples
     --------
@@ -366,6 +786,19 @@ def plotting_context(context=None, font_scale=1, rc=None):
     .. include:: ../docstrings/plotting_context.rst
 
     """
+    if profile is not None:
+        resolved = _resolve_profile(
+            profile,
+            {"context": context, "font_scale": font_scale, "rc": rc},
+            kind="context",
+        )
+        context = resolved["context"]
+        font_scale = resolved["font_scale"]
+        rc = resolved["rc"]
+
+    if font_scale is None:
+        font_scale = 1
+
     if context is None:
         context_dict = {k: mpl.rcParams[k] for k in _context_keys}
 
@@ -423,8 +856,8 @@ def plotting_context(context=None, font_scale=1, rc=None):
 
     # Override these settings with the provided rc dictionary
     if rc is not None:
-        rc = {k: v for k, v in rc.items() if k in _context_keys}
-        context_dict.update(rc)
+        rc_valid = _validate_rc_dict(rc, category="context")
+        context_dict.update(rc_valid)
 
     # Wrap in a _PlottingContext object so this can be used in a with statement
     context_object = _PlottingContext(context_dict)
@@ -432,7 +865,7 @@ def plotting_context(context=None, font_scale=1, rc=None):
     return context_object
 
 
-def set_context(context=None, font_scale=1, rc=None):
+def set_context(context=None, font_scale=None, rc=None, *, profile=None):
     """
     Set the parameters that control the scaling of plot elements.
 
@@ -458,6 +891,9 @@ def set_context(context=None, font_scale=1, rc=None):
         Parameter mappings to override the values in the preset seaborn
         context dictionaries. This only updates parameters that are
         considered part of the context definition.
+    profile : str, dict, or None
+        Name of a registered theme profile (see
+        :func:`register_theme_profile`), or an inline profile dict.
 
     Examples
     --------
@@ -465,7 +901,7 @@ def set_context(context=None, font_scale=1, rc=None):
     .. include:: ../docstrings/set_context.rst
 
     """
-    context_object = plotting_context(context, font_scale, rc)
+    context_object = plotting_context(context, font_scale, rc, profile=profile)
     mpl.rcParams.update(context_object)
 
 

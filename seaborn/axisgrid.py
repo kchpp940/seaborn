@@ -246,16 +246,13 @@ class Grid(_BaseGrid):
         # Now clear the legend
         ax.legend_ = None
 
-    def _get_palette(self, data, hue, hue_order, palette,
-                     semantic_order="data"):
+    def _get_palette(self, data, hue, hue_order, palette):
         """Get a list of colors for the hue variable."""
         if hue is None:
             palette = color_palette(n_colors=1)
 
         else:
-            hue_names = categorical_order(
-                data[hue], hue_order,
-            )
+            hue_names = categorical_order(data[hue], hue_order)
             n_colors = len(hue_names)
 
             # By default use either the current color palette or HUSL
@@ -378,40 +375,31 @@ class FacetGrid(Grid):
         row_order=None, col_order=None, hue_order=None, hue_kws=None,
         dropna=False, legend_out=True, despine=True,
         margin_titles=False, xlim=None, ylim=None, subplot_kws=None,
-        gridspec_kws=None, semantic_order="data",
+        gridspec_kws=None,
     ):
 
         super().__init__()
         data = handle_data_source(data)
-        _check_argument("semantic_order", ["data", "appearance"], semantic_order)
-        self.semantic_order = semantic_order
-        self._appearance_levels = {}
 
         # Determine the hue facet layer information
         hue_var = hue
         if hue is None:
             hue_names = None
         else:
-            hue_names = categorical_order(
-                data[hue], hue_order,
-            )
+            hue_names = categorical_order(data[hue], hue_order)
 
-        colors = self._get_palette(data, hue, hue_order, palette, semantic_order)
+        colors = self._get_palette(data, hue, hue_order, palette)
 
         # Set up the lists of names for the row and column facet variables
         if row is None:
             row_names = []
         else:
-            row_names = categorical_order(
-                data[row], row_order,
-            )
+            row_names = categorical_order(data[row], row_order)
 
         if col is None:
             col_names = []
         else:
-            col_names = categorical_order(
-                data[col], col_order,
-            )
+            col_names = categorical_order(data[col], col_order)
 
         # Additional dict of kwarg -> list of values for mapping the hue var
         hue_kws = hue_kws if hue_kws is not None else {}
@@ -867,27 +855,6 @@ class FacetGrid(Grid):
 
         # Sort out the supporting information
         self._update_legend_data(ax)
-
-        # If func is a seaborn axes-level plot, it hung its plotter on the
-        # ax so we can pull back the real artist-level appearance order.
-        inner = getattr(ax, "_seaborn_plotter", None)
-        if inner is not None:
-            self._sync_appearance_levels(inner)
-
-    def _sync_appearance_levels(self, plotter):
-        """Merge appearance levels from an inner plotter into the grid registry.
-
-        When ``map_dataframe`` runs a real seaborn plot function on each facet,
-        that function creates its own plotter, computes appearance order from
-        the actual artists it drew, and then calls this method so the outer
-        figure-level plotter can read the resolved order from the grid.
-
-        Only the first call wins for each variable, because the first facet
-        processed has the full global level order in its plotter.
-        """
-        for var, levels in plotter._appearance_levels.items():
-            if var not in self._appearance_levels:
-                self._appearance_levels[var] = list(levels)
 
     def _finalize_grid(self, axlabels):
         """Finalize the annotations and layout."""
