@@ -14,6 +14,7 @@ except ImportError:
     _no_scipy = True
 
 from . import cm
+from . import rcmod
 from .axisgrid import Grid
 from ._compat import get_colormap
 from .utils import (
@@ -1152,7 +1153,7 @@ def clustermap(
     row_colors=None, col_colors=None, mask=None,
     dendrogram_ratio=.2, colors_ratio=0.03,
     cbar_pos=(.02, .8, .05, .18), tree_kws=None,
-    **kwargs
+    profile=None, **kwargs
 ):
     """
     Plot a matrix dataset as a hierarchically-clustered heatmap.
@@ -1217,6 +1218,11 @@ def clustermap(
     tree_kws : dict, optional
         Parameters for the :class:`matplotlib.collections.LineCollection`
         that is used to plot the lines of the dendrogram tree.
+    profile : str, dict, or None
+        Name of a registered theme profile (see
+        :func:`register_theme_profile`), or an inline profile dict.
+        The theme is applied only for the duration of this plot
+        and does not affect global settings.
     kwargs : other keyword arguments
         All other keyword arguments are passed to :func:`heatmap`.
 
@@ -1249,14 +1255,15 @@ def clustermap(
     if _no_scipy:
         raise RuntimeError("clustermap requires scipy to be available")
 
-    plotter = ClusterGrid(data, pivot_kws=pivot_kws, figsize=figsize,
-                          row_colors=row_colors, col_colors=col_colors,
-                          z_score=z_score, standard_scale=standard_scale,
-                          mask=mask, dendrogram_ratio=dendrogram_ratio,
-                          colors_ratio=colors_ratio, cbar_pos=cbar_pos)
+    with rcmod._ThemeContext(profile):
+        plotter = ClusterGrid(data, pivot_kws=pivot_kws, figsize=figsize,
+                              row_colors=row_colors, col_colors=col_colors,
+                              z_score=z_score, standard_scale=standard_scale,
+                              mask=mask, dendrogram_ratio=dendrogram_ratio,
+                              colors_ratio=colors_ratio, cbar_pos=cbar_pos)
 
-    return plotter.plot(metric=metric, method=method,
-                        colorbar_kws=cbar_kws,
-                        row_cluster=row_cluster, col_cluster=col_cluster,
-                        row_linkage=row_linkage, col_linkage=col_linkage,
-                        tree_kws=tree_kws, **kwargs)
+        return plotter.plot(metric=metric, method=method,
+                            colorbar_kws=cbar_kws,
+                            row_cluster=row_cluster, col_cluster=col_cluster,
+                            row_linkage=row_linkage, col_linkage=col_linkage,
+                            tree_kws=tree_kws, **kwargs)

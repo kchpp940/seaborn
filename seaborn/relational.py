@@ -21,6 +21,7 @@ from ._compat import groupby_apply_include_groups
 from ._statistics import EstimateAggregator, WeightedAggregator
 from .axisgrid import FacetGrid, _facet_docs
 from ._docstrings import DocstringComponents, _core_docs
+from . import rcmod
 
 
 __all__ = ["relplot", "scatterplot", "lineplot"]
@@ -705,6 +706,7 @@ def relplot(
     sizes=None, size_order=None, size_norm=None,
     markers=None, dashes=None, style_order=None,
     legend="auto", kind="scatter", height=5, aspect=1, facet_kws=None,
+    profile=None,
     **kwargs
 ):
 
@@ -824,79 +826,80 @@ def relplot(
     new_cols.update(grid_kws)
     full_data = p.plot_data.rename(columns=new_cols)
 
-    # Set up the FacetGrid object
-    facet_kws = {} if facet_kws is None else facet_kws.copy()
-    g = FacetGrid(
-        data=full_data.dropna(axis=1, how="all"),
-        **grid_kws,
-        col_wrap=col_wrap, row_order=row_order, col_order=col_order,
-        height=height, aspect=aspect, dropna=False,
-        **facet_kws
-    )
-
-    # Draw the plot
-    g.map_dataframe(func, **plot_kws)
-
-    # Label the axes, using the original variables
-    # Pass "" when the variable name is None to overwrite internal variables
-    g.set_axis_labels(variables.get("x") or "", variables.get("y") or "")
-
-    if legend:
-        # Replace the original plot data so the legend uses numeric data with
-        # the correct type, since we force a categorical mapping above.
-        p.plot_data = plot_data
-
-        # Handle the additional non-semantic keyword arguments out here.
-        # We're selective because some kwargs may be seaborn function specific
-        # and not relevant to the matplotlib artists going into the legend.
-        # Ideally, we will have a better solution where we don't need to re-make
-        # the legend out here and will have parity with the axes-level functions.
-        keys = ["c", "color", "alpha", "m", "marker"]
-        if kind == "scatter":
-            legend_artist = _scatter_legend_artist
-            keys += ["s", "facecolor", "fc", "edgecolor", "ec", "linewidth", "lw"]
-        else:
-            legend_artist = partial(mpl.lines.Line2D, xdata=[], ydata=[])
-            keys += [
-                "markersize", "ms",
-                "markeredgewidth", "mew",
-                "markeredgecolor", "mec",
-                "linestyle", "ls",
-                "linewidth", "lw",
-            ]
-
-        common_kws = {k: v for k, v in kwargs.items() if k in keys}
-        attrs = {"hue": "color", "style": None}
-        if kind == "scatter":
-            attrs["size"] = "s"
-        elif kind == "line":
-            attrs["size"] = "linewidth"
-        p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
-        if p.legend_data:
-            g.add_legend(legend_data=p.legend_data,
-                         label_order=p.legend_order,
-                         title=p.legend_title,
-                         adjust_subtitles=True)
-
-    # Rename the columns of the FacetGrid's `data` attribute
-    # to match the original column names
-    orig_cols = {
-        f"_{k}": f"_{k}_" if v is None else v for k, v in variables.items()
-    }
-    grid_data = g.data.rename(columns=orig_cols)
-    if data is not None and (x is not None or y is not None):
-        if not isinstance(data, pd.DataFrame):
-            data = pd.DataFrame(data)
-        g.data = pd.merge(
-            data,
-            grid_data[grid_data.columns.difference(data.columns)],
-            left_index=True,
-            right_index=True,
+    with rcmod._ThemeContext(profile):
+        # Set up the FacetGrid object
+        facet_kws = {} if facet_kws is None else facet_kws.copy()
+        g = FacetGrid(
+            data=full_data.dropna(axis=1, how="all"),
+            **grid_kws,
+            col_wrap=col_wrap, row_order=row_order, col_order=col_order,
+            height=height, aspect=aspect, dropna=False,
+            **facet_kws
         )
-    else:
-        g.data = grid_data
 
-    return g
+        # Draw the plot
+        g.map_dataframe(func, **plot_kws)
+
+        # Label the axes, using the original variables
+        # Pass "" when the variable name is None to overwrite internal variables
+        g.set_axis_labels(variables.get("x") or "", variables.get("y") or "")
+
+        if legend:
+            # Replace the original plot data so the legend uses numeric data with
+            # the correct type, since we force a categorical mapping above.
+            p.plot_data = plot_data
+
+            # Handle the additional non-semantic keyword arguments out here.
+            # We're selective because some kwargs may be seaborn function specific
+            # and not relevant to the matplotlib artists going into the legend.
+            # Ideally, we will have a better solution where we don't need to re-make
+            # the legend out here and will have parity with the axes-level functions.
+            keys = ["c", "color", "alpha", "m", "marker"]
+            if kind == "scatter":
+                legend_artist = _scatter_legend_artist
+                keys += ["s", "facecolor", "fc", "edgecolor", "ec", "linewidth", "lw"]
+            else:
+                legend_artist = partial(mpl.lines.Line2D, xdata=[], ydata=[])
+                keys += [
+                    "markersize", "ms",
+                    "markeredgewidth", "mew",
+                    "markeredgecolor", "mec",
+                    "linestyle", "ls",
+                    "linewidth", "lw",
+                ]
+
+            common_kws = {k: v for k, v in kwargs.items() if k in keys}
+            attrs = {"hue": "color", "style": None}
+            if kind == "scatter":
+                attrs["size"] = "s"
+            elif kind == "line":
+                attrs["size"] = "linewidth"
+            p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
+            if p.legend_data:
+                g.add_legend(legend_data=p.legend_data,
+                             label_order=p.legend_order,
+                             title=p.legend_title,
+                             adjust_subtitles=True)
+
+        # Rename the columns of the FacetGrid's `data` attribute
+        # to match the original column names
+        orig_cols = {
+            f"_{k}": f"_{k}_" if v is None else v for k, v in variables.items()
+        }
+        grid_data = g.data.rename(columns=orig_cols)
+        if data is not None and (x is not None or y is not None):
+            if not isinstance(data, pd.DataFrame):
+                data = pd.DataFrame(data)
+            g.data = pd.merge(
+                data,
+                grid_data[grid_data.columns.difference(data.columns)],
+                left_index=True,
+                right_index=True,
+            )
+        else:
+            g.data = grid_data
+
+        return g
 
 
 relplot.__doc__ = """\
@@ -962,6 +965,11 @@ kind : string
 {params.facets.aspect}
 facet_kws : dict
     Dictionary of other keyword arguments to pass to :class:`FacetGrid`.
+profile : str, dict, or None
+    Name of a registered theme profile (see
+    :func:`register_theme_profile`), or an inline profile dict.
+    The theme is applied only for the duration of this plot
+    and does not affect global settings.
 kwargs : key, value pairings
     Other keyword arguments are passed through to the underlying plotting
     function.

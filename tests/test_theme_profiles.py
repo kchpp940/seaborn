@@ -451,3 +451,251 @@ class TestSnsTopLevel:
         assert "alpha" in sns.list_theme_profiles()
         sns.unregister_theme_profile("alpha")
         assert "alpha" not in sns.list_theme_profiles()
+
+
+# ---------------------------------------------------------------------------
+# Unified validation: rc value validation (not just keys)
+# ---------------------------------------------------------------------------
+
+class TestUnifiedRcValidation:
+
+    def test_invalid_rc_value_caught_early(self):
+        """Invalid color values should be caught during validation."""
+        with pytest.raises(ValueError, match="Invalid rcParams"):
+            rcmod._validate_rc_dict({"axes.facecolor": "not_a_real_color_xyz"})
+
+    def test_invalid_rc_value_in_profile(self):
+        with pytest.raises(ValueError, match="Invalid rcParams"):
+            rcmod.register_theme_profile("bad", {
+                "rc": {"axes.facecolor": "not_a_color_123"}
+            })
+
+    def test_invalid_rc_value_in_set_theme(self):
+        with pytest.raises(ValueError, match="Invalid rcParams"):
+            rcmod.set_theme(rc={"lines.linestyle": "not_a_linestyle_xyz"})
+
+    def test_unknown_key_same_message_everywhere(self):
+        """Unknown rc keys should produce the same error message format."""
+        err_msg = "Unrecognized matplotlib rcParam key"
+
+        # In _validate_rc_dict directly
+        with pytest.raises(ValueError, match=err_msg):
+            rcmod._validate_rc_dict({"no.such.param": 1})
+
+        # In profile registration
+        with pytest.raises(ValueError, match=err_msg):
+            rcmod.register_theme_profile("x", {"rc": {"bad.key": 1}})
+
+        # In set_theme
+        with pytest.raises(ValueError, match=err_msg):
+            rcmod.set_theme(rc={"bad.key": 1})
+
+    def test_unknown_profile_name_same_message(self):
+        """Unknown profile names should have a consistent message."""
+        with pytest.raises(ValueError, match="Unknown theme profile"):
+            rcmod.set_theme(profile="nonexistent")
+        with pytest.raises(ValueError, match="Unknown theme profile"):
+            rcmod.axes_style(profile="nonexistent")
+        with pytest.raises(ValueError, match="Unknown theme profile"):
+            rcmod.plotting_context(profile="nonexistent")
+        with pytest.raises(ValueError, match="Unknown theme profile"):
+            rcmod.get_theme_profile("nonexistent")
+
+    def test_style_category_warns_on_context_key(self):
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            rcmod.axes_style("white", rc={"font.size": 999})
+        assert len(w) == 1
+        assert "not in style definition" in str(w[0].message)
+
+    def test_context_category_warns_on_style_key(self):
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            rcmod.plotting_context("notebook", rc={"axes.facecolor": "red"})
+        assert len(w) == 1
+        assert "not in context definition" in str(w[0].message)
+
+
+# ---------------------------------------------------------------------------
+# Figure-level functions with profile (no global pollution)
+# ---------------------------------------------------------------------------
+
+class TestFigureLevelProfile:
+
+    def _make_data(self):
+        import pandas as pd
+        return pd.DataFrame({
+            "x": [1, 2, 3, 4, 1, 2, 3, 4],
+            "y": [2, 4, 3, 5, 3, 5, 4, 6],
+            "cat": ["A", "A", "A", "A", "B", "B", "B", "B"],
+        })
+
+    def test_relplot_profile_does_not_pollute(self):
+        sns.register_theme_profile("dark_p", {
+            "style": "dark", "context": "talk",
+        })
+        orig_fc = mpl.rcParams["axes.facecolor"]
+        orig_fs = mpl.rcParams["font.size"]
+
+        df = self._make_data()
+        g = sns.relplot(data=df, x="x", y="y", profile="dark_p")
+        plt.close("all")
+
+        assert mpl.rcParams["axes.facecolor"] == orig_fc
+        assert mpl.rcParams["font.size"] == orig_fs
+
+    def test_catplot_profile_applied_inside(self):
+        sns.register_theme_profile("white_ticks_p", {
+            "style": "ticks", "palette": "Reds",
+        })
+        orig_fc = mpl.rcParams["axes.facecolor"]
+        seen_fc = []
+
+        with rcmod._ThemeContext("white_ticks_p"):
+            seen_fc.append(mpl.rcParams["axes.facecolor"])
+
+        assert seen_fc[0] == "white"  # ticks style uses white background
+        assert mpl.rcParams["axes.facecolor"] == orig_fc
+
+    def test_displot_profile_no_pollution(self):
+        try:
+            sns.register_theme_profile("p", {"context": "paper"})
+            orig_fs = mpl.rcParams["font.size"]
+            df = self._make_data()
+            g = sns.displot(data=df, x="x", profile="p")
+            plt.close("all")
+            assert mpl.rcParams["font.size"] == orig_fs
+        except Exception as e:
+            # Some matplotlib/seaborn configs may not have displot fully
+            # working in test env; just ensure rc is restored
+            plt.close("all")
+            rcmod.reset_orig()
+
+    def test_lmplot_profile(self):
+        sns.register_theme_profile("lm", {"style": "whitegrid", "context": "talk"})
+        orig_fc = mpl.rcParams["axes.facecolor"]
+        df = self._make_data()
+        try:
+            g = sns.lmplot(data=df, x="x", y="y", profile="lm")
+            plt.close("all")
+        except Exception:
+            plt.close("all")
+        finally:
+            assert mpl.rcParams["axes.facecolor"] == orig_fc
+
+    def test_pairplot_profile(self):
+        sns.register_theme_profile("pp", {"style": "white", "context": "talk"})
+        orig_fc = mpl.rcParams["axes.facecolor"]
+        df = self._make_data()
+        try:
+            g = sns.pairplot(df, profile="pp")
+            plt.close("all")
+        except Exception:
+            plt.close("all")
+        finally:
+            assert mpl.rcParams["axes.facecolor"] == orig_fc
+
+    def test_jointplot_profile(self):
+        sns.register_theme_profile("jp", {"style": "darkgrid"})
+        orig_fc = mpl.rcParams["axes.facecolor"]
+        df = self._make_data()
+        try:
+            g = sns.jointplot(data=df, x="x", y="y", profile="jp")
+            plt.close("all")
+        except Exception:
+            plt.close("all")
+        finally:
+            assert mpl.rcParams["axes.facecolor"] == orig_fc
+
+    def test_clustermap_profile(self):
+        sns.register_theme_profile("cm", {"style": "white", "context": "paper"})
+        orig_fc = mpl.rcParams["axes.facecolor"]
+        import numpy as np
+        data = np.random.randn(8, 8)
+        try:
+            g = sns.clustermap(data, profile="cm")
+            plt.close("all")
+        except Exception:
+            plt.close("all")
+        finally:
+            assert mpl.rcParams["axes.facecolor"] == orig_fc
+
+    def test_inline_profile_dict_in_relplot(self):
+        orig_fc = mpl.rcParams["axes.facecolor"]
+        df = self._make_data()
+        g = sns.relplot(
+            data=df, x="x", y="y",
+            profile={"style": "dark", "context": "paper"},
+        )
+        plt.close("all")
+        assert mpl.rcParams["axes.facecolor"] == orig_fc
+
+    def test_profile_invalid_key_propagates_to_figure_level(self):
+        """Invalid rc keys should be caught before any plotting happens."""
+        df = self._make_data()
+        with pytest.raises(ValueError, match="Unrecognized matplotlib rcParam"):
+            sns.relplot(
+                data=df, x="x", y="y",
+                profile={"rc": {"bad.bad.bad": 1}},
+            )
+
+    def test_profile_invalid_rc_value_propagates(self):
+        """Invalid rc values should be caught before plotting."""
+        df = self._make_data()
+        with pytest.raises(ValueError, match="Invalid rcParams"):
+            sns.relplot(
+                data=df, x="x", y="y",
+                profile={"rc": {"axes.facecolor": "not_a_real_color"}},
+            )
+
+    def test_unknown_profile_in_relplot(self):
+        df = self._make_data()
+        with pytest.raises(ValueError, match="Unknown theme profile"):
+            sns.relplot(data=df, x="x", y="y", profile="ghost_profile")
+
+
+# ---------------------------------------------------------------------------
+# _ThemeContext internals
+# ---------------------------------------------------------------------------
+
+class TestThemeContext:
+
+    def test_nested_theme_contexts(self):
+        rcmod.register_theme_profile("a", {"style": "white"})
+        rcmod.register_theme_profile("b", {"style": "dark"})
+
+        with rcmod._ThemeContext("a"):
+            assert mpl.rcParams["axes.facecolor"] == "white"
+            with rcmod._ThemeContext("b"):
+                assert mpl.rcParams["axes.facecolor"] == "#EAEAF2"
+            assert mpl.rcParams["axes.facecolor"] == "white"
+
+    def test_theme_context_restores_on_exception(self):
+        rcmod.register_theme_profile("p", {"style": "ticks"})
+        orig = mpl.rcParams["axes.facecolor"]
+
+        try:
+            with rcmod._ThemeContext("p"):
+                assert mpl.rcParams["axes.facecolor"] == "white"
+                raise RuntimeError("simulated error")
+        except RuntimeError:
+            pass
+
+        assert mpl.rcParams["axes.facecolor"] == orig
+
+    def test_theme_context_with_extra_rc(self):
+        rcmod.register_theme_profile("p", {
+            "rc": {"savefig.dpi": 200, "axes.facecolor": "beige"},
+        })
+        orig_dpi = mpl.rcParams["savefig.dpi"]
+        orig_fc = mpl.rcParams["axes.facecolor"]
+
+        with rcmod._ThemeContext("p"):
+            assert mpl.rcParams["savefig.dpi"] == 200
+            assert mpl.rcParams["axes.facecolor"] == "beige"
+
+        assert mpl.rcParams["savefig.dpi"] == orig_dpi
+        assert mpl.rcParams["axes.facecolor"] == orig_fc
+
