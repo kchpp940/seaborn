@@ -654,6 +654,206 @@ class TestHeatmap:
         texts = [t.get_text() for t in ax.texts]
         assert all(int(t) >= 3 for t in texts if t)
 
+    def test_heatmap_annot_format_nullable_dtype(self):
+
+        data_values = pd.DataFrame({
+            'A': [1.0, 2.0, 3.0, 4.0],
+            'B': [5.0, 6.0, 7.0, 8.0],
+            'C': [9.0, 10.0, 11.0, 12.0],
+        }, index=['r0', 'r1', 'r2', 'r3'])
+
+        annot_nullable = pd.DataFrame({
+            'A': pd.array([1.0, pd.NA, 3.0, 4.0], dtype='Float64'),
+            'B': pd.array([5, 6, pd.NA, 8], dtype='Int64'),
+            'C': pd.array([9.0, 10.0, 11.0, pd.NA], dtype='Float64'),
+        }, index=['r0', 'r1', 'r2', 'r3'])
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'value': value,
+                'masked': masked,
+                'row_idx': row_idx,
+                'col_idx': col_idx,
+            })
+            return str(value)
+
+        ax = mat.heatmap(
+            data_values,
+            annot=annot_nullable,
+            annot_format=fmt,
+        )
+
+        assert len(contexts) == 12
+
+        by_pos = {(c['row_idx'], c['col_idx']): c for c in contexts}
+
+        r0_A = by_pos[(0, 0)]
+        assert r0_A['row_label'] == 'r0'
+        assert r0_A['col_label'] == 'A'
+        assert r0_A['value'] == 1.0
+        assert r0_A['masked'] is False
+
+        r1_A = by_pos[(1, 0)]
+        assert r1_A['row_label'] == 'r1'
+        assert r1_A['col_label'] == 'A'
+        assert pd.isna(r1_A['value'])
+        assert r1_A['masked'] is False
+
+        r2_B = by_pos[(2, 1)]
+        assert r2_B['row_label'] == 'r2'
+        assert r2_B['col_label'] == 'B'
+        assert pd.isna(r2_B['value'])
+        assert r2_B['masked'] is False
+
+        r3_C = by_pos[(3, 2)]
+        assert r3_C['row_label'] == 'r3'
+        assert r3_C['col_label'] == 'C'
+        assert pd.isna(r3_C['value'])
+        assert r3_C['masked'] is False
+
+    def test_heatmap_annot_format_distinguish_pdna_nan_mask(self):
+
+        data = pd.DataFrame({
+            'value': [1.0, np.nan, 3.0, 4.0],
+            'other': [10.0, 20.0, 30.0, 40.0],
+        }, index=['ok', 'npnan_data', 'pdna_annot', 'masked'])
+
+        annot = pd.DataFrame({
+            'value': pd.array(['good', 'npnan_data_val', 'pdna_val', 'masked_val'],
+                              dtype='string'),
+            'other': pd.array(['a', 'b', pd.NA, 'd'], dtype='string'),
+        }, index=data.index, columns=data.columns)
+
+        mask = pd.DataFrame({
+            'value': [False, False, False, True],
+            'other': [False, False, False, False],
+        }, index=data.index, columns=data.columns)
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'value': value,
+                'masked': masked,
+            })
+            return str(value)
+
+        ax = mat.heatmap(
+            data,
+            mask=mask,
+            annot=annot,
+            annot_format=fmt,
+        )
+
+        by_rc = {(c['row_label'], c['col_label']): c for c in contexts}
+
+        ok_ctx = by_rc[('ok', 'value')]
+        assert ok_ctx['value'] == 'good'
+        assert ok_ctx['masked'] is False
+
+        npnan_data_ctx = by_rc[('npnan_data', 'value')]
+        assert npnan_data_ctx['value'] == 'npnan_data_val'
+        assert npnan_data_ctx['masked'] is True
+
+        pdna_annot_ctx = by_rc[('pdna_annot', 'value')]
+        assert pdna_annot_ctx['value'] == 'pdna_val'
+        assert pdna_annot_ctx['masked'] is False
+
+        masked_ctx = by_rc[('masked', 'value')]
+        assert masked_ctx['value'] == 'masked_val'
+        assert masked_ctx['masked'] is True
+
+        other_pdna_annot = by_rc[('pdna_annot', 'other')]
+        assert pd.isna(other_pdna_annot['value'])
+        assert other_pdna_annot['masked'] is False
+
+        masked_other = by_rc[('masked', 'other')]
+        assert masked_other['value'] == 'd'
+        assert masked_other['masked'] is False
+
+    def test_clustermap_annot_format_nullable_dtype_reorder(self):
+
+        np.random.seed(0)
+        data = pd.DataFrame(
+            np.random.randn(5, 3),
+            index=['r0', 'r1', 'r2', 'r3', 'r4'],
+            columns=['X', 'Y', 'Z']
+        )
+
+        annot = pd.DataFrame({
+            'X': pd.array(['r0X', pd.NA, 'r2X', 'r3X', 'r4X'], dtype='string'),
+            'Y': pd.array([1, 2, pd.NA, 4, 5], dtype='Int64'),
+            'Z': pd.array([10.0, 20.0, pd.NA, 40.0, 50.0], dtype='Float64'),
+        }, index=data.index, columns=data.columns)
+
+        mask = pd.DataFrame({
+            'X': [False, False, False, False, True],
+            'Y': [False, False, False, False, False],
+            'Z': [False, False, True, False, False],
+        }, index=data.index, columns=data.columns)
+
+        contexts = []
+
+        def fmt(row_label, col_label, value, masked, row_idx, col_idx):
+            contexts.append({
+                'row_label': row_label,
+                'col_label': col_label,
+                'value': value,
+                'masked': masked,
+            })
+            return str(value) if not pd.isna(value) else "NA"
+
+        g = mat.clustermap(
+            data,
+            mask=mask,
+            annot=annot,
+            annot_format=fmt,
+        )
+
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        for ctx in contexts:
+            orig_row = list(data.index).index(ctx['row_label'])
+            orig_col = list(data.columns).index(ctx['col_label'])
+            expected_masked = bool(mask.iloc[orig_row, orig_col])
+            expected_value = annot.iloc[orig_row, orig_col]
+
+            assert ctx['masked'] == expected_masked, (
+                f"masked mismatch at ({ctx['row_label']}, {ctx['col_label']}): "
+                f"got {ctx['masked']}, expected {expected_masked}"
+            )
+
+            if pd.isna(expected_value):
+                assert pd.isna(ctx['value']), (
+                    f"value mismatch at ({ctx['row_label']}, {ctx['col_label']}): "
+                    f"got {ctx['value']}, expected NA"
+                )
+            else:
+                assert ctx['value'] == expected_value, (
+                    f"value mismatch at ({ctx['row_label']}, {ctx['col_label']}): "
+                    f"got {ctx['value']}, expected {expected_value}"
+                )
+
+        by_rc = {(c['row_label'], c['col_label']): c for c in contexts}
+        assert pd.isna(by_rc[('r1', 'X')]['value'])
+        assert by_rc[('r1', 'X')]['masked'] is False
+
+        assert pd.isna(by_rc[('r2', 'Y')]['value'])
+        assert by_rc[('r2', 'Y')]['masked'] is False
+
+        assert pd.isna(by_rc[('r2', 'Z')]['value'])
+        assert by_rc[('r2', 'Z')]['masked'] is True
+
+        assert by_rc[('r4', 'X')]['masked'] is True
+        assert by_rc[('r4', 'X')]['value'] == 'r4X'
+
 
 @pytest.mark.skipif(_no_scipy, reason="Test requires scipy")
 class TestDendrogram:

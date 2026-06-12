@@ -437,8 +437,6 @@ def heatmap(
     cbar=True, cbar_kws=None, cbar_ax=None,
     square=False, xticklabels="auto", yticklabels="auto",
     mask=None, ax=None,
-    original_data=None, original_mask=None, original_annot_df=None,
-    row_ind=None, col_ind=None,
     **kwargs
 ):
     """Plot rectangular data as a color-encoded matrix.
@@ -539,7 +537,12 @@ def heatmap(
     .. include:: ../docstrings/heatmap.rst
 
     """
-    # Initialize the plotter object
+    original_data = kwargs.pop("_original_data", None)
+    original_mask = kwargs.pop("_original_mask", None)
+    original_annot_df = kwargs.pop("_original_annot_df", None)
+    row_ind = kwargs.pop("_row_ind", None)
+    col_ind = kwargs.pop("_col_ind", None)
+
     plotter = _HeatMapper(data, vmin, vmax, cmap, center, robust, annot, fmt,
                           annot_kws, cbar, cbar_kws, xticklabels,
                           yticklabels, mask, annot_format, original_data,
@@ -1213,10 +1216,10 @@ class ClusterGrid(Grid):
         heatmap(self.data2d, ax=self.ax_heatmap, cbar_ax=self.ax_cbar,
                 cbar_kws=colorbar_kws, mask=self.mask,
                 xticklabels=xtl, yticklabels=ytl, annot=annot,
-                annot_format=annot_format, original_data=original_data,
-                original_mask=original_mask,
-                original_annot_df=original_annot_df,
-                row_ind=yind, col_ind=xind, **kws)
+                annot_format=annot_format, _original_data=original_data,
+                _original_mask=original_mask,
+                _original_annot_df=original_annot_df,
+                _row_ind=yind, _col_ind=xind, **kws)
 
         ytl = self.ax_heatmap.get_yticklabels()
         ytl_rot = None if not ytl else ytl[0].get_rotation()
