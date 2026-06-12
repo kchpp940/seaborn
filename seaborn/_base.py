@@ -223,7 +223,7 @@ class HueMapping(SemanticMapping):
         """Determine colors when the hue mapping is categorical."""
         # -- Identify the order and name of the levels
 
-        levels = categorical_order(data, order, semantic_order=self.semantic_order)
+        levels = categorical_order(data, order)
         n_colors = len(levels)
 
         # -- Identify the set of colors to use
@@ -383,7 +383,7 @@ class SizeMapping(SemanticMapping):
 
     def categorical_mapping(self, data, sizes, order):
 
-        levels = categorical_order(data, order, semantic_order=self.semantic_order)
+        levels = categorical_order(data, order)
 
         if isinstance(sizes, dict):
 
@@ -545,7 +545,7 @@ class StyleMapping(SemanticMapping):
                 data = list(data)
 
             # Find ordered unique values
-            levels = categorical_order(data, order, semantic_order=self.semantic_order)
+            levels = categorical_order(data, order)
 
             markers = self._map_attributes(
                 markers, levels, unique_markers(len(levels)), "markers",
@@ -629,6 +629,8 @@ class VectorPlotter:
 
     def __init__(self, data=None, variables={}, semantic_order="data"):
 
+        _check_argument("semantic_order", ["data", "appearance"], semantic_order)
+
         self._var_levels = {}
         # var_ordered is relevant only for categorical axis variables, and may
         # be better handled by an internal axis information object that tracks
@@ -636,6 +638,7 @@ class VectorPlotter:
         # information for numeric axes would be information about log scales.
         self._var_ordered = {"x": False, "y": False}  # alt., used DefaultDict
         self.semantic_order = semantic_order
+        self._appearance_levels = {}
         self.assign_variables(data, variables)
 
         # TODO Lots of tests assume that these are called to initialize the
@@ -649,6 +652,37 @@ class VectorPlotter:
     def has_xy_data(self):
         """Return True at least one of x or y is defined."""
         return bool({"x", "y"} & set(self.variables))
+
+    def _set_appearance_levels(self, var, levels):
+        """Record the order of levels as they appear in the plot.
+
+        Parameters
+        ----------
+        var : str
+            Name of the semantic variable (e.g. "hue", "size", "style").
+        levels : list
+            Ordered list of level values in appearance order.
+
+        """
+        self._appearance_levels[var] = list(levels)
+
+    def _get_display_levels(self, var):
+        """Return levels ordered for display (legend, ticks, etc.).
+
+        Parameters
+        ----------
+        var : str
+            Name of the variable.
+
+        Returns
+        -------
+        levels : list
+            Levels ordered according to ``semantic_order``.
+
+        """
+        if self.semantic_order == "appearance" and var in self._appearance_levels:
+            return self._appearance_levels[var]
+        return self.var_levels.get(var, [])
 
     @property
     def var_levels(self):
@@ -1288,9 +1322,80 @@ class VectorPlotter:
             legend_data[key] = artist
             legend_order.append(key)
 
+        if self.semantic_order == "appearance":
+            legend_data, legend_order = self._reorder_legend_for_appearance(
+                legend_data, legend_order,
+            )
+
         self.legend_title = title
         self.legend_data = legend_data
         self.legend_order = legend_order
+
+    def _reorder_legend_for_appearance(self, legend_data, legend_order):
+        """Reorder legend entries to match appearance order when applicable."""
+        # Build a priority order from appearance levels for each semantic var
+        var_order = {}
+        for var in ["hue", "size", "style"]:
+            if var in self._appearance_levels:
+                var_order[var] = {
+                    level: i + 1 for i, level in enumerate(self._appearance_levels[var])
+                }
+
+        if not var_order:
+            return legend_data, legend_order
+
+        # Helper to extract (var_name, is_title, level_name) from a legend key
+        # Keys are either:
+        #   - A string (variable name like "hue") paired with a level value
+        #   - A tuple ((var_name, "title"), var_name) for subtitle entries
+        def parse_key(key):
+            if isinstance(key, tuple) and len(key) == 2:
+                part1, part2 = key
+                if isinstance(part1, tuple) and len(part1) == 2 and part1[1] == "title":
+                    # Subtitle entry: ((var_display_name, "title"), var_display_name)
+                    var_display = part1[0]
+                    return (var_display, True, var_display)
+                # Regular entry: (var_display_name, level_value)
+                var_display = part1
+                level = part2
+                return (var_display, False, level)
+            return (str(key), False, str(key))
+
+        # Map variable display names to internal var names ("hue"/"size"/"style")
+        display_to_internal = {}
+        for var in ["hue", "size", "style"]:
+            display_name = self.variables.get(var)
+            if display_name is not None:
+                display_to_internal[display_name] = var
+
+        # Determine a base priority for each semantic var (preserve original
+        # order of semantic variable groups)
+        var_base_priority = {}
+        next_priority = 0
+        seen_vars = set()
+        for key in legend_order:
+            var_display, is_title, _ = parse_key(key)
+            internal_var = display_to_internal.get(var_display)
+            if internal_var is not None and internal_var not in seen_vars and internal_var in var_order:
+                var_base_priority[internal_var] = next_priority
+                seen_vars.add(internal_var)
+                next_priority += len(var_order[internal_var]) + 1
+
+        # Sort legend_order: titles appear just before their variable's entries
+        def sort_key(key):
+            var_display, is_title, level = parse_key(key)
+            internal_var = display_to_internal.get(var_display)
+            if internal_var is None or internal_var not in var_order:
+                return (float("inf"), 0, str(level))
+            base = var_base_priority[internal_var]
+            if is_title:
+                return (base, -1, "")
+            priority = var_order[internal_var].get(level, float("inf"))
+            return (base, priority, str(level))
+
+        new_order = sorted(legend_order, key=sort_key)
+        new_data = {key: legend_data[key] for key in new_order}
+        return new_data, new_order
 
     def _update_legend_data(
         self,
@@ -1366,8 +1471,7 @@ class VectorPlotter:
 
         raise NotImplementedError
 
-    def scale_categorical(self, axis, order=None, formatter=None,
-                          semantic_order=None):
+    def scale_categorical(self, axis, order=None, formatter=None):
         """
         Enforce categorical (fixed-scale) rules for the data on given axis.
 
@@ -1379,19 +1483,12 @@ class VectorPlotter:
             Order that unique values should appear in.
         formatter : callable
             Function mapping values to a string representation.
-        semantic_order : {"data", "appearance"}
-            How to order the levels. "data" uses the order levels appear in the
-            raw data (or explicit ``order``). "appearance" reverses the order
-            so it matches the drawing order in stacked/layered plots.
 
         Returns
         -------
         self
 
         """
-        if semantic_order is None:
-            semantic_order = self.semantic_order
-
         # This method both modifies the internal representation of the data
         # (converting it to string) and sets some attributes on self. It might be
         # a good idea to have a separate object attached to self that contains the
@@ -1444,7 +1541,7 @@ class VectorPlotter:
         # whether or not to use the order constructed here downstream
         self._var_ordered[axis] = order is not None or cat_data.dtype.name == "category"
         order = pd.Index(
-            categorical_order(cat_data, order, semantic_order=semantic_order),
+            categorical_order(cat_data, order),
             name=axis,
         )
 
@@ -1763,7 +1860,7 @@ def unique_markers(n):
     return markers[:n]
 
 
-def categorical_order(vector, order=None, semantic_order="data"):
+def categorical_order(vector, order=None):
     """Return a list of unique data values.
 
     Determine an ordered list of levels in ``values``.
@@ -1775,11 +1872,6 @@ def categorical_order(vector, order=None, semantic_order="data"):
     order : list-like, optional
         Desired order of category levels to override the order determined
         from the ``values`` object.
-    semantic_order : {"data", "appearance"}
-        How to order the levels. "data" uses the order levels appear in the
-        raw data (or explicit ``order``). "appearance" uses the order that
-        levels are drawn, which for stacked/layered plots is typically the
-        reverse of data order (first data level is drawn at the bottom).
 
     Returns
     -------
@@ -1787,8 +1879,6 @@ def categorical_order(vector, order=None, semantic_order="data"):
         Ordered list of category levels not including null values.
 
     """
-    _check_argument("semantic_order", ["data", "appearance"], semantic_order)
-
     if order is None:
         if hasattr(vector, "categories"):
             order = vector.categories
@@ -1804,9 +1894,4 @@ def categorical_order(vector, order=None, semantic_order="data"):
 
         order = filter(pd.notnull, order)
 
-    order = list(order)
-
-    if semantic_order == "appearance":
-        order = order[::-1]
-
-    return order
+    return list(order)

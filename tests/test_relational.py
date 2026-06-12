@@ -2,6 +2,7 @@ from itertools import product
 import warnings
 
 import numpy as np
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import same_color, to_rgba
@@ -1859,3 +1860,73 @@ class TestScatterPlotter(SharedAxesLevelTests, Helpers):
 
         scatterplot(x="x", y="y", hue="f", size="s", data=object_df)
         ax.clear()
+
+
+class TestSemanticOrder:
+
+    def test_semantic_order_invalid(self, long_df):
+
+        with pytest.raises(ValueError, match="semantic_order"):
+            relplot(data=long_df, x="x", y="y", semantic_order="invalid")
+
+    def test_relplot_line_hue_appearance(self):
+
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 1, 2, 3, 1, 2, 3],
+            "y": [1, 2, 3, 2, 3, 4, 3, 4, 5],
+            "hue": ["a", "a", "a", "b", "b", "b", "c", "c", "c"],
+        })
+        g = relplot(data=df, x="x", y="y", hue="hue", kind="line",
+                    semantic_order="appearance")
+        texts = [t.get_text() for t in g._legend.texts]
+        assert texts == ["c", "b", "a"]
+
+    def test_relplot_line_hue_data(self):
+
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 1, 2, 3, 1, 2, 3],
+            "y": [1, 2, 3, 2, 3, 4, 3, 4, 5],
+            "hue": ["a", "a", "a", "b", "b", "b", "c", "c", "c"],
+        })
+        g = relplot(data=df, x="x", y="y", hue="hue", kind="line",
+                    semantic_order="data")
+        texts = [t.get_text() for t in g._legend.texts]
+        assert texts == ["a", "b", "c"]
+
+    def test_relplot_line_style_size_appearance(self):
+
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 1, 2, 3, 1, 2, 3],
+            "y": [1, 2, 3, 2, 3, 4, 3, 4, 5],
+            "style": ["a", "a", "a", "b", "b", "b", "c", "c", "c"],
+            "size": ["x", "x", "x", "y", "y", "y", "z", "z", "z"],
+        })
+        g = relplot(data=df, x="x", y="y", style="style", size="size",
+                    kind="line", semantic_order="appearance")
+        texts = [t.get_text() for t in g._legend.texts]
+        assert texts == ["style", "c", "b", "a", "size", "z", "y", "x"]
+
+    def test_relplot_line_hue_facet_col(self):
+
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3],
+            "y": [1, 2, 3, 2, 3, 4, 3, 4, 5, 4, 5, 6, 5, 6, 7, 6, 7, 8],
+            "hue": (["a"] * 3 + ["b"] * 3 + ["c"] * 3) * 2,
+            "col": ["p"] * 9 + ["q"] * 9,
+        })
+        g = relplot(data=df, x="x", y="y", hue="hue", col="col", kind="line",
+                    semantic_order="appearance")
+        texts = [t.get_text() for t in g._legend.texts]
+        assert texts == ["c", "b", "a"]
+
+    def test_relplot_scatter_hue_data(self):
+
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 1, 2, 3],
+            "y": [1, 2, 3, 2, 3, 4],
+            "hue": ["a", "a", "a", "b", "b", "b"],
+        })
+        g = relplot(data=df, x="x", y="y", hue="hue", kind="scatter",
+                    semantic_order="data")
+        texts = [t.get_text() for t in g._legend.texts]
+        assert texts == ["a", "b"]

@@ -254,7 +254,7 @@ class Grid(_BaseGrid):
 
         else:
             hue_names = categorical_order(
-                data[hue], hue_order, semantic_order=semantic_order,
+                data[hue], hue_order,
             )
             n_colors = len(hue_names)
 
@@ -383,6 +383,7 @@ class FacetGrid(Grid):
 
         super().__init__()
         data = handle_data_source(data)
+        _check_argument("semantic_order", ["data", "appearance"], semantic_order)
         self.semantic_order = semantic_order
 
         # Determine the hue facet layer information
@@ -391,7 +392,7 @@ class FacetGrid(Grid):
             hue_names = None
         else:
             hue_names = categorical_order(
-                data[hue], hue_order, semantic_order=semantic_order,
+                data[hue], hue_order,
             )
 
         colors = self._get_palette(data, hue, hue_order, palette, semantic_order)
@@ -401,14 +402,14 @@ class FacetGrid(Grid):
             row_names = []
         else:
             row_names = categorical_order(
-                data[row], row_order, semantic_order=semantic_order,
+                data[row], row_order,
             )
 
         if col is None:
             col_names = []
         else:
             col_names = categorical_order(
-                data[col], col_order, semantic_order=semantic_order,
+                data[col], col_order,
             )
 
         # Additional dict of kwarg -> list of values for mapping the hue var

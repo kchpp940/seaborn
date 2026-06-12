@@ -370,6 +370,20 @@ class _LinePlotter(_RelationalPlotter):
                         if isinstance(obj, mpl.collections.LineCollection):
                             obj.set_capstyle(line_capstyle)
 
+        # Record appearance order for semantic variables
+        # For line plots, later draws appear on top, so reverse the draw order
+        if self.semantic_order == "appearance":
+            for var in ["hue", "size", "style"]:
+                if var in self.variables:
+                    draw_order = []
+                    seen = set()
+                    for sub_vars, _ in self.iter_data((var,), from_comp_data=True):
+                        level = sub_vars[var]
+                        if level not in seen:
+                            draw_order.append(level)
+                            seen.add(level)
+                    self._set_appearance_levels(var, list(reversed(draw_order)))
+
         # Finalize the axes details
         self._add_axis_labels(ax)
         if self.legend:
@@ -877,6 +891,19 @@ def relplot(
             attrs["size"] = "s"
         elif kind == "line":
             attrs["size"] = "linewidth"
+
+        if p.semantic_order == "appearance":
+            if kind == "line":
+                # For line plots, levels are drawn in data order (first mapper
+                # level first) and later draws appear on top, so reverse.
+                for var, mapper in [
+                    ("hue", p._hue_map if "hue" in p.variables else None),
+                    ("size", p._size_map if "size" in p.variables else None),
+                    ("style", p._style_map if "style" in p.variables else None),
+                ]:
+                    if mapper is not None and hasattr(mapper, "levels"):
+                        p._set_appearance_levels(var, list(reversed(mapper.levels)))
+
         p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
         if p.legend_data:
             g.add_legend(legend_data=p.legend_data,

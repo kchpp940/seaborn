@@ -421,6 +421,24 @@ class _CategoricalPlotter(VectorPlotter):
                     data[col] = inv(data[col])
 
     def _configure_legend(self, ax, func, common_kws=None, semantic_kws=None):
+        if self.semantic_order == "appearance" and "hue" in self.variables:
+            # For categorical plots with dodge, hue levels appear left-to-right
+            # in data order; for non-dodge (overlaid), later draws appear on top
+            if self._dodge_needed():
+                appearance_order = self._hue_map.levels
+            else:
+                draw_order = []
+                seen = set()
+                for sub_vars, _ in self.iter_data(
+                    ("hue",), from_comp_data=True, allow_empty=True
+                ):
+                    level = sub_vars["hue"]
+                    if level not in seen:
+                        draw_order.append(level)
+                        seen.add(level)
+                appearance_order = list(reversed(draw_order))
+            self._set_appearance_levels("hue", appearance_order)
+
         if self.legend == "auto":
             show_legend = not self._redundant_hue and self.input_format != "wide"
         else:
@@ -1625,7 +1643,7 @@ def boxplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -1754,7 +1772,7 @@ def violinplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -1944,7 +1962,7 @@ def boxenplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2109,7 +2127,7 @@ def stripplot(
         return ax
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2235,7 +2253,7 @@ def swarmplot(
         return ax
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2377,7 +2395,7 @@ def barplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2514,7 +2532,7 @@ def pointplot(
         return ax
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2670,7 +2688,7 @@ def countplot(
         dodge = p._dodge_needed()
 
     if p.var_types.get(p.orient) == "categorical" or not native_scale:
-        p.scale_categorical(p.orient, order=order, formatter=formatter, semantic_order=semantic_order)
+        p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
 
@@ -2850,7 +2868,6 @@ def catplot(
     if not native_scale or p.var_types[p.orient] == "categorical":
         p.scale_categorical(
             p.orient, order=order, formatter=formatter,
-            semantic_order=semantic_order,
         )
 
     p._attach(g, log_scale=log_scale)
@@ -3155,7 +3172,23 @@ def catplot(
     else:
         show_legend = bool(legend)
     if show_legend:
-        g.add_legend(title=p.variables.get("hue"), label_order=hue_order)
+        if p.semantic_order == "appearance" and "hue" in p.variables:
+            if dodge:
+                label_order = p._hue_map.levels
+            else:
+                draw_order = []
+                seen = set()
+                for sub_vars, _ in p.iter_data(
+                    ("hue",), from_comp_data=True, allow_empty=True
+                ):
+                    level = sub_vars["hue"]
+                    if level not in seen:
+                        draw_order.append(level)
+                        seen.add(level)
+                label_order = list(reversed(draw_order))
+        else:
+            label_order = hue_order
+        g.add_legend(title=p.variables.get("hue"), label_order=label_order)
 
     if data is not None:
         # Replace the dataframe on the FacetGrid for any subsequent maps

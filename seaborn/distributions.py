@@ -142,7 +142,8 @@ class _DistributionPlotter(VectorPlotter):
         # TODO note that this doesn't handle numeric mappings like the relational plots
         handles = []
         labels = []
-        for level in self._hue_map.levels:
+        hue_levels = self._get_display_levels("hue")
+        for level in hue_levels:
             color = self._hue_map(level)
 
             kws = self._artist_kws(
@@ -165,7 +166,7 @@ class _DistributionPlotter(VectorPlotter):
             ax_obj.add_legend(
                 legend_data,
                 title=self.variables["hue"],
-                label_order=self.var_levels["hue"],
+                label_order=hue_levels,
                 **legend_kws
             )
 
@@ -545,6 +546,22 @@ class _DistributionPlotter(VectorPlotter):
         alpha = plot_kws.pop("alpha", default_alpha)  # TODO make parameter?
 
         hist_artists = []
+
+        # Record appearance order: histogram uses reverse=True iter_data,
+        # so the draw order itself is top-to-bottom appearance order.
+        if self.semantic_order == "appearance" and "hue" in self.variables:
+            draw_order = []
+            seen = set()
+            for sub_vars, _ in self.iter_data("hue", reverse=True):
+                level = sub_vars["hue"]
+                if level not in seen:
+                    draw_order.append(level)
+                    seen.add(level)
+            # For dodge, there's no layering; order by horizontal position
+            # (which matches data order after dodge offsets are applied)
+            if multiple == "dodge":
+                draw_order = list(reversed(draw_order))
+            self._set_appearance_levels("hue", draw_order)
 
         # Go back through the dataset and draw the plots
         for sub_vars, _ in self.iter_data("hue", reverse=True):
@@ -961,6 +978,16 @@ class _DistributionPlotter(VectorPlotter):
 
         # Now iterate through the subsets and draw the densities
         # We go backwards so stacked densities read from top-to-bottom
+        if self.semantic_order == "appearance" and "hue" in self.variables:
+            draw_order = []
+            seen = set()
+            for sub_vars, _ in self.iter_data("hue", reverse=True):
+                level = sub_vars["hue"]
+                if level not in seen:
+                    draw_order.append(level)
+                    seen.add(level)
+            self._set_appearance_levels("hue", draw_order)
+
         for sub_vars, _ in self.iter_data("hue", reverse=True):
 
             # Extract the support grid and density curve for this level
