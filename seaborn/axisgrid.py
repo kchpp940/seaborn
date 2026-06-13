@@ -2015,10 +2015,10 @@ def pairplot(
     kind="scatter", diag_kind="auto", markers=None,
     height=2.5, aspect=1, corner=False, dropna=False,
     plot_kws=None, diag_kws=None, grid_kws=None, size=None,
-    theme=None,
+    profile=None,
 ):
     return _apply_theme_context(
-        theme, _pairplot_impl,
+        profile, _pairplot_impl,
         data=data, hue=hue, hue_order=hue_order, palette=palette,
         vars=vars, x_vars=x_vars, y_vars=y_vars, kind=kind,
         diag_kind=diag_kind, markers=markers, height=height,
@@ -2206,11 +2206,11 @@ def jointplot(
     height=6, ratio=5, space=.2, dropna=False, xlim=None, ylim=None,
     color=None, palette=None, hue_order=None, hue_norm=None, marginal_ticks=False,
     joint_kws=None, marginal_kws=None,
-    theme=None,
+    profile=None,
     **kwargs
 ):
     return _apply_theme_context(
-        theme, _jointplot_impl,
+        profile, _jointplot_impl,
         data=data, x=x, y=y, hue=hue, kind=kind, height=height,
         ratio=ratio, space=space, dropna=dropna, xlim=xlim, ylim=ylim,
         color=color, palette=palette, hue_order=hue_order,

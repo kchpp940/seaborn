@@ -589,10 +589,10 @@ def lmplot(
     robust=False, logx=False, x_partial=None, y_partial=None,
     truncate=True, x_jitter=None, y_jitter=None, scatter_kws=None,
     line_kws=None, facet_kws=None,
-    theme=None,
+    profile=None,
 ):
     return _apply_theme_context(
-        theme, _lmplot_impl,
+        profile, _lmplot_impl,
         data=data, x=x, y=y, hue=hue, col=col, row=row,
         palette=palette, col_wrap=col_wrap, height=height, aspect=aspect,
         markers=markers, sharex=sharex, sharey=sharey, hue_order=hue_order,

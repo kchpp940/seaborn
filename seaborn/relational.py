@@ -706,11 +706,11 @@ def relplot(
     sizes=None, size_order=None, size_norm=None,
     markers=None, dashes=None, style_order=None,
     legend="auto", kind="scatter", height=5, aspect=1, facet_kws=None,
-    theme=None,
+    profile=None,
     **kwargs
 ):
     return _apply_theme_context(
-        theme, _relplot_impl,
+        profile, _relplot_impl,
         data=data, x=x, y=y, hue=hue, size=size, style=style,
         units=units, weights=weights, row=row, col=col,
         col_wrap=col_wrap, row_order=row_order, col_order=col_order,

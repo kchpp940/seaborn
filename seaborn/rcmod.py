@@ -79,8 +79,98 @@ _context_keys = [
 ]
 
 
+# --------------------------------------------------------------------------- #
+# Theme profile registry
+# --------------------------------------------------------------------------- #
+
+_theme_profile_registry: dict[str, "_ThemeProfile"] = {}
+
+
+def register_theme_profile(name, profile, *, overwrite=False):
+    """Register a named theme profile for easy reuse.
+
+    Once registered, a profile can be referenced by its string name in
+    :func:`set_theme` and all figure-level functions via their ``profile``
+    parameter.
+
+    Parameters
+    ----------
+    name : str
+        The name under which to register the profile.
+    profile : _ThemeProfile or dict
+        The profile to register.  If a dict, it is parsed through
+        :meth:`_ThemeProfile.from_dict`.
+    overwrite : bool, default False
+        If ``False`` (the default), a :class:`ValueError` is raised if
+        ``name`` already exists in the registry.  Set to ``True`` to
+        replace an existing entry.
+
+    Examples
+    --------
+    >>> import seaborn as sns
+    >>> dark_paper = sns.rcmod.theme_profile(style="dark", context="paper")
+    >>> sns.rcmod.register_theme_profile("dark-paper", dark_paper)
+    >>> sns.relplot(data=df, x="x", y="y", profile="dark-paper")
+    """
+    if not isinstance(name, str):
+        raise TypeError(
+            f"profile name must be a string, got {type(name).__name__}"
+        )
+    if not overwrite and name in _theme_profile_registry:
+        raise ValueError(
+            f"theme profile {name!r} is already registered; "
+            "pass overwrite=True to replace it"
+        )
+    if isinstance(profile, dict):
+        profile = _ThemeProfile.from_dict(profile)
+    elif not isinstance(profile, _ThemeProfile):
+        raise TypeError(
+            "profile must be a _ThemeProfile or dict, got "
+            f"{type(profile).__name__}"
+        )
+    _theme_profile_registry[name] = profile
+
+
+def _resolve_profile_input(profile):
+    """Unify the three forms of profile input into a _ThemeProfile or None.
+
+    This is the **single authoritative resolver** used by both
+    :func:`set_theme` and every figure-level function, guaranteeing that
+    the registry lookup, validation, and normalisation rules are the same
+    everywhere.
+
+    Accepted inputs:
+    * ``None`` → ``None`` (no-op)
+    * ``str`` → lookup in the profile registry
+    * ``dict`` → :meth:`_ThemeProfile.from_dict`
+    * ``_ThemeProfile`` → passed through unchanged
+
+    Any other input raises ``TypeError``.
+    """
+    if profile is None:
+        return None
+    if isinstance(profile, str):
+        if profile not in _theme_profile_registry:
+            raise ValueError(
+                f"unknown theme profile {profile!r}; "
+                "known profiles: "
+                f"{', '.join(sorted(_theme_profile_registry)) or '(none)'}"
+            )
+        return _theme_profile_registry[profile]
+    if isinstance(profile, dict):
+        return _ThemeProfile.from_dict(profile)
+    if isinstance(profile, _ThemeProfile):
+        return profile
+    raise TypeError(
+        "profile must be None, a registered profile name (str), "
+        "a dict, or a _ThemeProfile instance; "
+        f"got {type(profile).__name__}"
+    )
+
+
 def set_theme(context="notebook", style="darkgrid", palette="deep",
-              font="sans-serif", font_scale=1, color_codes=True, rc=None):
+              font="sans-serif", font_scale=1, color_codes=True, rc=None,
+              profile=None):
     """
     Set aspects of the visual theme for all matplotlib and seaborn plots.
 
@@ -109,6 +199,12 @@ def set_theme(context="notebook", style="darkgrid", palette="deep",
         color codes (e.g. "b", "g", "r", etc.) to the colors from this palette.
     rc : dict or None
         Dictionary of rc parameter mappings to override the above.
+    profile : str, dict, or _ThemeProfile, optional
+        A pre-resolved theme profile.  When given, all other parameters
+        (``context``, ``style``, etc.) are ignored.  Accepts a registered
+        profile name (see :func:`register_theme_profile`), a dict suitable
+        for :meth:`_ThemeProfile.from_dict`, or a :class:`_ThemeProfile`
+        instance.
 
     Examples
     --------
@@ -116,15 +212,18 @@ def set_theme(context="notebook", style="darkgrid", palette="deep",
     .. include:: ../docstrings/set_theme.rst
 
     """
-    profile = _ThemeProfile.from_args(
-        context=context, style=style, palette=palette, font=font,
-        font_scale=font_scale, color_codes=color_codes, rc=rc,
-    )
+    if profile is not None:
+        profile = _resolve_profile_input(profile)
+    else:
+        profile = _ThemeProfile.from_args(
+            context=context, style=style, palette=palette, font=font,
+            font_scale=font_scale, color_codes=color_codes, rc=rc,
+        )
     target_rc = profile.resolve()
     mpl.rcParams.update(target_rc)
-    if color_codes:
+    if profile.color_codes:
         try:
-            palettes.set_color_codes(palette)
+            palettes.set_color_codes(profile.palette)
         except (ValueError, TypeError):
             pass
 
@@ -791,7 +890,7 @@ class ThemeContext:
         Either a pre-built :class:`_ThemeProfile`, a dict suitable for
         :meth:`_ThemeProfile.from_dict`, or ``None`` (in which case the
         context is a no-op — useful for call sites that accept an optional
-        ``theme=`` argument).
+        ``profile=`` argument).
     """
 
     def __init__(self, profile):
@@ -872,8 +971,9 @@ def theme_profile(context="notebook", style="darkgrid", palette="deep",
     """Build a validated :class:`_ThemeProfile` without applying it.
 
     This is the canonical parsing entry point.  Figure-level functions
-    that expose a ``theme`` keyword argument should accept either a
+    that expose a ``profile`` keyword argument should accept either a
     pre-built profile, a dict suitable for :meth:`_ThemeProfile.from_dict`,
+    a registered profile name (see :func:`register_theme_profile`),
     or ``None`` (meaning "use the current global rcParams as-is") and pass
     that value through :func:`_apply_theme_context`.
 
@@ -890,19 +990,22 @@ def theme_profile(context="notebook", style="darkgrid", palette="deep",
     )
 
 
-def _apply_theme_context(theme, func, *args, **kwargs):
+def _apply_theme_context(profile, func, *args, **kwargs):
     """Single entry point that wraps a figure-level call in a theme context.
 
-    All figure-level functions should route their ``theme`` handling through
-    here so that the lifecycle (normalisation, context entry/exit,
-    exception-safety) lives in exactly one place and can never drift
-    between entry points.
+    All figure-level functions should route their ``profile`` handling through
+    here so that the lifecycle (normalisation, registry lookup, context
+    entry/exit, exception-safety) lives in exactly one place and can never
+    drift between entry points.
 
     Parameters
     ----------
-    theme : _ThemeProfile or dict or None
-        The theme profile as supplied by the caller.  ``None`` is a no-op —
-        the function is executed in the current global rcParams environment
+    profile : str, dict, _ThemeProfile, or None
+        The profile as supplied by the caller.  Processed through
+        :func:`_resolve_profile_input` so that strings are looked up in
+        the registry, dicts are parsed through
+        :meth:`_ThemeProfile.from_dict`, and ``None`` is a no-op — the
+        function is executed in the current global rcParams environment
         with no snapshotting / restoration.
     func : callable
         The *actual* plotting implementation (e.g. ``_relplot_impl``).
@@ -913,7 +1016,8 @@ def _apply_theme_context(theme, func, *args, **kwargs):
     -------
     The return value of ``func(*args, **kwargs)``.
     """
-    if theme is None:
+    profile = _resolve_profile_input(profile)
+    if profile is None:
         return func(*args, **kwargs)
-    with ThemeContext(theme):
+    with ThemeContext(profile):
         return func(*args, **kwargs)

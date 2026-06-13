@@ -1476,11 +1476,11 @@ def clustermap(
     dendrogram_ratio=.2, colors_ratio=0.03,
     cbar_pos=(.02, .8, .05, .18), tree_kws=None,
     annot=None, fmt=".2g", annot_kws=None, annot_format=None,
-    theme=None,
+    profile=None,
     **kwargs
 ):
     return _apply_theme_context(
-        theme, _clustermap_impl,
+        profile, _clustermap_impl,
         data=data, pivot_kws=pivot_kws, method=method, metric=metric,
         z_score=z_score, standard_scale=standard_scale, figsize=figsize,
         cbar_kws=cbar_kws, row_cluster=row_cluster, col_cluster=col_cluster,

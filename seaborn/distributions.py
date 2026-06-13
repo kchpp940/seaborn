@@ -2159,11 +2159,11 @@ def displot(
     col_wrap=None, row_order=None, col_order=None,
     height=5, aspect=1, facet_kws=None,
     # Theme profile
-    theme=None,
+    profile=None,
     **kwargs,
 ):
     return _apply_theme_context(
-        theme, _displot_impl,
+        profile, _displot_impl,
         data=data, x=x, y=y, hue=hue, row=row, col=col,
         weights=weights, kind=kind, rug=rug, rug_kws=rug_kws,
         log_scale=log_scale, legend=legend, palette=palette,

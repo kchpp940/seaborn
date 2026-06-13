@@ -2767,11 +2767,11 @@ def catplot(
     formatter=None, orient=None, color=None, palette=None, hue_norm=None,
     legend="auto", legend_out=True, sharex=True, sharey=True,
     margin_titles=False, facet_kws=None, ci=deprecated,
-    theme=None,
+    profile=None,
     **kwargs
 ):
     return _apply_theme_context(
-        theme, _catplot_impl,
+        profile, _catplot_impl,
         data=data, x=x, y=y, hue=hue, row=row, col=col, kind=kind,
         estimator=estimator, errorbar=errorbar, n_boot=n_boot, seed=seed,
         units=units, weights=weights, order=order, hue_order=hue_order,
