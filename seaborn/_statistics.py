@@ -1030,33 +1030,46 @@ class Histogram:
         """Collected bin diagnostics (read-only dict view into collector)."""
         return self._diagnostics_collector.diagnostics
 
-    def _eval_bivariate(self, x1, x2, weights, group_key=()):
-        """Inner function for histogram of two variables.
+    def compute_group(self, x1, x2=None, weights=None, group_key=()):
+        """Compute histogram for one group and return the full result object.
 
-        Returns a :class:`HistGroupResult` containing the full histogram
-        result, including bin edges, counts, and diagnostics info.
+        This is the single internal computation entry point used by the
+        public :meth:`__call__`, the objects-layer :class:`Hist`, and the
+        plotter-level :func:`histplot`/``displot``.  All three layers
+        consume the same :class:`HistGroupResult` structure so bin edges,
+        effective sample counts, weights, normalization denominators, and
+        empty-group reasons are guaranteed to be identical.
+
+        Parameters
+        ----------
+        x1 : array-like
+            First variable values.
+        x2 : array-like, optional
+            Second variable values for bivariate histograms.
+        weights : array-like, optional
+            Observation weights.
+        group_key : tuple
+            Identifier for this group (e.g. ``(("hue", "A"),)``).
+
+        Returns
+        -------
+        HistGroupResult
+            The complete histogram result including bin edges, counts,
+            diagnostics info, and normalized hist values.
         """
         bin_kws = self.bin_kws
-        if bin_kws is None:
-            bin_kws = self.define_bin_params(x1, x2, cache=False)
-
-        return compute_hist_group_bivariate(
-            x1, x2, weights, bin_kws, self.stat, self.cumulative, group_key,
-        )
-
-    def _eval_univariate(self, x, weights, group_key=()):
-        """Inner function for histogram of one variable.
-
-        Returns a :class:`HistGroupResult` containing the full histogram
-        result, including bin edges, counts, and diagnostics info.
-        """
-        bin_kws = self.bin_kws
-        if bin_kws is None:
-            bin_kws = self.define_bin_params(x, weights=weights, cache=False)
-
-        return compute_hist_group_univariate(
-            x, weights, bin_kws, self.stat, self.cumulative, group_key,
-        )
+        if x2 is None:
+            if bin_kws is None:
+                bin_kws = self.define_bin_params(x1, weights=weights, cache=False)
+            return compute_hist_group_univariate(
+                x1, weights, bin_kws, self.stat, self.cumulative, group_key,
+            )
+        else:
+            if bin_kws is None:
+                bin_kws = self.define_bin_params(x1, x2, cache=False)
+            return compute_hist_group_bivariate(
+                x1, x2, weights, bin_kws, self.stat, self.cumulative, group_key,
+            )
 
     def __call__(self, x1, x2=None, weights=None, group_key=()):
         """Count the occurrences in each bin, maybe normalize.
@@ -1069,10 +1082,7 @@ class Histogram:
             The bin edges (single array for univariate, ``(x_edges, y_edges)``
             for bivariate).
         """
-        if x2 is None:
-            result = self._eval_univariate(x1, weights, group_key)
-        else:
-            result = self._eval_bivariate(x1, x2, weights, group_key)
+        result = self.compute_group(x1, x2, weights, group_key)
         self._diagnostics_collector.add_group_from_result(result)
         return result.hist, result.bin_edges
 

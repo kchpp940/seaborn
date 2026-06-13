@@ -775,8 +775,8 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, fill, element, multiple, alpha, plot_kws, {},
             )
 
-        # Diagnostics are flushed from _pending_results above;
-        # the collector is shared with the estimator, so no extra copy.
+        # Diagnostics are flushed below from the HistGroupResult
+        # objects; the collector is shared with the estimator.
 
     def plot_bivariate_histogram(
         self,
@@ -798,8 +798,8 @@ class _DistributionPlotter(VectorPlotter):
         self.diagnostics_ = self._diagnostics_collector.diagnostics
 
         # Do pre-compute housekeeping related to multiple groups
+        all_data = self.comp_data.dropna()
         if set(self.variables) - {"x", "y"}:
-            all_data = self.comp_data.dropna()
             if common_bins:
                 estimator.define_bin_params(
                     all_data["x"],
@@ -809,19 +809,32 @@ class _DistributionPlotter(VectorPlotter):
         else:
             common_norm = False
 
-        # -- Determine colormap threshold and norm based on the full data
-        # Use _eval_bivariate directly (no diagnostic collection) to avoid
-        # double-computation; diagnostics are collected in the draw loop below.
-        full_heights = []
-        for sub_vars, sub_data in self.iter_data(from_comp_data=True):
+        # -- Compute all bivariate histograms once via compute_group(), caching
+        # the HistGroupResult objects in a dict keyed by group_key.  This
+        # ensures the full-heights pass and the draw pass consume the exact
+        # same intermediate results, while diagnostics are flushed only once
+        # at the end.  No duplicate histogram computation, no hidden side
+        # effects in private _eval_* methods.
+        # We iterate by hue (same as the draw loop) so group keys match.
+        bivariate_results: dict[tuple, HistGroupResult] = {}
+        for sub_vars, sub_data in self.iter_data("hue", from_comp_data=True):
             group_key = tuple(sub_vars.items())
-            result = estimator._eval_bivariate(
+            result = estimator.compute_group(
                 sub_data["x"], sub_data["y"], sub_data.get("weights", None),
                 group_key=group_key,
             )
-            full_heights.append(result.hist)
+            bivariate_results[group_key] = result
+
+        full_heights = [r.hist for r in bivariate_results.values()]
 
         common_color_norm = not set(self.variables) - {"x", "y"} or common_norm
+
+        if common_color_norm:
+            all_result = estimator.compute_group(
+                all_data["x"], all_data["y"], all_data.get("weights", None),
+                group_key=(),
+            )
+            full_heights = [all_result.hist]
 
         if pthresh is not None and common_color_norm:
             thresh = self._quantile_to_level(full_heights, pthresh)
@@ -846,14 +859,10 @@ class _DistributionPlotter(VectorPlotter):
             if sub_data.empty:
                 continue
 
-            # Do the histogram computation
             group_key = tuple(sub_vars.items())
-            heights, (x_edges, y_edges) = estimator(
-                sub_data["x"],
-                sub_data["y"],
-                weights=sub_data.get("weights", None),
-                group_key=group_key,
-            )
+            result = bivariate_results[group_key]
+            heights = result.hist
+            x_edges, y_edges = result.bin_edges
 
             # Get the axes for this plot
             ax = self._get_axes(sub_vars)
@@ -943,8 +952,12 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, True, False, "layer", 1, artist_kws, {},
             )
 
-        # Diagnostics are collected internally by Histogram.__call__
-        # via compute_hist_group_bivariate and add_group_from_result.
+        # Diagnostics are flushed here once from the shared compute_group()
+        # results used for both the threshold calculation and the actual
+        # plotting.  This is the only collection point for bivariate
+        # diagnostics, matching the univariate pattern above.
+        for result in bivariate_results.values():
+            estimator._diagnostics_collector.add_group_from_result(result)
 
     def plot_univariate_density(
         self,
