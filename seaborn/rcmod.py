@@ -131,6 +131,81 @@ def register_theme_profile(name, profile, *, overwrite=False):
     _theme_profile_registry[name] = profile
 
 
+def list_theme_profiles():
+    """Return a sorted list of all registered theme profile names.
+
+    Returns
+    -------
+    list of str
+        Names of every profile currently in the registry.
+
+    See Also
+    --------
+    register_theme_profile
+    get_theme_profile
+    unregister_theme_profile
+    """
+    return sorted(_theme_profile_registry)
+
+
+def get_theme_profile(name):
+    """Look up a registered theme profile by name.
+
+    Parameters
+    ----------
+    name : str
+        The name of the profile to retrieve.
+
+    Returns
+    -------
+    _ThemeProfile
+        The profile registered under ``name``.
+
+    Raises
+    ------
+    KeyError
+        If no profile is registered under ``name``.
+
+    See Also
+    --------
+    register_theme_profile
+    list_theme_profiles
+    unregister_theme_profile
+    """
+    if name not in _theme_profile_registry:
+        raise KeyError(f"no theme profile registered under {name!r}")
+    return _theme_profile_registry[name]
+
+
+def unregister_theme_profile(name, *, missing_ok=False):
+    """Remove a named profile from the registry.
+
+    Parameters
+    ----------
+    name : str
+        The name of the profile to remove.
+    missing_ok : bool, default False
+        If ``True``, silently do nothing when ``name`` is not registered.
+        If ``False`` (the default), raise :class:`KeyError`.
+
+    Raises
+    ------
+    KeyError
+        If ``name`` is not registered and ``missing_ok`` is ``False``.
+
+    See Also
+    --------
+    register_theme_profile
+    list_theme_profiles
+    get_theme_profile
+    """
+    if name not in _theme_profile_registry:
+        if missing_ok:
+            return
+        raise KeyError(f"no theme profile registered under {name!r}")
+    del _theme_profile_registry[name]
+
+
 def _resolve_profile_input(profile):
     """Unify the three forms of profile input into a _ThemeProfile or None.
 
@@ -200,10 +275,13 @@ def set_theme(context="notebook", style="darkgrid", palette="deep",
     rc : dict or None
         Dictionary of rc parameter mappings to override the above.
     profile : str, dict, or _ThemeProfile, optional
-        A pre-resolved theme profile.  When given, all other parameters
-        (``context``, ``style``, etc.) are ignored.  Accepts a registered
-        profile name (see :func:`register_theme_profile`), a dict suitable
-        for :meth:`_ThemeProfile.from_dict`, or a :class:`_ThemeProfile`
+        A pre-resolved theme profile.  **Mutually exclusive** with all
+        other keyword arguments (``context``, ``style``, ``palette``,
+        ``font``, ``font_scale``, ``color_codes``, ``rc``).  If ``profile``
+        is given alongside any of the traditional parameters, a
+        :class:`ValueError` is raised.  Accepts a registered profile name
+        (see :func:`register_theme_profile`), a dict suitable for
+        :meth:`_ThemeProfile.from_dict`, or a :class:`_ThemeProfile`
         instance.
 
     Examples
@@ -213,6 +291,26 @@ def set_theme(context="notebook", style="darkgrid", palette="deep",
 
     """
     if profile is not None:
+        # Detect whether any traditional parameter was explicitly passed
+        # (i.e. differs from its default).  If so, raise: mixing the two
+        # APIs is almost always a bug, and silently ignoring one side is
+        # worse than failing fast.
+        defaults = dict(
+            context="notebook", style="darkgrid", palette="deep",
+            font="sans-serif", font_scale=1, color_codes=True, rc=None,
+        )
+        passed = dict(
+            context=context, style=style, palette=palette, font=font,
+            font_scale=font_scale, color_codes=color_codes, rc=rc,
+        )
+        explicit = [k for k, v in passed.items() if v != defaults[k]]
+        if explicit:
+            raise ValueError(
+                "set_theme() was called with both `profile` and the "
+                f"following traditional parameters: {', '.join(explicit)}. "
+                "These APIs are mutually exclusive — use either `profile` "
+                "or the individual keyword arguments, not both."
+            )
         profile = _resolve_profile_input(profile)
     else:
         profile = _ThemeProfile.from_args(
