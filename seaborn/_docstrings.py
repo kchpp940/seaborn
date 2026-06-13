@@ -115,28 +115,11 @@ _core_returns = dict(
     ax="""
 :class:`matplotlib.axes.Axes`
     The matplotlib axes containing the plot.
-
-    The returned axes has a ``diagnostics_`` attribute (a ``dict``) that
-    provides post-computed binning diagnostics for each data group.  The
-    dict keys are group identifiers — ``()`` for a single group,
-    ``(("hue", value),)`` for a hue group, etc.  — and the values are
-    :class:`~seaborn._statistics.BinDiagnostics` instances with fields
-    ``bin_edges``, ``count``, ``weight_sum``,
-    ``normalization_denominator``, ``empty_reason``, and ``extra``.
-    This attribute is only present when the plot type computes a
-    histogram (i.e. ``histplot``).
     """,
     facetgrid="""
 :class:`FacetGrid`
     An object managing one or more subplots that correspond to conditional data
     subsets with convenient methods for batch-setting of axes attributes.
-
-    When the plot kind is ``"hist"``, the returned grid has a
-    ``diagnostics_`` attribute (a ``dict``) that provides post-computed
-    binning diagnostics for each data group (hue × facet).  The dict
-    keys are group identifiers — ``()`` for a single group,
-    ``(("col", value), ("hue", value))`` for faceted groups, etc. — and
-    the values are :class:`~seaborn._statistics.BinDiagnostics` instances.
     """,
     jointgrid="""
 :class:`JointGrid`

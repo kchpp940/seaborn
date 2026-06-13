@@ -18,7 +18,7 @@ from ._base import VectorPlotter
 
 # We have moved univariate histogram computation over to the new Hist class,
 # but still use the older Histogram for bivariate computation.
-from ._statistics import ECDF, Histogram, KDE, BinDiagnostics, BinDiagnosticsCollector
+from ._statistics import ECDF, Histogram, KDE, BinDiagnostics
 from ._stats.counting import Hist
 
 from .axisgrid import (
@@ -1404,7 +1404,6 @@ class _DistributionPlotter(VectorPlotter):
 # External API
 # ==================================================================================== #
 
-
 def histplot(
     data=None, *,
     # Vector variables
@@ -1446,34 +1445,6 @@ def histplot(
         color = _default_color(method, hue, color, kwargs)
 
     if not p.has_xy_data:
-        # For empty / no-data inputs, still populate diagnostics_ so
-        # users can detect empty_reason consistently across layers.
-        if p._diagnostics_collector is None:
-            p._diagnostics_collector = BinDiagnosticsCollector(
-                stat=stat, cumulative=cumulative
-            )
-            p.diagnostics_ = p._diagnostics_collector.diagnostics
-        # Add a no-data / all-nan entry using () as the overall group key
-        x_vals = p.comp_data.get("x", p.comp_data.get("y"))
-        if x_vals is None or len(x_vals) == 0:
-            empty_x = np.array([])
-            edges = np.array([0.0, 1.0])
-            hist = np.array([0])
-        else:
-            empty_x = x_vals.to_numpy()
-            edges = np.array([float(np.nanmin(empty_x)), float(np.nanmax(empty_x)) + 1.0])
-            hist = np.array([0])
-        p._diagnostics_collector.add_group_univariate(
-            group_key=(),
-            x=empty_x,
-            bin_edges=edges,
-            hist=hist,
-            weights=p.comp_data.get("weights", None),
-        )
-        # Attach to Axes before returning
-        ax.diagnostics_ = p.diagnostics_
-        if p._hist_estimator is not None:
-            ax._hist_estimator = p._hist_estimator
         return ax
 
     # Default to discrete bins for categorical variables
@@ -2241,31 +2212,6 @@ def displot(
 
     # Check for a specification that lacks x/y data and return early
     if not p.has_xy_data:
-        # Populate diagnostics_ for empty / no-data inputs so that
-        # empty_reason can be detected consistently across layers
-        if p._diagnostics_collector is None:
-            p._diagnostics_collector = BinDiagnosticsCollector(
-                stat="count", cumulative=False,
-            )
-            p.diagnostics_ = p._diagnostics_collector.diagnostics
-        x_vals = p.comp_data.get("x", p.comp_data.get("y"))
-        if x_vals is None or len(x_vals) == 0:
-            empty_x = np.array([])
-            edges = np.array([0.0, 1.0])
-            hist = np.array([0])
-        else:
-            empty_x = x_vals.to_numpy()
-            edges = np.array([float(np.nanmin(empty_x)), float(np.nanmax(empty_x)) + 1.0])
-            hist = np.array([0])
-        p._diagnostics_collector.add_group_univariate(
-            group_key=(),
-            x=empty_x,
-            bin_edges=edges,
-            hist=hist,
-            weights=p.comp_data.get("weights", None),
-        )
-        # Attach to FacetGrid before early return
-        g.diagnostics_ = p.diagnostics_
         return g
 
     if color is None and hue is None:

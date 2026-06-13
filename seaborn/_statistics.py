@@ -97,49 +97,28 @@ class BinDiagnosticsCollector:
     """Unified collector for histogram binning diagnostics.
 
     This is the single source of truth for computing bin diagnostics.
-    Both the legacy :class:`Histogram` class and the objects-layer
-    :class:`~seaborn._stats.counting.Hist` class delegate to this
-    collector to ensure consistent output across all seaborn API layers.
-
-    Downstream functions (:func:`histplot`, :func:`displot`) attach the
-    collected diagnostics to the returned object (``ax.diagnostics_`` or
-    ``g.diagnostics_``), which is a **live reference** to
-    ``collector.diagnostics``.  This means that external code can always
-    access the same dict regardless of which layer created it.
+    Both the legacy Histogram class and the objects-layer Hist class
+    delegate to this collector to ensure consistent output.
 
     Parameters
     ----------
     stat : str
-        The normalization statistic being computed.  One of ``"count"``,
-        ``"density"``, ``"percent"``, ``"probability"``, ``"proportion"``,
-        ``"frequency"``.
+        The normalization statistic being computed.
     cumulative : bool
         Whether the statistic is cumulative.
-
-    Attributes
-    ----------
-    diagnostics : dict[tuple, BinDiagnostics]
-        Mapping from group keys to :class:`BinDiagnostics` instances.
-        This is the primary user-facing attribute.  The key convention is:
-
-        - ``()`` — no grouping variables (single overall group)
-        - ``(("var", value),)`` — one grouping variable
-        - ``(("var1", val1), ("var2", val2))`` — multiple grouping variables
-
-        The variable order follows the seaborn grouping order: hue first,
-        then facet variables (col/row).
 
     Examples
     --------
     >>> collector = BinDiagnosticsCollector(stat="density", cumulative=False)
-    >>> collector.add_group_univariate(
-    ...     group_key=(("hue", "A"),),
+    >>> collector.add_group(
+    ...     group_key=("hue", "A"),
     ...     x=data_array,
     ...     bin_edges=edges,
     ...     hist=counts,
+    ...     weights=weights,
     ... )
-    >>> collector.diagnostics[(("hue", "A"),)]
-    BinDiagnostics(bin_edges=array(shape=...), count=50, weight_sum=50.0, ...)
+    >>> collector.diagnostics
+    {('hue', 'A'): BinDiagnostics(...)}
     """
 
     def __init__(self, stat: str = "count", cumulative: bool = False):
@@ -460,28 +439,7 @@ class KDE:
 # Note: we no longer use this for univariate histograms in histplot,
 # preferring _stats.Hist. We'll deprecate this once we have a bivariate Stat class.
 class Histogram:
-    """Univariate and bivariate histogram estimator.
-
-    Attributes
-    ----------
-    diagnostics_ : dict[tuple, BinDiagnostics]
-        Post-computed diagnostics for each data group, populated after calling
-        :meth:`__call__`.  This is a **live reference** into the shared
-        :class:`BinDiagnosticsCollector`, so code that holds a reference to the
-        same collector (e.g. :func:`histplot`, :func:`displot`) will see the
-        identical dictionary object.
-
-        The dict keys follow a stable convention:
-
-        - No grouping variables: ``()`` (empty tuple)
-        - Hue grouping: ``(("hue", value),)``
-        - Bivariate: same key format; ``bin_edges`` is a 2-tuple of arrays
-
-        Each value is a :class:`BinDiagnostics` dataclass with fields
-        ``bin_edges``, ``count``, ``weight_sum``,
-        ``normalization_denominator``, ``empty_reason``, and ``extra``.
-        See :class:`BinDiagnostics` for the full field documentation.
-    """
+    """Univariate and bivariate histogram estimator."""
     def __init__(
         self,
         stat="count",
@@ -621,11 +579,7 @@ class Histogram:
 
     @property
     def diagnostics_(self) -> dict[tuple, BinDiagnostics]:
-        """Collected bin diagnostics (live view into the shared collector).
-
-        See the class Attributes docstring for the full description of the
-        dictionary structure, key conventions, and BinDiagnostics fields.
-        """
+        """Collected bin diagnostics (read-only dict view into collector)."""
         return self._diagnostics_collector.diagnostics
 
     def _collect_diagnostics(

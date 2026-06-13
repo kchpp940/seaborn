@@ -104,42 +104,6 @@ class Hist(Stat):
     --------
     .. include:: ../docstrings/objects.Hist.rst
 
-    Attributes
-    ----------
-    diagnostics_ : dict[tuple, BinDiagnostics]
-        Post-computed diagnostics for each data group, populated after calling
-        the stat. This is a **live reference** into the shared
-        :class:`~seaborn._statistics.BinDiagnosticsCollector` used internally,
-        meaning that downstream code (e.g. :func:`histplot`, :func:`displot`)
-        that reuses the same collector will expose the identical dictionary
-        object (``obj.diagnostics_ is other.diagnostics_``).
-
-        The dict keys follow a stable convention:
-
-        - No grouping variables: ``()`` (empty tuple)
-        - One grouping variable: ``(("varname", value),)``
-        - Multiple grouping variables:
-          ``(("var1", val1), ("var2", val2), ...)``
-
-        Each value is a :class:`~seaborn._statistics.BinDiagnostics` dataclass
-        with the following stable fields:
-
-        - ``bin_edges`` (ndarray or tuple[ndarray, ndarray]): Bin edges used
-          for the histogram.  Univariate: 1-D array of shape ``(n_bins + 1,)``;
-          bivariate: a 2-tuple of 1-D arrays for x and y edges.
-        - ``count`` (int): Number of valid (finite) samples in the group.
-        - ``weight_sum`` (float): Sum of sample weights (equals ``count`` when
-          no explicit weights are provided).
-        - ``normalization_denominator`` (float or None): The denominator used
-          in the stat normalization, or ``None`` for the raw ``count`` stat.
-          For example, for ``stat="proportion"`` this equals ``weight_sum``;
-          for ``stat="density"`` this equals the integrated area.
-        - ``empty_reason`` ({"no_data", "all_nan", "zero_variance"} or None):
-          Enum-like string explaining why the group produced no usable bins,
-          or ``None`` if the group had valid data.
-        - ``extra`` (dict): Reserved for additional metadata; always contains
-          at least ``{"stat": ..., "cumulative": ...}``.
-
     """
     stat: str = "count"
     bins: str | int | ArrayLike = "auto"
@@ -168,11 +132,7 @@ class Hist(Stat):
 
     @property
     def diagnostics_(self) -> dict[tuple, BinDiagnostics]:
-        """Collected bin diagnostics (live view into the shared collector).
-
-        See the class Attributes docstring for the full description of the
-        dictionary structure, key conventions, and BinDiagnostics fields.
-        """
+        """Collected bin diagnostics (read-only dict view into collector)."""
         return self._diagnostics_collector.diagnostics
 
     def _define_bin_edges(self, vals, weight, bins, binwidth, binrange, discrete):
@@ -240,102 +200,8 @@ class Hist(Stat):
 
         return pd.DataFrame({orient: center, "count": hist, "space": width})
 
-    def _compute_bin_kws_for_groups(
-        self, data, groupby_vars, orient, common_bins,
-    ):
-        """Compute bin parameters for each group and return as a dict.
-
-        This is used by diagnostics collection to ensure bin parameters
-        match exactly what was used during the actual histogram computation.
-
-        Parameters
-        ----------
-        data : DataFrame
-            Input data with group columns present.
-        groupby_vars : list of str
-            Names of the full grouping variables.
-        orient : str
-            Orientation variable name ('x' or 'y').
-        common_bins : bool or list of str
-            The common_bins parameter.
-
-        Returns
-        -------
-        dict
-            Mapping from group_key tuple to bin_kws dict.
-        """
-        bin_kws_map = {}
-
-        if not groupby_vars:
-            # Single group case
-            bin_kws = self._define_bin_params(data, orient, self._last_scale_type)
-            bin_kws_map[()] = bin_kws
-            return bin_kws_map
-
-        # Determine which variables define the bin groups
-        if common_bins is True:
-            # All groups share the same bin parameters
-            common_bin_kws = self._define_bin_params(data, orient, self._last_scale_type)
-            grouper = groupby_vars[0] if len(groupby_vars) == 1 else groupby_vars
-            for key, _ in data.groupby(grouper, sort=False, observed=False):
-                if isinstance(grouper, list):
-                    group_key = tuple(zip(groupby_vars, key))
-                else:
-                    group_key = ((groupby_vars[0], key),)
-                bin_kws_map[group_key] = common_bin_kws
-        elif common_bins is False:
-            # Each group has its own bin parameters
-            grouper = groupby_vars[0] if len(groupby_vars) == 1 else groupby_vars
-            for key, part_df in data.groupby(grouper, sort=False, observed=False):
-                if isinstance(grouper, list):
-                    group_key = tuple(zip(groupby_vars, key))
-                else:
-                    group_key = ((groupby_vars[0], key),)
-                bin_kws = self._define_bin_params(part_df, orient, self._last_scale_type)
-                bin_kws_map[group_key] = bin_kws
-        else:
-            # common_bins is a list of variable names - share bins within those groups
-            bin_group_vars = [v for v in common_bins if v in groupby_vars]
-            if not bin_group_vars:
-                # No bin-grouping vars in grouping vars -> fall back to per-group
-                bin_group_vars = groupby_vars
-
-            # First compute bin params per bin-group
-            bin_grouper = bin_group_vars[0] if len(bin_group_vars) == 1 else bin_group_vars
-            bin_kws_by_bin_group = {}
-            for bin_key, bin_part_df in data.groupby(bin_grouper, sort=False, observed=False):
-                bin_kws = self._define_bin_params(bin_part_df, orient, self._last_scale_type)
-                if isinstance(bin_grouper, list):
-                    bin_key_tuple = tuple(zip(bin_group_vars, bin_key))
-                else:
-                    bin_key_tuple = ((bin_group_vars[0], bin_key),)
-                bin_kws_by_bin_group[bin_key_tuple] = bin_kws
-
-            # Then map each full group to its bin params
-            grouper = groupby_vars[0] if len(groupby_vars) == 1 else groupby_vars
-            for key, part_df in data.groupby(grouper, sort=False, observed=False):
-                if isinstance(grouper, list):
-                    group_key = tuple(zip(groupby_vars, key))
-                    group_dict = dict(group_key)
-                else:
-                    group_key = ((groupby_vars[0], key),)
-                    group_dict = {groupby_vars[0]: key}
-
-                # Find the matching bin group key
-                if isinstance(bin_grouper, list):
-                    bin_key_tuple = tuple((v, group_dict[v]) for v in bin_group_vars)
-                else:
-                    bin_key_tuple = ((bin_group_vars[0], group_dict[bin_group_vars[0]]),)
-
-                bin_kws_map[group_key] = bin_kws_by_bin_group.get(
-                    bin_key_tuple,
-                    self._define_bin_params(part_df, orient, self._last_scale_type)
-                )
-
-        return bin_kws_map
-
     def _collect_diagnostics_for_groups(
-        self, data, groupby_vars, orient, bin_kws_map,
+        self, data, groupby_vars, orient, bin_kws_dict=None,
     ):
         """Collect diagnostics for each group using the unified collector.
 
@@ -351,14 +217,18 @@ class Hist(Stat):
             Names of the grouping variables.
         orient : str
             Orientation variable name ('x' or 'y').
-        bin_kws_map : dict
-            Mapping from group_key tuple to bin_kws dict.
+        bin_kws_dict : dict or None
+            If common_bins is True, a single bin_kws dict for all groups.
+            If common_bins is False/other, a dict mapping group key to bin_kws.
         """
         if not groupby_vars:
             # Single group case
-            bin_kws = bin_kws_map.get(())
-            if bin_kws is None:
-                bin_kws = self._define_bin_params(data, orient, self._last_scale_type)
+            if bin_kws_dict is None:
+                bin_kws = self._define_bin_params(
+                    data, orient, self._last_scale_type
+                )
+            else:
+                bin_kws = bin_kws_dict
 
             vals = data[orient]
             weights = data.get("weight", None)
@@ -366,17 +236,16 @@ class Hist(Stat):
             hist, edges = np.histogram(
                 vals, **bin_kws, weights=weights, density=density,
             )
-            # Add diagnostics BEFORE normalization so norm_denom can be
-            # computed correctly from raw histogram counts
+            # Apply normalization to match the final output
+            hist = self._normalize_array(hist, edges)
+
             self._diagnostics_collector.add_group_univariate(
                 group_key=(),
                 x=vals,
                 bin_edges=edges,
-                hist=hist.copy(),
+                hist=hist,
                 weights=weights,
             )
-            # Apply normalization to match the final output
-            hist = self._normalize_array(hist, edges)
             return
 
         # Multi-group case
@@ -387,9 +256,18 @@ class Hist(Stat):
             else:
                 group_key = ((groupby_vars[0], key),)
 
-            bin_kws = bin_kws_map.get(group_key)
-            if bin_kws is None:
-                bin_kws = self._define_bin_params(part_df, orient, self._last_scale_type)
+            if bin_kws_dict is None or isinstance(bin_kws_dict, dict) and "bins" in bin_kws_dict and not isinstance(bin_kws_dict["bins"], dict):
+                # common_bins is True or not set - use the shared bin_kws
+                bin_kws = bin_kws_dict if bin_kws_dict is not None else self._define_bin_params(
+                    part_df, orient, self._last_scale_type
+                )
+            else:
+                # Per-group bins - look up by group key
+                bin_kws = bin_kws_dict.get(group_key, bin_kws_dict)
+                if bin_kws is None:
+                    bin_kws = self._define_bin_params(
+                        part_df, orient, self._last_scale_type
+                    )
 
             vals = part_df[orient]
             weights = part_df.get("weight", None)
@@ -397,17 +275,16 @@ class Hist(Stat):
             hist, edges = np.histogram(
                 vals, **bin_kws, weights=weights, density=density,
             )
-            # Add diagnostics BEFORE normalization so norm_denom can be
-            # computed correctly from raw histogram counts
+            # Apply normalization to match the final output
+            hist = self._normalize_array(hist, edges)
+
             self._diagnostics_collector.add_group_univariate(
                 group_key=group_key,
                 x=vals,
                 bin_edges=edges,
-                hist=hist.copy(),
+                hist=hist,
                 weights=weights,
             )
-            # Apply normalization to match the final output
-            hist = self._normalize_array(hist, edges)
 
     def _normalize_array(self, hist, edges):
         """Apply normalization to a raw histogram count array.
@@ -459,11 +336,9 @@ class Hist(Stat):
         self._last_scale_type = scale_type
 
         # Reset the diagnostics collector for this call
-        # Use clear() instead of recreating to preserve external references
-        # (single source of truth across layers)
-        self._diagnostics_collector.stat = self.stat
-        self._diagnostics_collector.cumulative = self.cumulative
-        self._diagnostics_collector.clear()
+        self._diagnostics_collector = BinDiagnosticsCollector(
+            stat=self.stat, cumulative=self.cumulative
+        )
 
         grouping_vars = [str(v) for v in data if v in groupby.order]
         # Keep a reference to the original input data for diagnostics
@@ -496,19 +371,14 @@ class Hist(Stat):
             data = norm_groupby.apply(data, self._normalize)
 
         # --- Collect diagnostics using original input data ---
-        # First compute bin params for each group (matching actual computation)
-        bin_kws_map = self._compute_bin_kws_for_groups(
-            data=original_data,
-            groupby_vars=grouping_vars,
-            orient=orient,
-            common_bins=self.common_bins,
-        )
-        # Then collect diagnostics using those bin params
+        # We walk the original data and recompute per-group histograms
+        # for diagnostics. This adds a small overhead but keeps
+        # GroupBy.apply completely untouched.
         self._collect_diagnostics_for_groups(
             data=original_data,
             groupby_vars=grouping_vars,
             orient=orient,
-            bin_kws_map=bin_kws_map,
+            bin_kws_dict=common_bin_kws,
         )
 
         other = {"x": "y", "y": "x"}[orient]
