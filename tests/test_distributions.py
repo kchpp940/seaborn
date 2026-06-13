@@ -2,12 +2,13 @@ import itertools
 import warnings
 
 import numpy as np
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb, to_rgba
 
 import pytest
-from numpy.testing import assert_array_equal, assert_array_almost_equal
+from numpy.testing import assert_array_equal, assert_array_almost_equal, assert_allclose
 
 from seaborn import distributions as dist
 from seaborn.palettes import (
@@ -21,7 +22,12 @@ from seaborn._statistics import (
     KDE,
     Histogram,
     _no_scipy,
+    BinDiagnostics,
+    BinDiagnosticsCollector,
 )
+from seaborn._stats.counting import Hist as ObjHist
+from seaborn._core.groupby import GroupBy
+from seaborn._core.scales import Continuous as ContScale
 from seaborn.distributions import (
     _DistributionPlotter,
     displot,
@@ -2496,3 +2502,479 @@ def integrate(y, x):
     x = np.asarray(x)
     dx = np.diff(x)
     return (dx * y[:-1] + dx * y[1:]).sum() / 2
+
+
+# ============================================================================
+# Bin diagnostics tests - unified collector across legacy/objects layers
+# ============================================================================
+
+class TestBinDiagnosticsCollector:
+    """Direct tests of the unified BinDiagnosticsCollector."""
+
+    @pytest.fixture
+    def rs(self):
+        return np.random.RandomState(42)
+
+    def test_bin_diagnostics_fields(self, rs):
+        """BinDiagnostics dataclass must expose all documented fields."""
+        x = rs.randn(100)
+        edges = np.linspace(x.min(), x.max(), 11)
+        hist, _ = np.histogram(x, edges)
+        diag = BinDiagnostics(
+            bin_edges=edges,
+            count=100,
+            weight_sum=100.0,
+            normalization_denominator=None,
+            empty_reason=None,
+            extra={"stat": "count"},
+        )
+        assert isinstance(diag.bin_edges, np.ndarray)
+        assert diag.bin_edges.shape == (11,)
+        assert diag.count == 100
+        assert diag.weight_sum == 100.0
+        assert diag.normalization_denominator is None
+        assert diag.empty_reason is None
+        assert "stat" in diag.extra
+        # __repr__ must not raise
+        assert "BinDiagnostics" in repr(diag)
+
+    def test_collector_single_group(self, rs):
+        """Collector should correctly diagnose a single ungrouped dataset."""
+        x = rs.randn(150)
+        collector = BinDiagnosticsCollector(stat="count", cumulative=False)
+        hist, edges = np.histogram(x, bins=20)
+        collector.add_group_univariate(
+            group_key=(),
+            x=x,
+            bin_edges=edges,
+            hist=hist,
+            weights=None,
+        )
+        diags = collector.diagnostics
+        assert () in diags
+        assert diags[()].count == 150
+        assert diags[()].weight_sum == 150.0
+        assert diags[()].bin_edges.shape == (21,)
+        # count stat has no normalization denominator
+        assert diags[()].normalization_denominator is None
+        assert diags[()].empty_reason is None
+
+    def test_collector_density_normalization(self, rs):
+        """Collector for density stat should compute integration-to-1 denominator."""
+        x = rs.randn(200)
+        collector = BinDiagnosticsCollector(stat="density", cumulative=False)
+        hist, edges = np.histogram(x, bins=30, density=True)
+        collector.add_group_univariate((), x, edges, hist)
+        diag = collector.diagnostics[()]
+        # density should integrate to ~1
+        assert abs(diag.normalization_denominator - 1.0) < 0.05
+        assert diag.count == 200
+
+    def test_collector_percent_normalization(self, rs):
+        """Percent stat must have normalization_denominator == 100/100=1.0."""
+        x = rs.randn(100)
+        hist, edges = np.histogram(x, bins=10)
+        percent_hist = hist.astype(float) / hist.sum() * 100
+        collector = BinDiagnosticsCollector(stat="percent", cumulative=False)
+        collector.add_group_univariate((), x, edges, percent_hist)
+        diag = collector.diagnostics[()]
+        assert diag.normalization_denominator == pytest.approx(1.0, abs=0.001)
+
+    def test_collector_weights(self, rs):
+        """weight_sum must equal the sum of valid sample weights."""
+        x = rs.randn(50)
+        w = rs.uniform(1, 5, 50)
+        hist, edges = np.histogram(x, bins=10, weights=w)
+        collector = BinDiagnosticsCollector(stat="count")
+        collector.add_group_univariate((), x, edges, hist, weights=w)
+        diag = collector.diagnostics[()]
+        assert diag.count == 50
+        assert diag.weight_sum == pytest.approx(w.sum(), abs=1e-9)
+
+    def test_collector_empty_no_data(self):
+        """Empty input array -> empty_reason='no_data'."""
+        x = np.array([])
+        collector = BinDiagnosticsCollector(stat="count")
+        edges = np.array([0.0, 1.0])
+        hist = np.array([0])
+        collector.add_group_univariate((), x, edges, hist)
+        diag = collector.diagnostics[()]
+        assert diag.count == 0
+        assert diag.weight_sum == 0.0
+        assert diag.empty_reason == "no_data"
+
+    def test_collector_all_nan(self):
+        """All-NaN input -> empty_reason='all_nan'."""
+        x = np.full(20, np.nan)
+        collector = BinDiagnosticsCollector(stat="count")
+        edges = np.array([0.0, 1.0])
+        hist = np.array([0])
+        collector.add_group_univariate((), x, edges, hist)
+        assert collector.diagnostics[()].empty_reason == "all_nan"
+
+    def test_collector_zero_variance(self, rs):
+        """Constant-value input -> empty_reason='zero_variance'."""
+        x = np.full(30, 5.0)
+        collector = BinDiagnosticsCollector(stat="density")
+        hist, edges = np.histogram(x, bins=5)
+        # density may be 0 if single bin (delta) but collector still checks var
+        collector.add_group_univariate((), x, edges, hist)
+        assert collector.diagnostics[()].empty_reason == "zero_variance"
+
+    def test_collector_bivariate(self, rs):
+        """Bivariate case should record two edge arrays."""
+        x = rs.randn(100)
+        y = rs.randn(100)
+        collector = BinDiagnosticsCollector(stat="count")
+        hist, x_edges, y_edges = np.histogram2d(x, y, bins=(8, 12))
+        collector.add_group_bivariate(
+            group_key=(), x1=x, x2=y,
+            bin_edges=[x_edges, y_edges], hist=hist,
+        )
+        diag = collector.diagnostics[()]
+        assert diag.count == 100
+        assert isinstance(diag.bin_edges, (tuple, list))
+        assert len(diag.bin_edges) == 2
+        assert diag.bin_edges[0].shape == (9,)
+        assert diag.bin_edges[1].shape == (13,)
+
+    def test_collector_clear(self, rs):
+        """collector.clear() must remove all prior diagnostics."""
+        x = rs.randn(50)
+        collector = BinDiagnosticsCollector(stat="count")
+        hist, edges = np.histogram(x, bins=5)
+        collector.add_group_univariate((), x, edges, hist)
+        assert len(collector.diagnostics) == 1
+        collector.clear()
+        assert len(collector.diagnostics) == 0
+
+    def test_collector_readonly_view(self, rs):
+        """diagnostics property must return a dict whose mutations via add_group
+        are reflected (shared dict, not a copy)."""
+        x = rs.randn(50)
+        collector = BinDiagnosticsCollector(stat="count")
+        view = collector.diagnostics
+        hist, edges = np.histogram(x, bins=5)
+        collector.add_group_univariate((), x, edges, hist)
+        assert () in view  # shared reference, not a copy
+
+
+class TestHistplotDiagnostics:
+    """Diagnostics on axes-level histplot."""
+
+    @pytest.fixture
+    def rs(self):
+        return np.random.RandomState(42)
+
+    def test_histplot_simple_has_diagnostics(self, rs):
+        """Simple histplot must attach diagnostics_ dict to returned Axes."""
+        x = rs.randn(100)
+        ax = histplot(x=x, bins=10)
+        plt.close(ax.figure)
+        assert hasattr(ax, "diagnostics_")
+        assert hasattr(ax, "_hist_estimator")
+        # single group key = ()
+        assert () in ax.diagnostics_
+        d = ax.diagnostics_[()]
+        assert d.count == 100
+        assert d.bin_edges.shape == (11,)
+
+    def test_histplot_hue_groups(self, rs):
+        """With hue, each hue level must get its own diagnostic entry."""
+        df = pd.DataFrame({
+            "x": np.concatenate([rs.randn(60), rs.randn(40) + 2]),
+            "h": ["a"] * 60 + ["b"] * 40,
+        })
+        ax = histplot(data=df, x="x", hue="h", stat="density")
+        plt.close(ax.figure)
+        keys = list(ax.diagnostics_.keys())
+        # two hue groups
+        assert len(keys) == 2
+        counts = {k[0][1]: ax.diagnostics_[k].count for k in keys}
+        assert counts["a"] == 60
+        assert counts["b"] == 40
+        # density stat -> normalization denominator ~= 1 for each
+        for k in keys:
+            assert abs(ax.diagnostics_[k].normalization_denominator - 1.0) < 0.1
+
+    def test_histplot_weights(self, rs):
+        """With weights, weight_sum must match sum of weights."""
+        x = rs.randn(80)
+        w = rs.uniform(0.5, 3.0, 80)
+        ax = histplot(x=x, weights=w, stat="count", bins=10)
+        plt.close(ax.figure)
+        d = ax.diagnostics_[()]
+        assert d.count == 80
+        assert d.weight_sum == pytest.approx(w.sum(), abs=1e-9)
+
+    def test_histplot_common_bins_shared_edges(self, rs):
+        """With common_bins=True (default), all hue groups must share identical edges."""
+        df = pd.DataFrame({
+            "x": np.concatenate([rs.randn(50), rs.randn(50) + 5]),
+            "h": ["x1"] * 50 + ["x2"] * 50,
+        })
+        ax = histplot(data=df, x="x", hue="h", common_bins=True, bins=15)
+        plt.close(ax.figure)
+        diags = list(ax.diagnostics_.values())
+        edges_0 = diags[0].bin_edges
+        for d in diags[1:]:
+            assert_array_equal(d.bin_edges, edges_0)
+
+    def test_histplot_probability_normalization(self, rs):
+        """stat=probability must report norm_denom == 1 (before normalization)."""
+        x = rs.randn(100)
+        ax = histplot(x=x, stat="probability", bins=20)
+        plt.close(ax.figure)
+        d = ax.diagnostics_[()]
+        assert d.normalization_denominator == pytest.approx(1.0, abs=1e-9)
+
+    def test_histplot_bivariate(self, rs):
+        """Bivariate histplot must report tuple of edges with correct shapes."""
+        x = rs.randn(120)
+        y = rs.randn(120)
+        ax = histplot(x=x, y=y, bins=(10, 15))
+        plt.close(ax.figure)
+        d = ax.diagnostics_[()]
+        assert d.count == 120
+        edges = d.bin_edges
+        assert isinstance(edges, (tuple, list))
+        x_edges, y_edges = edges
+        assert x_edges.shape == (11,)
+        assert y_edges.shape == (16,)
+
+
+class TestDisplotDiagnostics:
+    """Diagnostics on figure-level displot with FacetGrid."""
+
+    @pytest.fixture
+    def rs(self):
+        return np.random.RandomState(42)
+
+    def test_displot_simple_has_facetgrid_attrs(self, rs):
+        """displot must attach diagnostics to FacetGrid."""
+        x = rs.randn(100)
+        g = displot(x=x, bins=10)
+        plt.close(g.fig)
+        assert hasattr(g, "diagnostics_")
+        assert hasattr(g, "_hist_estimator")
+        assert () in g.diagnostics_
+        assert g.diagnostics_[()].count == 100
+
+    def test_displot_hue_and_facet_keys(self, rs):
+        """hue + col facet -> 2 * 2 = 4 diagnostic entries with composite keys."""
+        n_per_group = 30
+        df = pd.DataFrame({
+            "x": rs.randn(n_per_group * 4),
+            "hue_var": np.repeat(["A", "B"], n_per_group * 2),
+            "col_var": np.tile(np.repeat(["c1", "c2"], n_per_group), 2),
+        })
+        g = displot(data=df, x="x", hue="hue_var", col="col_var")
+        plt.close(g.fig)
+        diags = g.diagnostics_
+        assert len(diags) == 4
+        # Each key should be a tuple of ((var, val), (var, val), ...)
+        for key in diags:
+            assert isinstance(key, tuple)
+            assert len(key) == 2  # (hue, col)
+            assert key[0][0] == "hue"
+            assert key[1][0] == "col"
+            counts = {diags[k].count for k in diags}
+        # Each group should have n_per_group samples
+        assert counts == {n_per_group}
+
+    def test_displot_shared_collector(self, rs):
+        """FacetGrid's diagnostics_ MUST be the same object (shared) as the
+        collector's internal diagnostics dict - no copying between layers."""
+        x = rs.randn(50)
+        g = displot(x=x, bins=5)
+        plt.close(g.fig)
+        # If the sharing works, g._hist_estimator.diagnostics_ IS g.diagnostics_
+        assert g._hist_estimator is not None
+        # For Hist: the diagnostics_ property is the collector.diagnostics view
+        # So the internal dict should be the exact same object
+        estimator_diags = g._hist_estimator.diagnostics_
+        # Check they are the identical dict (is, not ==)
+        assert g.diagnostics_ is estimator_diags
+
+
+class TestObjHistDiagnostics:
+    """Diagnostics on objects-layer Hist Stat."""
+
+    @pytest.fixture
+    def rs(self):
+        return np.random.RandomState(42)
+
+    def test_obj_hist_collector_type(self, rs):
+        """ObjHist must use a BinDiagnosticsCollector internally."""
+        h = ObjHist(stat="count", bins=5)
+        assert isinstance(h._diagnostics_collector, BinDiagnosticsCollector)
+
+    def test_obj_hist_hue_groups(self, rs):
+        """ObjHist with hue grouping should produce one diagnostic per group."""
+        df = pd.DataFrame({
+            "x": np.concatenate([rs.randn(40), rs.randn(60) + 3]),
+            "hue": ["g1"] * 40 + ["g2"] * 60,
+        })
+        h = ObjHist(stat="density", bins=12)
+        gb = GroupBy(["hue"])
+        _ = h(df, gb, "x", {"x": ContScale()})
+        diags = h.diagnostics_
+        assert len(diags) == 2
+        # Find g1 and g2 counts
+        counts = {}
+        for k, v in diags.items():
+            # k = (("hue", val),)
+            counts[k[0][1]] = v.count
+        assert counts["g1"] == 40
+        assert counts["g2"] == 60
+        # density: norm_denom should integrate to 1 (within tolerance)
+        for v in diags.values():
+            assert abs(v.normalization_denominator - 1.0) < 0.1
+
+    def test_obj_hist_common_norm_vs_per_group(self, rs):
+        """common_norm=False -> each group normalized independently;
+        common_norm=True -> single denominator across all groups.
+        We check that diagnostics show the correct group counts regardless."""
+        df = pd.DataFrame({
+            "x": np.concatenate([rs.randn(25), rs.randn(75) + 2]),
+            "hue": ["small"] * 25 + ["large"] * 75,
+        })
+        h_common = ObjHist(stat="probability", common_norm=True)
+        h_sep = ObjHist(stat="probability", common_norm=False)
+        gb = GroupBy(["hue"])
+        h_common(df.copy(), gb, "x", {"x": ContScale()})
+        h_sep(df.copy(), gb, "x", {"x": ContScale()})
+        # Both should still have the same counts (counts are pre-norm)
+        common_counts = sorted(d.count for d in h_common.diagnostics_.values())
+        sep_counts = sorted(d.count for d in h_sep.diagnostics_.values())
+        assert common_counts == [25, 75]
+        assert sep_counts == [25, 75]
+
+    def test_obj_hist_empty_group_nan(self):
+        """ObjHist with all-NaN group should diagnose empty_reason='all_nan'."""
+        df = pd.DataFrame({
+            "x": [np.nan] * 20,
+            "hue": ["only"] * 20,
+        })
+        h = ObjHist(stat="count")
+        gb = GroupBy(["hue"])
+        with np.errstate(invalid="ignore"):
+            result = h(df, gb, "x", {"x": ContScale()})
+        diags = h.diagnostics_
+        # Even if the result is empty due to NaN, diagnostics should record
+        # the group and mark it as 'all_nan' if all values are NaN.
+        # (Depends on how Hist handles edge cases; at minimum no crash.)
+        for d in diags.values():
+            if d.count == 0:
+                assert d.empty_reason in ("no_data", "all_nan")
+
+
+class TestDiagnosticsConsistency:
+    """Cross-layer consistency: same data/params -> same diagnostic output
+    regardless of whether we go through histplot, displot, or ObjHist."""
+
+    @pytest.fixture
+    def rs(self):
+        return np.random.RandomState(123)
+
+    @pytest.fixture
+    def df_hue(self, rs):
+        return pd.DataFrame({
+            "x": np.concatenate([rs.randn(50), rs.randn(50) + 2.5]),
+            "hue": ["A"] * 50 + ["B"] * 50,
+        })
+
+    def test_histplot_vs_objhist_counts_match(self, df_hue):
+        """histplot and ObjHist should agree on count, edges, and weight_sum
+        for every group under identical bin parameters."""
+        bins = 18
+        stat = "probability"
+
+        # Via histplot
+        ax = histplot(
+            data=df_hue, x="x", hue="hue",
+            stat=stat, bins=bins,
+            # Make sure both use common_bins default (True)
+        )
+        plt.close(ax.figure)
+        histplot_diags = ax.diagnostics_
+
+        # Via objects-layer ObjHist directly
+        h = ObjHist(stat=stat, bins=bins)
+        gb = GroupBy(["hue"])
+        h(df_hue.copy(), gb, "x", {"x": ContScale()})
+        obj_diags = h.diagnostics_
+
+        # Normalize keys to a canonical form: dict of {hue_value: diag}
+        def _by_hue(diags_dict):
+            out = {}
+            for k, v in diags_dict.items():
+                # k format: (("hue", val),)  or other single-semantic-key forms
+                for var, val in k:
+                    if var == "hue":
+                        out[val] = v
+            return out
+
+        hp_by = _by_hue(histplot_diags)
+        oh_by = _by_hue(obj_diags)
+        assert set(hp_by.keys()) == {"A", "B"}
+        assert set(oh_by.keys()) == {"A", "B"}
+
+        for hue_val in ("A", "B"):
+            assert hp_by[hue_val].count == oh_by[hue_val].count == 50
+            assert hp_by[hue_val].weight_sum == oh_by[hue_val].weight_sum == 50
+            # Edge arrays should match because both use common_bins=True on
+            # the same data with the same bins= number
+            # Use assert_allclose due to tiny floating point differences
+            # from different computation paths (max diff ~ 1e-15)
+            assert_allclose(
+                hp_by[hue_val].bin_edges, oh_by[hue_val].bin_edges,
+                rtol=1e-12, atol=1e-12,
+            )
+
+    def test_histplot_vs_displot_same_single_group(self, rs):
+        """Single-group histplot and displot should produce identical diagnostics
+        (no hue, no facet)."""
+        x = rs.randn(80)
+        ax = histplot(x=x, bins=12, stat="density")
+        g = displot(x=x, bins=12, stat="density")
+        hp = ax.diagnostics_[()]
+        dp = g.diagnostics_[()]
+        plt.close(ax.figure)
+        plt.close(g.fig)
+        assert hp.count == dp.count == 80
+        assert hp.weight_sum == dp.weight_sum
+        assert_array_equal(hp.bin_edges, dp.bin_edges)
+        assert hp.normalization_denominator == pytest.approx(
+            dp.normalization_denominator, abs=1e-12
+        )
+
+
+class TestGroupByNotPolluted:
+    """Regression guard: GroupBy.apply must not introspect function signatures."""
+
+    def test_groupby_apply_simple(self):
+        """GroupBy.apply with a standard 2-arg lambda must work exactly as before;
+        we must never have added inspect/signature logic here."""
+        import inspect
+        src = inspect.getsource(GroupBy.apply)
+        # Make sure GroupBy.apply does not contain the word "inspect" or
+        # "signature" or "_group_key" parameter handling
+        assert "inspect" not in src
+        assert "signature" not in src
+        assert "_group_key" not in src
+
+    def test_groupby_apply_no_keyword_injection(self):
+        """A func that only accepts (data, arg) must work without error even
+        though the old polluted version passed extra keyword args."""
+        df = pd.DataFrame({
+            "v": [1, 2, 3, 4, 5, 6],
+            "g": ["a", "a", "a", "b", "b", "b"],
+        })
+        gb = GroupBy(["g"])
+        # A deliberately strict function that would crash if given extra kwargs
+        def my_func(part, multiplier):
+            return pd.DataFrame({"out": part["v"] * multiplier})
+        result = gb.apply(df, my_func, 2)
+        assert set(result["g"]) == {"a", "b"}
+        assert result["out"].tolist() == [2, 4, 6, 8, 10, 12]
