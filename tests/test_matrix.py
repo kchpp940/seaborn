@@ -510,24 +510,133 @@ class TestHeatmap:
             with pytest.raises(AttributeError):
                 setattr(p, attr, "should_not_work")
 
-    def test_context_delegates_equivalent_to_context(self):
-        """Legacy properties on _HeatMapper must return the same objects
-        as the underlying annot_ctx attributes."""
+    def test_annotation_context_attributes_readonly(self):
+        """_AnnotationContext attributes must be read-only @property
+        delegates, so external code cannot replace the internal state."""
         p = mat._HeatMapper(self.df_norm, **self.default_kws)
         ctx = p.annot_ctx
 
-        assert p.data is ctx.data
-        assert p.plot_data is ctx.plot_data
-        assert p.mask is ctx.mask
+        readonly_attrs = [
+            "data", "plot_data", "mask", "annot_enabled",
+            "annot_data", "annot_data_df", "original_data",
+            "row_ind", "col_ind", "fmt", "annot_format", "annot_kws",
+        ]
+        for attr in readonly_attrs:
+            with pytest.raises(AttributeError):
+                setattr(ctx, attr, "should_not_work")
+
+    def test_context_delegates_return_copies_not_references(self):
+        """Legacy properties on _HeatMapper and annot_ctx must return
+        *copies* of mutable objects, so external in-place mutations
+        cannot pollute the internal context state.
+
+        We use annot=True so annot_data / annot_data_df are not None.
+        """
+        kws = self.default_kws.copy()
+        kws["annot"] = True
+        p = mat._HeatMapper(self.df_norm, **kws)
+        ctx = p.annot_ctx
+
+        # --- check that property access returns *different* objects ---
+        assert p.data is not ctx._data
+        assert p.plot_data is not ctx._plot_data
+        assert p.mask is not ctx._mask
+        assert p.annot_data is not ctx._annot_data
+        assert p.annot_data_df is not ctx._annot_data_df
+        assert p.original_data is not ctx._original_data
+        assert p.row_ind is not ctx._row_ind
+        assert p.col_ind is not ctx._col_ind
+        assert p.annot_kws is not ctx._annot_kws
+
+        # also verify annot_ctx's own properties return copies
+        assert ctx.data is not ctx._data
+        assert ctx.plot_data is not ctx._plot_data
+        assert ctx.mask is not ctx._mask
+        assert ctx.annot_data is not ctx._annot_data
+        assert ctx.annot_data_df is not ctx._annot_data_df
+        assert ctx.original_data is not ctx._original_data
+        assert ctx.row_ind is not ctx._row_ind
+        assert ctx.col_ind is not ctx._col_ind
+        assert ctx.annot_kws is not ctx._annot_kws
+
+    def test_context_external_mutation_does_not_affect_internal_state(self):
+        """Mutating the objects returned by property access must NOT
+        change the context's internal data.  The context must remain the
+        single authoritative source of truth."""
+        df = pd.DataFrame(
+            [[1.0, 2.0], [3.0, 4.0]],
+            index=["a", "b"],
+            columns=["x", "y"],
+        )
+        kws = self.default_kws.copy()
+        kws["annot"] = True
+        p = mat._HeatMapper(df, **kws)
+        ctx = p.annot_ctx
+
+        # Snapshot internal state before mutation
+        orig_data_vals = ctx._data.values.copy()
+        orig_plot_data_vals = np.array(ctx._plot_data)
+        orig_mask_vals = ctx._mask.values.copy()
+        orig_row_ind = ctx._row_ind.copy()
+        orig_col_ind = ctx._col_ind.copy()
+        orig_annot_kws = dict(ctx._annot_kws)
+
+        # Mutate externally-returned objects
+        external_data = p.data
+        external_data.iloc[0, 0] = 999.0
+
+        external_plot = p.plot_data
+        external_plot[0, 0] = 999.0
+
+        external_mask = p.mask
+        external_mask.iloc[0, 0] = True
+
+        external_row_ind = p.row_ind
+        external_row_ind[0] = 42
+
+        external_col_ind = p.col_ind
+        external_col_ind[0] = 42
+
+        external_annot_kws = p.annot_kws
+        external_annot_kws["new_key"] = "polluted"
+
+        # Internal state must be untouched
+        npt.assert_array_equal(ctx._data.values, orig_data_vals)
+        npt.assert_array_equal(np.array(ctx._plot_data), orig_plot_data_vals)
+        npt.assert_array_equal(ctx._mask.values, orig_mask_vals)
+        npt.assert_array_equal(ctx._row_ind, orig_row_ind)
+        npt.assert_array_equal(ctx._col_ind, orig_col_ind)
+        assert ctx._annot_kws == orig_annot_kws
+
+        # Context query methods must still return the original values
+        assert ctx.raw_value(0, 0) == 1.0
+        assert ctx.row_label(0) == "a"
+        assert ctx.col_label(0) == "x"
+
+    def test_context_delegates_equivalent_to_context(self):
+        """Legacy properties on _HeatMapper must return equal values
+        to the underlying annot_ctx attributes.  They are *copies* so
+        identity must NOT match, but the data values must be identical.
+
+        Uses annot=True so annot_data / annot_data_df are populated.
+        """
+        kws = self.default_kws.copy()
+        kws["annot"] = True
+        p = mat._HeatMapper(self.df_norm, **kws)
+        ctx = p.annot_ctx
+
+        npt.assert_array_equal(p.data.values, ctx.data.values)
+        npt.assert_array_equal(np.asarray(p.plot_data), np.asarray(ctx.plot_data))
+        npt.assert_array_equal(p.mask.values, ctx.mask.values)
         assert p.annot is ctx.annot_enabled
-        assert p.annot_data is ctx.annot_data
-        assert p.annot_data_df is ctx.annot_data_df
-        assert p.original_data is ctx.original_data
+        npt.assert_array_equal(np.asarray(p.annot_data), np.asarray(ctx.annot_data))
+        assert p.annot_data_df is not None and ctx.annot_data_df is not None
+        npt.assert_array_equal(p.annot_data_df.values, ctx.annot_data_df.values)
+        npt.assert_array_equal(p.original_data.values, ctx.original_data.values)
         npt.assert_array_equal(p.row_ind, ctx.row_ind)
         npt.assert_array_equal(p.col_ind, ctx.col_ind)
         assert p.fmt is ctx.fmt
         assert p.annot_format is ctx.annot_format
-        # annot_kws is a copy, so test dict equality not identity
         assert p.annot_kws == ctx.annot_kws
 
     def test_context_df_row_col_labels(self):
