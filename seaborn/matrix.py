@@ -344,12 +344,10 @@ class _HeatMapper:
                 col_ind=col_ind,
             )
 
-        # Convenience references to context data, used by the plotting
-        # and colormap methods.  All annotation/label/mask logic should
-        # go through ``self.annot_ctx``.
-        self.data = self.annot_ctx.data
-        self.plot_data = self.annot_ctx.plot_data
-        self.mask = self.annot_ctx.mask
+        # NOTE: data / plot_data / mask / annot are NOT assigned here as
+        # plain attributes.  They are exposed as read-only @property delegates
+        # to ``self.annot_ctx`` to guarantee the context is the single source
+        # of truth and no second set of mutable state can diverge.
 
         # Get good names for the rows and columns
         xtickevery = 1
@@ -400,11 +398,28 @@ class _HeatMapper:
         self._determine_cmap_params(self.plot_data, vmin, vmax,
                                     cmap, center, robust)
 
-        # Backward-compatible annot flag (delegates to context)
-        self.annot = self.annot_ctx.annot_enabled
-
         self.cbar = cbar
         self.cbar_kws = {} if cbar_kws is None else cbar_kws.copy()
+
+    @property
+    def data(self):
+        """DataFrame view of the plotted data (read-only, from context)."""
+        return self.annot_ctx.data
+
+    @property
+    def plot_data(self):
+        """Masked ndarray used for rendering (read-only, from context)."""
+        return self.annot_ctx.plot_data
+
+    @property
+    def mask(self):
+        """Boolean DataFrame mask (read-only, from context)."""
+        return self.annot_ctx.mask
+
+    @property
+    def annot(self):
+        """Whether annotation is enabled (read-only, from context)."""
+        return self.annot_ctx.annot_enabled
 
     @property
     def annot_data(self):

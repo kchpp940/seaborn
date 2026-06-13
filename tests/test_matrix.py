@@ -493,6 +493,202 @@ class TestHeatmap:
                     cbar_kws=dict(drawedges=True))
         assert len(ax2.collections) == 2
 
+    # --- Tests for _AnnotationContext as single source of truth ---
+
+    def test_context_legacy_properties_readonly(self):
+        """All legacy data properties on _HeatMapper must delegate to the
+        annot context and must be read-only, so no second mutable state
+        can diverge from the context."""
+        p = mat._HeatMapper(self.df_norm, **self.default_kws)
+
+        readonly_attrs = [
+            "data", "plot_data", "mask", "annot",
+            "annot_data", "annot_data_df", "original_data",
+            "row_ind", "col_ind", "fmt", "annot_format", "annot_kws",
+        ]
+        for attr in readonly_attrs:
+            with pytest.raises(AttributeError):
+                setattr(p, attr, "should_not_work")
+
+    def test_context_delegates_equivalent_to_context(self):
+        """Legacy properties on _HeatMapper must return the same objects
+        as the underlying annot_ctx attributes."""
+        p = mat._HeatMapper(self.df_norm, **self.default_kws)
+        ctx = p.annot_ctx
+
+        assert p.data is ctx.data
+        assert p.plot_data is ctx.plot_data
+        assert p.mask is ctx.mask
+        assert p.annot is ctx.annot_enabled
+        assert p.annot_data is ctx.annot_data
+        assert p.annot_data_df is ctx.annot_data_df
+        assert p.original_data is ctx.original_data
+        npt.assert_array_equal(p.row_ind, ctx.row_ind)
+        npt.assert_array_equal(p.col_ind, ctx.col_ind)
+        assert p.fmt is ctx.fmt
+        assert p.annot_format is ctx.annot_format
+        # annot_kws is a copy, so test dict equality not identity
+        assert p.annot_kws == ctx.annot_kws
+
+    def test_context_df_row_col_labels(self):
+        """Context row_label / col_label must return DataFrame's original
+        index / column labels at the given plot position."""
+        df = pd.DataFrame(
+            [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+            index=["alpha", "beta", "gamma"],
+            columns=["x", "y", "z"],
+        )
+        kws = self.default_kws.copy()
+        kws["annot"] = True
+        p = mat._HeatMapper(df, **kws)
+        ctx = p.annot_ctx
+
+        for plot_row in range(3):
+            assert ctx.row_label(plot_row) == df.index[plot_row]
+        for plot_col in range(3):
+            assert ctx.col_label(plot_col) == df.columns[plot_col]
+
+    def test_context_df_multindex_labels(self):
+        """Context row_label / col_label must handle MultiIndex correctly,
+        matching the original multi-index label at the plot position."""
+        df = self.df_norm.copy()
+        index = pd.MultiIndex.from_tuples(
+            [("A", 1), ("B", 2), ("C", 3), ("D", 4)],
+            names=["letter", "number"],
+        )
+        df.index = index
+
+        kws = self.default_kws.copy()
+        kws["annot"] = True
+        p = mat._HeatMapper(df, **kws)
+        ctx = p.annot_ctx
+
+        for plot_row in range(4):
+            assert ctx.row_label(plot_row) == df.index[plot_row]
+
+    def test_context_raw_and_annot_values(self):
+        """Context raw_value / annot_value must match the plotted data.
+        With annot=True, annot_value equals the raw DataFrame value."""
+        df = pd.DataFrame(
+            [[1.5, 2.5], [3.5, 4.5]],
+            index=["r0", "r1"],
+            columns=["c0", "c1"],
+        )
+        kws = self.default_kws.copy()
+        kws["annot"] = True
+        p = mat._HeatMapper(df, **kws)
+        ctx = p.annot_ctx
+
+        for r in range(2):
+            for c in range(2):
+                assert ctx.raw_value(r, c) == df.values[r, c]
+                assert ctx.annot_value(r, c) == df.values[r, c]
+
+    def test_context_custom_annot_dataframe(self):
+        """With a custom DataFrame annot, annot_value must return values
+        from the annot DataFrame while raw_value stays from plot data."""
+        data = pd.DataFrame(
+            [[1, 2], [3, 4]],
+            index=["r0", "r1"],
+            columns=["c0", "c1"],
+        )
+        annot = pd.DataFrame(
+            [["A", "B"], ["C", "D"]],
+            index=["r0", "r1"],
+            columns=["c0", "c1"],
+        )
+        kws = self.default_kws.copy()
+        kws["annot"] = annot
+        p = mat._HeatMapper(data, **kws)
+        ctx = p.annot_ctx
+
+        for r in range(2):
+            for c in range(2):
+                assert ctx.raw_value(r, c) == data.values[r, c]
+                assert ctx.annot_value(r, c) == annot.values[r, c]
+
+    def test_context_mask_state(self):
+        """Context is_masked must return True for cells masked by the
+        user-provided mask, False otherwise."""
+        df = pd.DataFrame([[1, 2], [3, 4]])
+        mask = pd.DataFrame(
+            [[False, True], [True, False]],
+            index=df.index,
+            columns=df.columns,
+        )
+        kws = self.default_kws.copy()
+        kws["mask"] = mask
+        p = mat._HeatMapper(df, **kws)
+        ctx = p.annot_ctx
+
+        assert ctx.is_masked(0, 0) is False
+        assert ctx.is_masked(0, 1) is True
+        assert ctx.is_masked(1, 0) is True
+        assert ctx.is_masked(1, 1) is False
+
+    def test_context_display_position(self):
+        """Context display_position must return (col + 0.5, row + 0.5)
+        matching the center of each cell in matplotlib pixel coordinates."""
+        df = pd.DataFrame([[1, 2, 3], [4, 5, 6]])
+        kws = self.default_kws.copy()
+        p = mat._HeatMapper(df, **kws)
+        ctx = p.annot_ctx
+
+        for r in range(2):
+            for c in range(3):
+                x, y = ctx.display_position(r, c)
+                assert x == c + 0.5
+                assert y == r + 0.5
+
+    def test_context_annot_format_callback_receives_correct_args(self):
+        """The annot_format callback must receive row_label, col_label,
+        value, masked, row_idx, col_idx that all match the context
+        queries for the same plot position."""
+        df = pd.DataFrame(
+            [[10, 20], [30, 40]],
+            index=["R0", "R1"],
+            columns=["C0", "C1"],
+        )
+        mask = pd.DataFrame(
+            [[False, True], [False, False]],
+            index=df.index,
+            columns=df.columns,
+        )
+        received = []
+
+        def annot_format(row_label, col_label, value, masked,
+                         row_idx, col_idx):
+            received.append(dict(
+                row_label=row_label, col_label=col_label,
+                value=value, masked=masked,
+                row_idx=row_idx, col_idx=col_idx,
+            ))
+            return f"{value}"
+
+        kws = self.default_kws.copy()
+        kws["annot"] = True
+        kws["mask"] = mask
+        kws["annot_format"] = annot_format
+
+        p = mat._HeatMapper(df, **kws)
+        ctx = p.annot_ctx
+
+        # Now we need to trigger the annotation loop.  Build an ax, plot,
+        # then inspect.
+        f, ax = plt.subplots()
+        p.plot(ax, None, dict(linewidths=0, edgecolor="white"))
+
+        # Non-masked cells only get annotated; three out of four
+        assert len(received) == 3
+        for info in received:
+            r = info["row_idx"]
+            c = info["col_idx"]
+            assert info["row_label"] == ctx.row_label(r)
+            assert info["col_label"] == ctx.col_label(c)
+            assert info["value"] == ctx.annot_value(r, c)
+            assert info["masked"] == ctx.is_masked(r, c)
+        plt.close(f)
+
 
 @pytest.mark.skipif(_no_scipy, reason="Test requires scipy")
 class TestDendrogram:
@@ -1347,6 +1543,174 @@ class TestClustermap:
         for ax in [g.ax_col_dendrogram, g.ax_row_dendrogram]:
             tree, = ax.collections
             assert tuple(tree.get_color().squeeze())[:3] == rgb
+
+    # --- Tests for _AnnotationContext consistency under clustering ---
+
+    def test_clustermap_context_reorder_indices(self):
+        """After clustermap clustering, context row_ind / col_ind must
+        correctly map plot positions to original data indices, matching
+        the dendrogram reorderings."""
+        g = mat.clustermap(self.df_norm, annot=True)
+
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        # Build the same _HeatMapper that clustermap would build; we can
+        # inspect it through the axes if we use annot_format callback.
+        received = []
+
+        def fmt(row_label, col_label, value, masked,
+                row_idx, col_idx):
+            received.append(dict(
+                row_label=row_label, col_label=col_label,
+                value=value, masked=masked,
+                row_idx=row_idx, col_idx=col_idx,
+            ))
+            return f"{value:.1f}"
+
+        plt.close("all")
+        g2 = mat.clustermap(self.df_norm, annot=True, fmt=".1f",
+                            annot_format=fmt)
+
+        yind2 = g2.dendrogram_row.reordered_ind
+        xind2 = g2.dendrogram_col.reordered_ind
+
+        # Every annotated cell should have row_idx / col_idx in plot order,
+        # and yind[row_idx] should give the original index.
+        for info in received:
+            r, c = info["row_idx"], info["col_idx"]
+            orig_row = yind2[r]
+            orig_col = xind2[c]
+            assert info["row_label"] == self.df_norm.index[orig_row]
+            assert info["col_label"] == self.df_norm.columns[orig_col]
+
+    def test_clustermap_context_row_col_labels_after_reorder(self):
+        """After clustering reorder, context row_label / col_label must
+        return the ORIGINAL DataFrame index/column at the reordered
+        position, not the index after iloc reordering."""
+        df = pd.DataFrame(
+            [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+            index=["alpha", "beta", "gamma"],
+            columns=["x", "y", "z"],
+        )
+
+        received = []
+
+        def fmt(row_label, col_label, value, masked,
+                row_idx, col_idx):
+            received.append(dict(
+                row_label=row_label, col_label=col_label,
+                row_idx=row_idx, col_idx=col_idx,
+            ))
+            return f"{value}"
+
+        g = mat.clustermap(df, annot=True, annot_format=fmt)
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        for info in received:
+            r, c = info["row_idx"], info["col_idx"]
+            expected_row_label = df.index[yind[r]]
+            expected_col_label = df.columns[xind[c]]
+            assert info["row_label"] == expected_row_label
+            assert info["col_label"] == expected_col_label
+
+    def test_clustermap_context_raw_and_annot_values_consistent(self):
+        """After clustering, the context's annot_value for each plot
+        position must equal the original data's reordered cell value,
+        and the text rendered must match."""
+        df = pd.DataFrame(
+            [[10, 20], [30, 40]],
+            index=["r0", "r1"],
+            columns=["c0", "c1"],
+        )
+        annot_df = pd.DataFrame(
+            [["AA", "BB"], ["CC", "DD"]],
+            index=["r0", "r1"],
+            columns=["c0", "c1"],
+        )
+
+        received = []
+
+        def fmt(row_label, col_label, value, masked,
+                row_idx, col_idx):
+            received.append(dict(
+                value=value, row_idx=row_idx, col_idx=col_idx,
+            ))
+            return str(value)
+
+        g = mat.clustermap(df, annot=annot_df, annot_format=fmt)
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        for info in received:
+            r, c = info["row_idx"], info["col_idx"]
+            # annot_value should be from the annot_df, in original coords
+            expected_value = annot_df.iloc[yind[r], xind[c]]
+            assert info["value"] == expected_value
+
+        # Also verify rendered text matches annotation data in plot order
+        for text, info in zip(g.ax_heatmap.texts, received):
+            assert text.get_text() == str(info["value"])
+
+    def test_clustermap_context_mask_reordered(self):
+        """After clustering, context is_masked for each plot position
+        must reflect the user-provided mask after reordering."""
+        df = pd.DataFrame(
+            [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+            index=["r0", "r1", "r2"],
+            columns=["c0", "c1", "c2"],
+        )
+        mask = pd.DataFrame(
+            [[False, True, False],
+             [False, False, True],
+             [True, False, False]],
+            index=df.index,
+            columns=df.columns,
+        )
+
+        received = []
+
+        def fmt(row_label, col_label, value, masked,
+                row_idx, col_idx):
+            received.append(dict(
+                masked=masked, row_idx=row_idx, col_idx=col_idx,
+            ))
+            return str(value)
+
+        g = mat.clustermap(df, annot=True, mask=mask, annot_format=fmt)
+        yind = g.dendrogram_row.reordered_ind
+        xind = g.dendrogram_col.reordered_ind
+
+        for info in received:
+            r, c = info["row_idx"], info["col_idx"]
+            expected_masked = bool(mask.iloc[yind[r], xind[c]])
+            assert info["masked"] == expected_masked
+
+    def test_clustermap_context_display_position(self):
+        """After clustering, display_position for each annotated cell
+        must place the text at the center of the corresponding cell
+        in the reordered heatmap."""
+        df = pd.DataFrame([[1, 2], [3, 4]],
+                          index=["r0", "r1"], columns=["c0", "c1"])
+
+        received_positions = []
+
+        def fmt(row_label, col_label, value, masked,
+                row_idx, col_idx):
+            received_positions.append((row_idx, col_idx))
+            return str(value)
+
+        g = mat.clustermap(df, annot=True, annot_format=fmt)
+
+        # Each text in ax_heatmap.texts is at (col+0.5, row+0.5) in
+        # the axes data coordinates (inverted y).
+        for text, (r, c) in zip(g.ax_heatmap.texts, received_positions):
+            x, y = text.get_position()
+            assert x == pytest.approx(c + 0.5)
+            # y is inverted by heatmap so top=0, but text is placed at
+            # row+0.5 before inversion, so check data coordinate matches.
+            assert y == pytest.approx(r + 0.5)
 
 
 if _no_scipy:
