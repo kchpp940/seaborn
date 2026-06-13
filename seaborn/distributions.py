@@ -1404,6 +1404,7 @@ class _DistributionPlotter(VectorPlotter):
 # External API
 # ==================================================================================== #
 
+
 def histplot(
     data=None, *,
     # Vector variables

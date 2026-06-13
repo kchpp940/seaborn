@@ -104,6 +104,42 @@ class Hist(Stat):
     --------
     .. include:: ../docstrings/objects.Hist.rst
 
+    Attributes
+    ----------
+    diagnostics_ : dict[tuple, BinDiagnostics]
+        Post-computed diagnostics for each data group, populated after calling
+        the stat. This is a **live reference** into the shared
+        :class:`~seaborn._statistics.BinDiagnosticsCollector` used internally,
+        meaning that downstream code (e.g. :func:`histplot`, :func:`displot`)
+        that reuses the same collector will expose the identical dictionary
+        object (``obj.diagnostics_ is other.diagnostics_``).
+
+        The dict keys follow a stable convention:
+
+        - No grouping variables: ``()`` (empty tuple)
+        - One grouping variable: ``(("varname", value),)``
+        - Multiple grouping variables:
+          ``(("var1", val1), ("var2", val2), ...)``
+
+        Each value is a :class:`~seaborn._statistics.BinDiagnostics` dataclass
+        with the following stable fields:
+
+        - ``bin_edges`` (ndarray or tuple[ndarray, ndarray]): Bin edges used
+          for the histogram.  Univariate: 1-D array of shape ``(n_bins + 1,)``;
+          bivariate: a 2-tuple of 1-D arrays for x and y edges.
+        - ``count`` (int): Number of valid (finite) samples in the group.
+        - ``weight_sum`` (float): Sum of sample weights (equals ``count`` when
+          no explicit weights are provided).
+        - ``normalization_denominator`` (float or None): The denominator used
+          in the stat normalization, or ``None`` for the raw ``count`` stat.
+          For example, for ``stat="proportion"`` this equals ``weight_sum``;
+          for ``stat="density"`` this equals the integrated area.
+        - ``empty_reason`` ({"no_data", "all_nan", "zero_variance"} or None):
+          Enum-like string explaining why the group produced no usable bins,
+          or ``None`` if the group had valid data.
+        - ``extra`` (dict): Reserved for additional metadata; always contains
+          at least ``{"stat": ..., "cumulative": ...}``.
+
     """
     stat: str = "count"
     bins: str | int | ArrayLike = "auto"
@@ -132,7 +168,11 @@ class Hist(Stat):
 
     @property
     def diagnostics_(self) -> dict[tuple, BinDiagnostics]:
-        """Collected bin diagnostics (read-only dict view into collector)."""
+        """Collected bin diagnostics (live view into the shared collector).
+
+        See the class Attributes docstring for the full description of the
+        dictionary structure, key conventions, and BinDiagnostics fields.
+        """
         return self._diagnostics_collector.diagnostics
 
     def _define_bin_edges(self, vals, weight, bins, binwidth, binrange, discrete):
@@ -326,16 +366,17 @@ class Hist(Stat):
             hist, edges = np.histogram(
                 vals, **bin_kws, weights=weights, density=density,
             )
-            # Apply normalization to match the final output
-            hist = self._normalize_array(hist, edges)
-
+            # Add diagnostics BEFORE normalization so norm_denom can be
+            # computed correctly from raw histogram counts
             self._diagnostics_collector.add_group_univariate(
                 group_key=(),
                 x=vals,
                 bin_edges=edges,
-                hist=hist,
+                hist=hist.copy(),
                 weights=weights,
             )
+            # Apply normalization to match the final output
+            hist = self._normalize_array(hist, edges)
             return
 
         # Multi-group case
@@ -356,16 +397,17 @@ class Hist(Stat):
             hist, edges = np.histogram(
                 vals, **bin_kws, weights=weights, density=density,
             )
-            # Apply normalization to match the final output
-            hist = self._normalize_array(hist, edges)
-
+            # Add diagnostics BEFORE normalization so norm_denom can be
+            # computed correctly from raw histogram counts
             self._diagnostics_collector.add_group_univariate(
                 group_key=group_key,
                 x=vals,
                 bin_edges=edges,
-                hist=hist,
+                hist=hist.copy(),
                 weights=weights,
             )
+            # Apply normalization to match the final output
+            hist = self._normalize_array(hist, edges)
 
     def _normalize_array(self, hist, edges):
         """Apply normalization to a raw histogram count array.
