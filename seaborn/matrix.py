@@ -112,36 +112,21 @@ class _AnnotationContext:
                  annot_data, annot_data_df,
                  original_data, row_ind, col_ind,
                  fmt, annot_format, annot_kws):
-        # All data is stored in private fields and exposed via read-only
-        # @property accessors.  Mutable objects (DataFrame, ndarray, dict)
-        # are copied on ingest so the context is immune to external
-        # mutation of the inputs.  This guarantees the context is the
-        # single source of truth for annotation/mask/reorder state.
-        def _df_copy(x):
-            return x.copy() if isinstance(x, pd.DataFrame) else x
+        self.data = data
+        self.plot_data = plot_data
+        self.mask = mask
 
-        def _arr_copy(x):
-            if x is None:
-                return None
-            if isinstance(x, np.ma.MaskedArray):
-                return x.copy()
-            return np.array(x, copy=True)
+        self.annot_enabled = annot_enabled
+        self.annot_data = annot_data
+        self.annot_data_df = annot_data_df
 
-        self._data = _df_copy(data)
-        self._plot_data = _arr_copy(plot_data)
-        self._mask = _df_copy(mask)
+        self.original_data = original_data
+        self.row_ind = row_ind
+        self.col_ind = col_ind
 
-        self._annot_enabled = bool(annot_enabled)
-        self._annot_data = _arr_copy(annot_data)
-        self._annot_data_df = _df_copy(annot_data_df)
-
-        self._original_data = _df_copy(original_data)
-        self._row_ind = _arr_copy(row_ind)
-        self._col_ind = _arr_copy(col_ind)
-
-        self._fmt = fmt
-        self._annot_format = annot_format
-        self._annot_kws = dict(annot_kws) if annot_kws is not None else {}
+        self.fmt = fmt
+        self.annot_format = annot_format
+        self.annot_kws = annot_kws
 
     @classmethod
     def build(cls, data, mask, annot, fmt, annot_kws, annot_format,
@@ -240,97 +225,29 @@ class _AnnotationContext:
         )
 
     @property
-    def data(self):
-        """DataFrame view of the plotted data (read-only copy from context)."""
-        return self._data.copy() if isinstance(self._data, pd.DataFrame) else self._data
-
-    @property
-    def plot_data(self):
-        """Masked ndarray used for rendering (read-only copy from context)."""
-        if self._plot_data is None:
-            return None
-        if isinstance(self._plot_data, np.ma.MaskedArray):
-            return self._plot_data.copy()
-        return np.array(self._plot_data, copy=True)
-
-    @property
-    def mask(self):
-        """Boolean DataFrame mask (read-only copy from context)."""
-        return self._mask.copy() if isinstance(self._mask, pd.DataFrame) else self._mask
-
-    @property
-    def annot_enabled(self):
-        """Whether annotation is enabled (read-only, from context)."""
-        return self._annot_enabled
-
-    @property
-    def annot_data(self):
-        """Annotation data array (read-only copy from context)."""
-        if self._annot_data is None:
-            return None
-        if isinstance(self._annot_data, np.ma.MaskedArray):
-            return self._annot_data.copy()
-        return np.array(self._annot_data, copy=True)
-
-    @property
-    def annot_data_df(self):
-        """Annotation DataFrame (read-only copy from context)."""
-        return self._annot_data_df.copy() if isinstance(self._annot_data_df, pd.DataFrame) else self._annot_data_df
-
-    @property
-    def original_data(self):
-        """Original (un-reordered) data (read-only copy from context)."""
-        return self._original_data.copy() if isinstance(self._original_data, pd.DataFrame) else self._original_data
-
-    @property
-    def row_ind(self):
-        """Row reorder indices (read-only copy from context)."""
-        return np.array(self._row_ind, copy=True) if self._row_ind is not None else None
-
-    @property
-    def col_ind(self):
-        """Column reorder indices (read-only copy from context)."""
-        return np.array(self._col_ind, copy=True) if self._col_ind is not None else None
-
-    @property
-    def fmt(self):
-        """Annotation format string (read-only, from context)."""
-        return self._fmt
-
-    @property
-    def annot_format(self):
-        """Annotation format callback (read-only, from context)."""
-        return self._annot_format
-
-    @property
-    def annot_kws(self):
-        """Annotation keyword arguments (read-only copy from context)."""
-        return dict(self._annot_kws)
-
-    @property
     def shape(self):
         """Shape of the plotted matrix (n_rows, n_cols)."""
-        return self._plot_data.shape
+        return self.plot_data.shape
 
     def orig_row_idx(self, plot_row):
         """Translate plot row index to original data row index."""
-        return self._row_ind[plot_row]
+        return self.row_ind[plot_row]
 
     def orig_col_idx(self, plot_col):
         """Translate plot column index to original data column index."""
-        return self._col_ind[plot_col]
+        return self.col_ind[plot_col]
 
     def row_label(self, plot_row):
         """Get the original row label for a plot position."""
-        return self._original_data.index[self.orig_row_idx(plot_row)]
+        return self.original_data.index[self.orig_row_idx(plot_row)]
 
     def col_label(self, plot_col):
         """Get the original column label for a plot position."""
-        return self._original_data.columns[self.orig_col_idx(plot_col)]
+        return self.original_data.columns[self.orig_col_idx(plot_col)]
 
     def raw_value(self, plot_row, plot_col):
         """Get the raw plotted value at a plot position."""
-        return self._plot_data[plot_row, plot_col]
+        return self.plot_data[plot_row, plot_col]
 
     def annot_value(self, plot_row, plot_col):
         """Get the annotation value at a plot position.
@@ -339,19 +256,19 @@ class _AnnotationContext:
         available, otherwise falls back to the array value at the
         plot position.
         """
-        if self._annot_data_df is not None:
+        if self.annot_data_df is not None:
             try:
-                return self._annot_data_df.iloc[
+                return self.annot_data_df.iloc[
                     self.orig_row_idx(plot_row),
                     self.orig_col_idx(plot_col),
                 ]
             except (IndexError, AttributeError):
                 pass
-        return self._annot_data[plot_row, plot_col]
+        return self.annot_data[plot_row, plot_col]
 
     def is_masked(self, plot_row, plot_col):
         """Check if a cell is masked, using original-data indices."""
-        return bool(self._mask.iloc[
+        return bool(self.mask.iloc[
             self.orig_row_idx(plot_row),
             self.orig_col_idx(plot_col),
         ])
@@ -376,11 +293,11 @@ class _AnnotationContext:
         str or None
             Formatted annotation text, or None to skip the cell.
         """
-        if not self._annot_enabled:
+        if not self.annot_enabled:
             return None
 
-        if self._annot_format is not None:
-            annotation = self._annot_format(
+        if self.annot_format is not None:
+            annotation = self.annot_format(
                 row_label=self.row_label(plot_row),
                 col_label=self.col_label(plot_col),
                 value=self.annot_value(plot_row, plot_col),
@@ -391,7 +308,7 @@ class _AnnotationContext:
             if annotation is None or annotation == "":
                 return None
         else:
-            annotation = ("{:" + self._fmt + "}").format(flat_annot_val)
+            annotation = ("{:" + self.fmt + "}").format(flat_annot_val)
 
         return annotation
 
@@ -403,53 +320,37 @@ class _HeatMapper:
                  annot_kws, cbar, cbar_kws,
                  xticklabels=True, yticklabels=True, mask=None,
                  annot_format=None, original_data=None,
-                 row_ind=None, col_ind=None, _annot_ctx=None):
+                 row_ind=None, col_ind=None):
         """Initialize the plotting object."""
-        if _annot_ctx is not None:
-            # Use a pre-built annotation context (internal call path,
-            # e.g. from ClusterGrid.plot_matrix).  All data/mask/annot
-            # state comes from the context; the individual parameters
-            # above are ignored for annotation purposes.
-            self.annot_ctx = _annot_ctx
+        # We always want to have a DataFrame with semantic information
+        # and an ndarray to pass to matplotlib
+        if isinstance(data, pd.DataFrame):
+            plot_data = data.values
         else:
-            # Build the unified annotation context -- this centralizes all
-            # data normalization, mask validation, annotation setup, and
-            # reorder-index management in one place.
-            self.annot_ctx = _AnnotationContext.build(
-                data=data,
-                mask=mask,
-                annot=annot,
-                fmt=fmt,
-                annot_kws=annot_kws,
-                annot_format=annot_format,
-                original_data=original_data,
-                row_ind=row_ind,
-                col_ind=col_ind,
-            )
+            plot_data = np.asarray(data)
+            data = pd.DataFrame(plot_data)
 
-        # NOTE: data / plot_data / mask / annot are NOT assigned here as
-        # plain attributes.  Internally, this class ALWAYS accesses them
-        # through ``self.annot_ctx`` directly.  They are exposed as read-only
-        # @property delegates only for backward compatibility with external
-        # code that reads these attributes on _HeatMapper instances.
-        ctx = self.annot_ctx
+        # Validate the mask and convert to DataFrame
+        mask = _matrix_mask(data, mask)
+
+        plot_data = np.ma.masked_where(np.asarray(mask), plot_data)
 
         # Get good names for the rows and columns
         xtickevery = 1
         if isinstance(xticklabels, int):
             xtickevery = xticklabels
-            xticklabels = _index_to_ticklabels(ctx.data.columns)
+            xticklabels = _index_to_ticklabels(data.columns)
         elif xticklabels is True:
-            xticklabels = _index_to_ticklabels(ctx.data.columns)
+            xticklabels = _index_to_ticklabels(data.columns)
         elif xticklabels is False:
             xticklabels = []
 
         ytickevery = 1
         if isinstance(yticklabels, int):
             ytickevery = yticklabels
-            yticklabels = _index_to_ticklabels(ctx.data.index)
+            yticklabels = _index_to_ticklabels(data.index)
         elif yticklabels is True:
-            yticklabels = _index_to_ticklabels(ctx.data.index)
+            yticklabels = _index_to_ticklabels(data.index)
         elif yticklabels is False:
             yticklabels = []
 
@@ -458,7 +359,7 @@ class _HeatMapper:
             self.xticklabels = []
         elif isinstance(xticklabels, str) and xticklabels == "auto":
             self.xticks = "auto"
-            self.xticklabels = _index_to_ticklabels(ctx.data.columns)
+            self.xticklabels = _index_to_ticklabels(data.columns)
         else:
             self.xticks, self.xticklabels = self._skip_ticks(xticklabels,
                                                              xtickevery)
@@ -468,83 +369,73 @@ class _HeatMapper:
             self.yticklabels = []
         elif isinstance(yticklabels, str) and yticklabels == "auto":
             self.yticks = "auto"
-            self.yticklabels = _index_to_ticklabels(ctx.data.index)
+            self.yticklabels = _index_to_ticklabels(data.index)
         else:
             self.yticks, self.yticklabels = self._skip_ticks(yticklabels,
                                                              ytickevery)
 
         # Get good names for the axis labels
-        xlabel = _index_to_label(ctx.data.columns)
-        ylabel = _index_to_label(ctx.data.index)
+        xlabel = _index_to_label(data.columns)
+        ylabel = _index_to_label(data.index)
         self.xlabel = xlabel if xlabel is not None else ""
         self.ylabel = ylabel if ylabel is not None else ""
 
         # Determine good default values for the colormapping
-        self._determine_cmap_params(ctx.plot_data, vmin, vmax,
+        self._determine_cmap_params(plot_data, vmin, vmax,
                                     cmap, center, robust)
 
+        # Sort out the annotations
+        if annot is None or annot is False:
+            annot = False
+            annot_data = None
+            annot_data_df = None
+        else:
+            if isinstance(annot, bool):
+                annot_data = plot_data
+                annot_data_df = data
+            else:
+                if isinstance(annot, pd.DataFrame):
+                    annot_data_df = annot
+                    annot_data = annot.values
+                else:
+                    annot_data = np.asarray(annot)
+                    annot_data_df = pd.DataFrame(annot_data,
+                                                 index=data.index,
+                                                 columns=data.columns)
+                if annot_data.shape != plot_data.shape:
+                    err = "`data` and `annot` must have same shape."
+                    raise ValueError(err)
+            annot = True
+
+        # Set up original_data for label/value lookup
+        if original_data is None:
+            original_data = data
+
+        # Set up reorder indices
+        n_rows, n_cols = data.shape
+        if row_ind is None:
+            row_ind = np.arange(n_rows)
+        if col_ind is None:
+            col_ind = np.arange(n_cols)
+
+        # Save other attributes to the object
+        self.data = data
+        self.plot_data = plot_data
+        self.mask = mask
+
+        self.annot = annot
+        self.annot_data = annot_data
+        self.annot_data_df = annot_data_df
+
+        self.fmt = fmt
+        self.annot_format = annot_format
+        self.annot_kws = {} if annot_kws is None else annot_kws.copy()
         self.cbar = cbar
         self.cbar_kws = {} if cbar_kws is None else cbar_kws.copy()
 
-    @property
-    def data(self):
-        """DataFrame view of the plotted data (read-only, from context)."""
-        return self.annot_ctx.data
-
-    @property
-    def plot_data(self):
-        """Masked ndarray used for rendering (read-only, from context)."""
-        return self.annot_ctx.plot_data
-
-    @property
-    def mask(self):
-        """Boolean DataFrame mask (read-only, from context)."""
-        return self.annot_ctx.mask
-
-    @property
-    def annot(self):
-        """Whether annotation is enabled (read-only, from context)."""
-        return self.annot_ctx.annot_enabled
-
-    @property
-    def annot_data(self):
-        """Backward-compatible access to annotation data array."""
-        return self.annot_ctx.annot_data
-
-    @property
-    def annot_data_df(self):
-        """Backward-compatible access to annotation DataFrame."""
-        return self.annot_ctx.annot_data_df
-
-    @property
-    def original_data(self):
-        """Backward-compatible access to original (un-reordered) data."""
-        return self.annot_ctx.original_data
-
-    @property
-    def row_ind(self):
-        """Backward-compatible access to row reorder indices."""
-        return self.annot_ctx.row_ind
-
-    @property
-    def col_ind(self):
-        """Backward-compatible access to column reorder indices."""
-        return self.annot_ctx.col_ind
-
-    @property
-    def fmt(self):
-        """Backward-compatible access to annotation format string."""
-        return self.annot_ctx.fmt
-
-    @property
-    def annot_format(self):
-        """Backward-compatible access to annotation format callback."""
-        return self.annot_ctx.annot_format
-
-    @property
-    def annot_kws(self):
-        """Backward-compatible access to annotation keyword arguments."""
-        return self.annot_ctx.annot_kws
+        self.original_data = original_data
+        self.row_ind = row_ind
+        self.col_ind = col_ind
 
     def _determine_cmap_params(self, plot_data, vmin, vmax,
                                cmap, center, robust):
@@ -606,28 +497,54 @@ class _HeatMapper:
     def _annotate_heatmap(self, ax, mesh):
         """Add textual labels with the value in each cell."""
         mesh.update_scalarmappable()
-        ctx = self.annot_ctx
-        height, width = ctx.shape
+        height, width = self.annot_data.shape
         xpos, ypos = np.meshgrid(np.arange(width) + .5, np.arange(height) + .5)
+
+        orig_index = self.original_data.index
+        orig_columns = self.original_data.columns
 
         for i, (x, y, m, color, val) in enumerate(zip(
                 xpos.flat, ypos.flat,
                 mesh.get_array().flat, mesh.get_facecolors(),
-                ctx.annot_data.flat)):
+                self.annot_data.flat)):
             if m is not np.ma.masked:
                 row_idx_plot = i // width
                 col_idx_plot = i % width
 
-                annotation = ctx.format_annotation(
-                    row_idx_plot, col_idx_plot, val,
-                )
-                if annotation is None:
-                    continue
+                orig_row_idx = self.row_ind[row_idx_plot]
+                orig_col_idx = self.col_ind[col_idx_plot]
+
+                row_label = orig_index[orig_row_idx]
+                col_label = orig_columns[orig_col_idx]
+
+                if self.annot_data_df is not None:
+                    try:
+                        value = self.annot_data_df.iloc[orig_row_idx, orig_col_idx]
+                    except (IndexError, AttributeError):
+                        value = val
+                else:
+                    value = val
+
+                masked = bool(self.mask.iloc[orig_row_idx, orig_col_idx])
+
+                if self.annot_format is not None:
+                    annotation = self.annot_format(
+                        row_label=row_label,
+                        col_label=col_label,
+                        value=value,
+                        masked=masked,
+                        row_idx=row_idx_plot,
+                        col_idx=col_idx_plot
+                    )
+                    if annotation is None or annotation == "":
+                        continue
+                else:
+                    annotation = ("{:" + self.fmt + "}").format(val)
 
                 lum = relative_luminance(color)
                 text_color = ".15" if lum > .408 else "w"
                 text_kwargs = dict(color=text_color, ha="center", va="center")
-                text_kwargs.update(ctx.annot_kws)
+                text_kwargs.update(self.annot_kws)
                 ax.text(x, y, annotation, **text_kwargs)
 
     def _skip_ticks(self, labels, tickevery):
@@ -670,13 +587,11 @@ class _HeatMapper:
             kws.setdefault("vmin", self.vmin)
             kws.setdefault("vmax", self.vmax)
 
-        ctx = self.annot_ctx
+        # Draw the heatmap
+        mesh = ax.pcolormesh(self.plot_data, cmap=self.cmap, **kws)
 
-        # Draw the heatmap (data comes exclusively from the context)
-        mesh = ax.pcolormesh(ctx.plot_data, cmap=self.cmap, **kws)
-
-        # Set the axis limits (shape comes from the context DataFrame)
-        ax.set(xlim=(0, ctx.data.shape[1]), ylim=(0, ctx.data.shape[0]))
+        # Set the axis limits
+        ax.set(xlim=(0, self.data.shape[1]), ylim=(0, self.data.shape[0]))
 
         # Invert the y axis to show the plot in matrix form
         ax.invert_yaxis()
@@ -717,9 +632,8 @@ class _HeatMapper:
         # Add the axis labels
         ax.set(xlabel=self.xlabel, ylabel=self.ylabel)
 
-        # Annotate the cells with the formatted values (annotation state
-        # comes exclusively from the context)
-        if ctx.annot_enabled:
+        # Annotate the cells with the formatted values
+        if self.annot:
             self._annotate_heatmap(ax, mesh)
 
 
@@ -732,7 +646,6 @@ def heatmap(
     square=False, xticklabels="auto", yticklabels="auto",
     mask=None, ax=None,
     original_data=None, row_ind=None, col_ind=None,
-    _annot_ctx=None,
     **kwargs
 ):
     """Plot rectangular data as a color-encoded matrix.
@@ -833,28 +746,11 @@ def heatmap(
     .. include:: ../docstrings/heatmap.rst
 
     """
-    # When a pre-built annotation context is supplied (internal call path,
-    # e.g. from ClusterGrid.plot_matrix), the context is the single source
-    # of truth.  We pull ``data`` from the context for the public ``data``
-    # parameter slot (required positional) and override all annotation /
-    # mask / reorder parameters so callers cannot accidentally diverge from
-    # the context.
-    if _annot_ctx is not None:
-        data = _annot_ctx.data
-        mask = _annot_ctx.mask
-        annot = _annot_ctx.annot_enabled
-        fmt = _annot_ctx.fmt
-        annot_kws = _annot_ctx.annot_kws
-        annot_format = _annot_ctx.annot_format
-        original_data = _annot_ctx.original_data
-        row_ind = _annot_ctx.row_ind
-        col_ind = _annot_ctx.col_ind
-
     # Initialize the plotter object
     plotter = _HeatMapper(data, vmin, vmax, cmap, center, robust, annot, fmt,
                           annot_kws, cbar, cbar_kws, xticklabels,
                           yticklabels, mask, annot_format, original_data,
-                          row_ind, col_ind, _annot_ctx=_annot_ctx)
+                          row_ind, col_ind)
 
     # Add the pcolormesh kwargs here
     kwargs["linewidths"] = linewidths
@@ -1473,14 +1369,8 @@ class ClusterGrid(Grid):
         # Store original data before reordering for label/value lookup
         original_data = self.data2d
 
-        # Reorder data and mask.  We keep local references so the context
-        # construction does not depend on the side effect of assigning back
-        # to self.data2d / self.mask (which exist for the public ClusterGrid
-        # API surface).
-        reordered_data = self.data2d.iloc[yind, xind]
-        reordered_mask = self.mask.iloc[yind, xind]
-        self.data2d = reordered_data
-        self.mask = reordered_mask
+        self.data2d = self.data2d.iloc[yind, xind]
+        self.mask = self.mask.iloc[yind, xind]
 
         # Try to reorganize specified tick labels, if provided
         xtl = kws.pop("xticklabels", "auto")
@@ -1494,58 +1384,37 @@ class ClusterGrid(Grid):
         except (TypeError, IndexError):
             pass
 
-        # Extract annotation-related parameters from kws
-        annot = kws.pop("annot", None)
-        fmt = kws.pop("fmt", ".2g")
-        annot_kws = kws.pop("annot_kws", None)
+        # Extract annot_format before processing annot
         annot_format = kws.pop("annot_format", None)
 
-        # Reorganize the annotations to match the heatmap order.
-        # Note: DataFrames match by position, not index.
+        # Reorganize the annotations to match the heatmap
+        annot = kws.pop("annot", None)
         if annot is None or annot is False:
             pass
         else:
             if isinstance(annot, bool):
-                annot = reordered_data
+                annot_data = self.data2d
             else:
                 if isinstance(annot, pd.DataFrame):
-                    annot = annot.iloc[yind, xind]
+                    annot_data = annot.iloc[yind, xind]
                 else:
-                    annot = np.asarray(annot)
-                    if annot.shape != original_data.shape:
+                    annot_data = np.asarray(annot)
+                    if annot_data.shape != original_data.shape:
                         err = "`data` and `annot` must have same shape."
                         raise ValueError(err)
-                    annot = annot[yind][:, xind]
-                    annot = pd.DataFrame(
-                        annot,
-                        index=reordered_data.index,
-                        columns=reordered_data.columns,
-                    )
+                    annot_data = annot_data[yind][:, xind]
+                    annot_data = pd.DataFrame(annot_data,
+                                              index=self.data2d.index,
+                                              columns=self.data2d.columns)
+            annot = annot_data
 
-        # Build the unified annotation context -- the single source of truth
-        # for all data / mask / annot / reorder state consumed by heatmap.
-        annot_ctx = _AnnotationContext.build(
-            data=reordered_data,
-            mask=reordered_mask,
-            annot=annot,
-            fmt=fmt,
-            annot_kws=annot_kws,
-            annot_format=annot_format,
-            original_data=original_data,
-            row_ind=yind,
-            col_ind=xind,
-        )
-
-        # Setting ax_cbar=None in clustermap call implies no colorbar.
-        # ``data`` is pulled from the context (``heatmap`` will override
-        # any data/mask/annot/etc. parameters when ``_annot_ctx`` is
-        # supplied anyway); we pass ``annot_ctx.data`` explicitly for
-        # clarity of intent.
+        # Setting ax_cbar=None in clustermap call implies no colorbar
         kws.setdefault("cbar", self.ax_cbar is not None)
-        heatmap(annot_ctx.data, ax=self.ax_heatmap, cbar_ax=self.ax_cbar,
-                cbar_kws=colorbar_kws,
-                xticklabels=xtl, yticklabels=ytl,
-                _annot_ctx=annot_ctx, **kws)
+        heatmap(self.data2d, ax=self.ax_heatmap, cbar_ax=self.ax_cbar,
+                cbar_kws=colorbar_kws, mask=self.mask,
+                xticklabels=xtl, yticklabels=ytl, annot=annot,
+                annot_format=annot_format, original_data=original_data,
+                row_ind=yind, col_ind=xind, **kws)
 
         ytl = self.ax_heatmap.get_yticklabels()
         ytl_rot = None if not ytl else ytl[0].get_rotation()

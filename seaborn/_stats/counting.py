@@ -9,7 +9,17 @@ from pandas import DataFrame
 from seaborn._core.groupby import GroupBy
 from seaborn._core.scales import Scale
 from seaborn._stats.base import Stat
-from seaborn._statistics import BinDiagnostics, BinDiagnosticsCollector
+from seaborn._statistics import (
+    BinDiagnostics,
+    BinDiagnosticsCollector,
+    HistGroupResult,
+    define_bin_edges,
+    bin_edges_to_kws,
+    normalize_hist_array,
+    compute_valid_stats,
+    compute_normalization_denominator,
+    make_group_key,
+)
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -119,6 +129,9 @@ class Hist(Stat):
         init=False,
         repr=False,
     )
+    _pending_results: list = field(
+        default_factory=list, init=False, repr=False,
+    )
 
     def __post_init__(self):
 
@@ -136,46 +149,25 @@ class Hist(Stat):
         return self._diagnostics_collector.diagnostics
 
     def _define_bin_edges(self, vals, weight, bins, binwidth, binrange, discrete):
-        """Inner function that takes bin parameters as arguments."""
-        vals = vals.replace(-np.inf, np.nan).replace(np.inf, np.nan).dropna()
+        """Inner function that takes bin parameters as arguments.
 
-        if binrange is None:
-            start, stop = vals.min(), vals.max()
-        else:
-            start, stop = binrange
-
-        if discrete:
-            bin_edges = np.arange(start - .5, stop + 1.5)
-        else:
-            if binwidth is not None:
-                bins = int(round((stop - start) / binwidth))
-            bin_edges = np.histogram_bin_edges(vals, bins, binrange, weight)
-
-        # TODO warning or cap on too many bins?
-
-        return bin_edges
+        Delegates to the shared :func:`define_bin_edges` for consistent
+        edge-case handling across all histogram code paths.
+        """
+        return define_bin_edges(vals, weight, bins, binwidth, binrange, discrete)
 
     def _define_bin_params(self, data, orient, scale_type):
         """Given data, return numpy.histogram parameters to define bins."""
         vals = data[orient]
         weights = data.get("weight", None)
 
-        # TODO We'll want this for ordinal / discrete scales too
-        # (Do we need discrete as a parameter or just infer from scale?)
         discrete = self.discrete or scale_type == "nominal"
 
         bin_edges = self._define_bin_edges(
             vals, weights, self.bins, self.binwidth, self.binrange, discrete,
         )
 
-        if isinstance(self.bins, (str, int)):
-            n_bins = len(bin_edges) - 1
-            bin_range = bin_edges.min(), bin_edges.max()
-            bin_kws = dict(bins=n_bins, range=bin_range)
-        else:
-            bin_kws = dict(bins=bin_edges)
-
-        return bin_kws
+        return bin_edges_to_kws(bin_edges, self.bins)
 
     def _get_bins_and_eval(self, data, orient, groupby, scale_type):
 
@@ -185,144 +177,106 @@ class Hist(Stat):
     def _eval(self, data, orient, bin_kws):
         """Evaluate histogram for a single group.
 
-        This method is intentionally minimal - it computes the histogram
-        and returns the result. Diagnostics are collected separately in
-        __call__ using the shared BinDiagnosticsCollector.
+        Computes the raw histogram and stores a :class:`HistGroupResult`
+        containing per-group diagnostics info.  This avoids a second
+        histogram computation pass for diagnostics later.
         """
         vals = data[orient]
         weights = data.get("weight", None)
 
         density = self.stat == "density"
-        hist, edges = np.histogram(vals, **bin_kws, weights=weights, density=density)
+        hist_raw, edges = np.histogram(
+            vals, **bin_kws, weights=weights, density=density,
+        )
+
+        hist_normed = normalize_hist_array(
+            hist_raw.copy(), edges, self.stat, self.cumulative,
+        )
+        count, weight_sum, empty_reason = compute_valid_stats(vals, weights)
+        norm_denom = compute_normalization_denominator(
+            hist_normed, edges, self.stat,
+        )
+        result = HistGroupResult(
+            hist=hist_normed,
+            bin_edges=edges,
+            group_key=(),
+            count=count,
+            weight_sum=weight_sum,
+            empty_reason=empty_reason,
+            normalization_denominator=norm_denom,
+        )
+        self._pending_results.append(result)
 
         width = np.diff(edges)
         center = edges[:-1] + width / 2
 
-        return pd.DataFrame({orient: center, "count": hist, "space": width})
+        return pd.DataFrame({orient: center, "count": hist_raw, "space": width})
 
-    def _collect_diagnostics_for_groups(
-        self, data, groupby_vars, orient, bin_kws_dict=None,
-    ):
-        """Collect diagnostics for each group using the unified collector.
+    def _collect_diagnostics_from_pending(self, data, grouping_vars, orient):
+        """Assign group keys to pending HistGroupResults and flush to collector.
 
-        This method walks the original data (not the histogram output)
-        and computes diagnostics for each group. It runs after the main
-        histogram computation to avoid interfering with GroupBy.apply.
-
-        Parameters
-        ----------
-        data : DataFrame
-            Original input data with group columns present.
-        groupby_vars : list of str
-            Names of the grouping variables.
-        orient : str
-            Orientation variable name ('x' or 'y').
-        bin_kws_dict : dict or None
-            If common_bins is True, a single bin_kws dict for all groups.
-            If common_bins is False/other, a dict mapping group key to bin_kws.
+        This replaces the old ``_collect_diagnostics_for_groups`` which
+        re-computed histograms from scratch.  Now we reuse the
+        :class:`HistGroupResult` objects produced by :meth:`_eval`, avoiding
+        the double computation while still ensuring diagnostics are keyed by
+        the correct group identifiers.
         """
-        if not groupby_vars:
-            # Single group case
-            if bin_kws_dict is None:
-                bin_kws = self._define_bin_params(
-                    data, orient, self._last_scale_type
+        if not grouping_vars:
+            if self._pending_results:
+                self._pending_results[0] = HistGroupResult(
+                    hist=self._pending_results[0].hist,
+                    bin_edges=self._pending_results[0].bin_edges,
+                    group_key=(),
+                    count=self._pending_results[0].count,
+                    weight_sum=self._pending_results[0].weight_sum,
+                    empty_reason=self._pending_results[0].empty_reason,
+                    normalization_denominator=self._pending_results[0].normalization_denominator,
                 )
-            else:
-                bin_kws = bin_kws_dict
-
-            vals = data[orient]
-            weights = data.get("weight", None)
-            density = self.stat == "density"
-            hist, edges = np.histogram(
-                vals, **bin_kws, weights=weights, density=density,
-            )
-            # Apply normalization to match the final output
-            hist = self._normalize_array(hist, edges)
-
-            self._diagnostics_collector.add_group_univariate(
-                group_key=(),
-                x=vals,
-                bin_edges=edges,
-                hist=hist,
-                weights=weights,
-            )
+            for result in self._pending_results:
+                self._diagnostics_collector.add_group_from_result(result)
+            self._pending_results.clear()
             return
 
-        # Multi-group case
-        grouper = groupby_vars[0] if len(groupby_vars) == 1 else groupby_vars
-        for key, part_df in data.groupby(grouper, sort=False, observed=False):
-            if isinstance(grouper, list):
-                group_key = tuple(zip(groupby_vars, key))
-            else:
-                group_key = ((groupby_vars[0], key),)
+        grouper = grouping_vars[0] if len(grouping_vars) == 1 else grouping_vars
+        group_iter = list(data.groupby(grouper, sort=False, observed=False))
 
-            if bin_kws_dict is None or isinstance(bin_kws_dict, dict) and "bins" in bin_kws_dict and not isinstance(bin_kws_dict["bins"], dict):
-                # common_bins is True or not set - use the shared bin_kws
-                bin_kws = bin_kws_dict if bin_kws_dict is not None else self._define_bin_params(
-                    part_df, orient, self._last_scale_type
-                )
-            else:
-                # Per-group bins - look up by group key
-                bin_kws = bin_kws_dict.get(group_key, bin_kws_dict)
-                if bin_kws is None:
-                    bin_kws = self._define_bin_params(
-                        part_df, orient, self._last_scale_type
-                    )
+        if len(group_iter) != len(self._pending_results):
+            for result in self._pending_results:
+                self._diagnostics_collector.add_group_from_result(result)
+            self._pending_results.clear()
+            return
 
-            vals = part_df[orient]
-            weights = part_df.get("weight", None)
-            density = self.stat == "density"
-            hist, edges = np.histogram(
-                vals, **bin_kws, weights=weights, density=density,
+        for (key, _), result in zip(group_iter, self._pending_results):
+            gk = make_group_key(grouping_vars, key)
+            keyed_result = HistGroupResult(
+                hist=result.hist,
+                bin_edges=result.bin_edges,
+                group_key=gk,
+                count=result.count,
+                weight_sum=result.weight_sum,
+                empty_reason=result.empty_reason,
+                normalization_denominator=result.normalization_denominator,
             )
-            # Apply normalization to match the final output
-            hist = self._normalize_array(hist, edges)
-
-            self._diagnostics_collector.add_group_univariate(
-                group_key=group_key,
-                x=vals,
-                bin_edges=edges,
-                hist=hist,
-                weights=weights,
-            )
-
-    def _normalize_array(self, hist, edges):
-        """Apply normalization to a raw histogram count array.
-
-        Mirrors the normalization logic in _normalize but for raw arrays.
-        Used for diagnostics to match the final output histogram values.
-        """
-        width = np.diff(edges) if edges is not None else None
-
-        if self.stat == "probability" or self.stat == "proportion":
-            hist = hist.astype(float) / hist.sum() if hist.sum() > 0 else hist.astype(float)
-        elif self.stat == "percent":
-            hist = hist.astype(float) / hist.sum() * 100 if hist.sum() > 0 else hist.astype(float)
-        elif self.stat == "frequency":
-            hist = hist.astype(float) / width if width is not None else hist.astype(float)
-        # Note: density is already applied by np.histogram(density=True)
-
-        if self.cumulative:
-            if self.stat in ["density", "frequency"] and width is not None:
-                hist = (hist * width).cumsum()
-            else:
-                hist = hist.cumsum()
-
-        return hist
+            self._diagnostics_collector.add_group_from_result(keyed_result)
+        self._pending_results.clear()
 
     def _normalize(self, data):
 
-        hist = data["count"]
+        hist = data["count"].to_numpy().astype(float)
+        space = data["space"].to_numpy()
+
         if self.stat == "probability" or self.stat == "proportion":
-            hist = hist.astype(float) / hist.sum()
+            total = hist.sum()
+            hist = hist / total if total > 0 else hist
         elif self.stat == "percent":
-            hist = hist.astype(float) / hist.sum() * 100
+            total = hist.sum()
+            hist = hist / total * 100 if total > 0 else hist
         elif self.stat == "frequency":
-            hist = hist.astype(float) / data["space"]
+            hist = hist / space
 
         if self.cumulative:
             if self.stat in ["density", "frequency"]:
-                hist = (hist * data["space"]).cumsum()
+                hist = (hist * space).cumsum()
             else:
                 hist = hist.cumsum()
 
@@ -335,16 +289,14 @@ class Hist(Stat):
         scale_type = scales[orient].__class__.__name__.lower()
         self._last_scale_type = scale_type
 
-        # Reset the diagnostics collector for this call
         self._diagnostics_collector = BinDiagnosticsCollector(
             stat=self.stat, cumulative=self.cumulative
         )
+        self._pending_results = []
 
         grouping_vars = [str(v) for v in data if v in groupby.order]
-        # Keep a reference to the original input data for diagnostics
         original_data = data
 
-        # --- Compute bin parameters (and track for diagnostics) ---
         if not grouping_vars or self.common_bins is True:
             common_bin_kws = self._define_bin_params(data, orient, scale_type)
             data = groupby.apply(data, self._eval, orient, common_bin_kws)
@@ -357,9 +309,7 @@ class Hist(Stat):
             data = bin_groupby.apply(
                 data, self._get_bins_and_eval, orient, groupby, scale_type,
             )
-            common_bin_kws = None  # per-group bins
 
-        # --- Normalize ---
         if not grouping_vars or self.common_norm is True:
             data = self._normalize(data)
         else:
@@ -370,15 +320,10 @@ class Hist(Stat):
                 self._check_grouping_vars("common_norm", grouping_vars)
             data = norm_groupby.apply(data, self._normalize)
 
-        # --- Collect diagnostics using original input data ---
-        # We walk the original data and recompute per-group histograms
-        # for diagnostics. This adds a small overhead but keeps
-        # GroupBy.apply completely untouched.
-        self._collect_diagnostics_for_groups(
+        self._collect_diagnostics_from_pending(
             data=original_data,
-            groupby_vars=grouping_vars,
+            grouping_vars=grouping_vars,
             orient=orient,
-            bin_kws_dict=common_bin_kws,
         )
 
         other = {"x": "y", "y": "x"}[orient]

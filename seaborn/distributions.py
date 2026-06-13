@@ -18,7 +18,7 @@ from ._base import VectorPlotter
 
 # We have moved univariate histogram computation over to the new Hist class,
 # but still use the older Histogram for bivariate computation.
-from ._statistics import ECDF, Histogram, KDE, BinDiagnostics
+from ._statistics import ECDF, Histogram, KDE, BinDiagnostics, make_group_key
 from ._stats.counting import Hist
 
 from .axisgrid import (
@@ -428,13 +428,10 @@ class _DistributionPlotter(VectorPlotter):
         # Now initialize the Histogram estimator
         estimator = Hist(**estimate_kws)
         self._hist_estimator = estimator
-        # Share the estimator's collector directly, eliminating the need
-        # to copy diagnostics between layers. This is the single source of truth.
         self._diagnostics_collector = estimator._diagnostics_collector
         self.diagnostics_ = self._diagnostics_collector.diagnostics
         histograms = {}
 
-        # Do pre-compute housekeeping related to multiple groups
         all_data = self.comp_data.dropna()
         all_weights = all_data.get("weights", None)
 
@@ -450,9 +447,7 @@ class _DistributionPlotter(VectorPlotter):
         else:
             whole_weight = len(all_data)
 
-        # Estimate the smoothed kernel densities, for use later
         if kde:
-            # TODO alternatively, clip at min/max bins?
             kde_kws.setdefault("cut", 0)
             kde_kws["cumulative"] = estimate_kws["cumulative"]
             densities = self._compute_univariate_density(
@@ -466,7 +461,6 @@ class _DistributionPlotter(VectorPlotter):
         # First pass through the data to compute the histograms
         for sub_vars, sub_data in self.iter_data("hue", from_comp_data=True):
 
-            # Prepare the relevant data
             key = tuple(sub_vars.items())
             orient = self.data_variable
 
@@ -476,7 +470,6 @@ class _DistributionPlotter(VectorPlotter):
             else:
                 part_weight = len(sub_data)
 
-            # Do the histogram computation
             if not (multiple_histograms and common_bins):
                 bin_kws = estimator._define_bin_params(sub_data, orient, None)
 
@@ -484,24 +477,6 @@ class _DistributionPlotter(VectorPlotter):
                 estimator._eval(sub_data, orient, bin_kws)
             )
 
-            # Collect diagnostics using the estimator's shared collector
-            group_key = tuple(sub_vars.items())
-            vals = sub_data[orient]
-            weights = sub_data.get("weight", None)
-            hist_vals = res[estimator.stat].to_numpy()
-            # Reconstruct full bin edges from centers and widths
-            centers = res[orient].to_numpy()
-            widths = res["space"].to_numpy()
-            left_edges = centers - widths / 2
-            right_edge = centers[-1] + widths[-1] / 2
-            full_edges = np.append(left_edges, right_edge)
-            estimator._diagnostics_collector.add_group_univariate(
-                group_key=group_key,
-                x=vals,
-                bin_edges=full_edges,
-                hist=hist_vals,
-                weights=weights,
-            )
             heights = res[estimator.stat].to_numpy()
             widths = res["space"].to_numpy()
             edges = res[orient].to_numpy() - widths / 2
@@ -536,6 +511,30 @@ class _DistributionPlotter(VectorPlotter):
 
             # Store the finalized histogram data for future plotting
             histograms[key] = hist
+
+        # --- Flush diagnostics from the HistGroupResult objects that _eval
+        # stored as side effects.  This replaces the old approach of
+        # reconstructing bin edges from centres / widths and calling
+        # add_group_univariate, ensuring the diagnostics come from the
+        # exact same intermediate structure used by the objects layer.
+        hue_var = self.variables.get("hue", None)
+        for sub_vars, result in zip(
+            [sv for sv, _ in self.iter_data("hue", from_comp_data=True)],
+            estimator._pending_results,
+        ):
+            gk = tuple(sub_vars.items())
+            from seaborn._statistics import HistGroupResult as _HGR
+            keyed_result = _HGR(
+                hist=result.hist,
+                bin_edges=result.bin_edges,
+                group_key=gk,
+                count=result.count,
+                weight_sum=result.weight_sum,
+                empty_reason=result.empty_reason,
+                normalization_denominator=result.normalization_denominator,
+            )
+            estimator._diagnostics_collector.add_group_from_result(keyed_result)
+        estimator._pending_results.clear()
 
         # Modify the histogram and density data to resolve multiple groups
         histograms, baselines = self._resolve_multiple(histograms, multiple)
@@ -770,8 +769,8 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, fill, element, multiple, alpha, plot_kws, {},
             )
 
-        # Note: diagnostics are written directly into self.diagnostics_ via
-        # the shared BinDiagnosticsCollector. No explicit update/copy needed.
+        # Diagnostics are flushed from _pending_results above;
+        # the collector is shared with the estimator, so no extra copy.
 
     def plot_bivariate_histogram(
         self,
@@ -789,8 +788,6 @@ class _DistributionPlotter(VectorPlotter):
         # Now initialize the Histogram estimator
         estimator = Histogram(**estimate_kws)
         self._hist_estimator = estimator
-        # Share the estimator's collector directly - single source of truth.
-        # Histogram's collector is recreated in __init__ so no need to clear.
         self._diagnostics_collector = estimator._diagnostics_collector
         self.diagnostics_ = self._diagnostics_collector.diagnostics
 
@@ -939,9 +936,8 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, True, False, "layer", 1, artist_kws, {},
             )
 
-        # Note: diagnostics are written directly into self.diagnostics_ via
-        # the shared BinDiagnosticsCollector that self._diagnostics_collector
-        # references. No explicit update/copy needed.
+        # Diagnostics are collected internally by Histogram.__call__
+        # via compute_hist_group_bivariate and add_group_from_result.
 
     def plot_univariate_density(
         self,
