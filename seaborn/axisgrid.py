@@ -21,6 +21,7 @@ from .utils import (
     _disable_autolayout
 )
 from .palettes import color_palette, blend_palette
+from .rcmod import ThemeContext, theme_profile
 from ._docstrings import (
     DocstringComponents,
     _core_docs,
@@ -2014,6 +2015,47 @@ def pairplot(
     kind="scatter", diag_kind="auto", markers=None,
     height=2.5, aspect=1, corner=False, dropna=False,
     plot_kws=None, diag_kws=None, grid_kws=None, size=None,
+    theme=None, theme_context=None, theme_style=None, theme_palette=None,
+    theme_font=None, theme_font_scale=None, theme_color_codes=None,
+    theme_rc=None,
+):
+    if theme is None:
+        any_theme_arg_set = any(
+            arg is not None for arg in (
+                theme_context, theme_style, theme_palette,
+                theme_font, theme_font_scale, theme_color_codes, theme_rc,
+            )
+        )
+        if not any_theme_arg_set:
+            theme = None
+        else:
+            theme = theme_profile(
+                context=theme_context if theme_context is not None else "notebook",
+                style=theme_style if theme_style is not None else "darkgrid",
+                palette=theme_palette if theme_palette is not None else "deep",
+                font=theme_font if theme_font is not None else "sans-serif",
+                font_scale=theme_font_scale if theme_font_scale is not None else 1,
+                color_codes=theme_color_codes if theme_color_codes is not None else True,
+                rc=theme_rc,
+            )
+
+    with ThemeContext(theme):
+        return _pairplot_impl(
+            data=data, hue=hue, hue_order=hue_order, palette=palette,
+            vars=vars, x_vars=x_vars, y_vars=y_vars, kind=kind,
+            diag_kind=diag_kind, markers=markers, height=height,
+            aspect=aspect, corner=corner, dropna=dropna, plot_kws=plot_kws,
+            diag_kws=diag_kws, grid_kws=grid_kws, size=size,
+        )
+
+
+def _pairplot_impl(
+    data, *,
+    hue=None, hue_order=None, palette=None,
+    vars=None, x_vars=None, y_vars=None,
+    kind="scatter", diag_kind="auto", markers=None,
+    height=2.5, aspect=1, corner=False, dropna=False,
+    plot_kws=None, diag_kws=None, grid_kws=None, size=None,
 ):
     """Plot pairwise relationships in a dataset.
 
@@ -2182,6 +2224,47 @@ def pairplot(
 
 
 def jointplot(
+    data=None, *, x=None, y=None, hue=None, kind="scatter",
+    height=6, ratio=5, space=.2, dropna=False, xlim=None, ylim=None,
+    color=None, palette=None, hue_order=None, hue_norm=None, marginal_ticks=False,
+    joint_kws=None, marginal_kws=None,
+    theme=None, theme_context=None, theme_style=None, theme_palette=None,
+    theme_font=None, theme_font_scale=None, theme_color_codes=None,
+    theme_rc=None,
+    **kwargs
+):
+    if theme is None:
+        any_theme_arg_set = any(
+            arg is not None for arg in (
+                theme_context, theme_style, theme_palette,
+                theme_font, theme_font_scale, theme_color_codes, theme_rc,
+            )
+        )
+        if not any_theme_arg_set:
+            theme = None
+        else:
+            theme = theme_profile(
+                context=theme_context if theme_context is not None else "notebook",
+                style=theme_style if theme_style is not None else "darkgrid",
+                palette=theme_palette if theme_palette is not None else "deep",
+                font=theme_font if theme_font is not None else "sans-serif",
+                font_scale=theme_font_scale if theme_font_scale is not None else 1,
+                color_codes=theme_color_codes if theme_color_codes is not None else True,
+                rc=theme_rc,
+            )
+
+    with ThemeContext(theme):
+        return _jointplot_impl(
+            data=data, x=x, y=y, hue=hue, kind=kind, height=height,
+            ratio=ratio, space=space, dropna=dropna, xlim=xlim, ylim=ylim,
+            color=color, palette=palette, hue_order=hue_order,
+            hue_norm=hue_norm, marginal_ticks=marginal_ticks,
+            joint_kws=joint_kws, marginal_kws=marginal_kws,
+            **kwargs,
+        )
+
+
+def _jointplot_impl(
     data=None, *, x=None, y=None, hue=None, kind="scatter",
     height=6, ratio=5, space=.2, dropna=False, xlim=None, ylim=None,
     color=None, palette=None, hue_order=None, hue_norm=None, marginal_ticks=False,

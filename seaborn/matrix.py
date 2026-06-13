@@ -23,6 +23,7 @@ from .utils import (
     to_utf8,
     _draw_figure,
 )
+from .rcmod import ThemeContext, theme_profile
 
 
 __all__ = ["heatmap", "clustermap"]
@@ -1466,6 +1467,55 @@ class ClusterGrid(Grid):
 
 
 def clustermap(
+    data, *,
+    pivot_kws=None, method='average', metric='euclidean',
+    z_score=None, standard_scale=None, figsize=(10, 10),
+    cbar_kws=None, row_cluster=True, col_cluster=True,
+    row_linkage=None, col_linkage=None,
+    row_colors=None, col_colors=None, mask=None,
+    dendrogram_ratio=.2, colors_ratio=0.03,
+    cbar_pos=(.02, .8, .05, .18), tree_kws=None,
+    annot=None, fmt=".2g", annot_kws=None, annot_format=None,
+    theme=None, theme_context=None, theme_style=None, theme_palette=None,
+    theme_font=None, theme_font_scale=None, theme_color_codes=None,
+    theme_rc=None,
+    **kwargs
+):
+    if theme is None:
+        any_theme_arg_set = any(
+            arg is not None for arg in (
+                theme_context, theme_style, theme_palette,
+                theme_font, theme_font_scale, theme_color_codes, theme_rc,
+            )
+        )
+        if not any_theme_arg_set:
+            theme = None
+        else:
+            theme = theme_profile(
+                context=theme_context if theme_context is not None else "notebook",
+                style=theme_style if theme_style is not None else "darkgrid",
+                palette=theme_palette if theme_palette is not None else "deep",
+                font=theme_font if theme_font is not None else "sans-serif",
+                font_scale=theme_font_scale if theme_font_scale is not None else 1,
+                color_codes=theme_color_codes if theme_color_codes is not None else True,
+                rc=theme_rc,
+            )
+
+    with ThemeContext(theme):
+        return _clustermap_impl(
+            data=data, pivot_kws=pivot_kws, method=method, metric=metric,
+            z_score=z_score, standard_scale=standard_scale, figsize=figsize,
+            cbar_kws=cbar_kws, row_cluster=row_cluster, col_cluster=col_cluster,
+            row_linkage=row_linkage, col_linkage=col_linkage,
+            row_colors=row_colors, col_colors=col_colors, mask=mask,
+            dendrogram_ratio=dendrogram_ratio, colors_ratio=colors_ratio,
+            cbar_pos=cbar_pos, tree_kws=tree_kws, annot=annot, fmt=fmt,
+            annot_kws=annot_kws, annot_format=annot_format,
+            **kwargs,
+        )
+
+
+def _clustermap_impl(
     data, *,
     pivot_kws=None, method='average', metric='euclidean',
     z_score=None, standard_scale=None, figsize=(10, 10),

@@ -18,10 +18,7 @@ from ._base import VectorPlotter
 
 # We have moved univariate histogram computation over to the new Hist class,
 # but still use the older Histogram for bivariate computation.
-from ._statistics import (
-    ECDF, Histogram, KDE, BinDiagnostics, HistGroupResult,
-    normalize_hist_array, compute_normalization_denominator,
-)
+from ._statistics import ECDF, Histogram, KDE, BinDiagnostics
 from ._stats.counting import Hist
 
 from .axisgrid import (
@@ -37,6 +34,7 @@ from .utils import (
     _default_color,
 )
 from .palettes import color_palette
+from .rcmod import ThemeContext, theme_profile
 from .external import husl
 from .external.kde import gaussian_kde
 from ._docstrings import (
@@ -431,10 +429,13 @@ class _DistributionPlotter(VectorPlotter):
         # Now initialize the Histogram estimator
         estimator = Hist(**estimate_kws)
         self._hist_estimator = estimator
+        # Share the estimator's collector directly, eliminating the need
+        # to copy diagnostics between layers. This is the single source of truth.
         self._diagnostics_collector = estimator._diagnostics_collector
         self.diagnostics_ = self._diagnostics_collector.diagnostics
         histograms = {}
 
+        # Do pre-compute housekeeping related to multiple groups
         all_data = self.comp_data.dropna()
         all_weights = all_data.get("weights", None)
 
@@ -450,7 +451,9 @@ class _DistributionPlotter(VectorPlotter):
         else:
             whole_weight = len(all_data)
 
+        # Estimate the smoothed kernel densities, for use later
         if kde:
+            # TODO alternatively, clip at min/max bins?
             kde_kws.setdefault("cut", 0)
             kde_kws["cumulative"] = estimate_kws["cumulative"]
             densities = self._compute_univariate_density(
@@ -462,9 +465,9 @@ class _DistributionPlotter(VectorPlotter):
             )
 
         # First pass through the data to compute the histograms
-        hist_results = []
         for sub_vars, sub_data in self.iter_data("hue", from_comp_data=True):
 
+            # Prepare the relevant data
             key = tuple(sub_vars.items())
             orient = self.data_variable
 
@@ -474,46 +477,35 @@ class _DistributionPlotter(VectorPlotter):
             else:
                 part_weight = len(sub_data)
 
+            # Do the histogram computation
             if not (multiple_histograms and common_bins):
                 bin_kws = estimator._define_bin_params(sub_data, orient, None)
 
-            eval_df = estimator._eval(sub_data, orient, bin_kws)
-            result = eval_df["__hist_result__"].iloc[0]
-
-            # --- Apply per-group normalization using the shared utility.
-            # *result* from _eval carries stat=count raw histograms so that
-            # common_norm / cross-group semantics can be applied correctly
-            # at the plotter level.  Re-run normalization here (with bin
-            # edges taken from *result*) so the computed heights and
-            # normalization denominator are produced by the exact same
-            # shared function as the legacy Histogram and objects Hist
-            # layers.  No local arithmetic, no edge reconstruction.
-            heights = normalize_hist_array(
-                result.hist.astype(float).copy(),
-                result.bin_edges,
-                estimator.stat,
-                estimator.cumulative,
-            )
-            widths = np.diff(result.bin_edges)
-            edges_left = result.bin_edges[:-1]
-            norm_denom = compute_normalization_denominator(
-                heights, result.bin_edges, estimator.stat,
+            res = estimator._normalize(
+                estimator._eval(sub_data, orient, bin_kws)
             )
 
-            # --- Build keyed_result from result + the normalized heights.
-            # Diagnostics reflect the intrinsic (per-group, pre-common_norm)
-            # statistic value; cross-group rescaling happens later on the
-            # plotting Series and is intentionally not reflected here.
-            keyed_result = HistGroupResult(
-                hist=heights.copy(),
-                bin_edges=result.bin_edges,
-                group_key=key,
-                count=result.count,
-                weight_sum=result.weight_sum,
-                empty_reason=result.empty_reason,
-                normalization_denominator=norm_denom,
+            # Collect diagnostics using the estimator's shared collector
+            group_key = tuple(sub_vars.items())
+            vals = sub_data[orient]
+            weights = sub_data.get("weight", None)
+            hist_vals = res[estimator.stat].to_numpy()
+            # Reconstruct full bin edges from centers and widths
+            centers = res[orient].to_numpy()
+            widths = res["space"].to_numpy()
+            left_edges = centers - widths / 2
+            right_edge = centers[-1] + widths[-1] / 2
+            full_edges = np.append(left_edges, right_edge)
+            estimator._diagnostics_collector.add_group_univariate(
+                group_key=group_key,
+                x=vals,
+                bin_edges=full_edges,
+                hist=hist_vals,
+                weights=weights,
             )
-            hist_results.append(keyed_result)
+            heights = res[estimator.stat].to_numpy()
+            widths = res["space"].to_numpy()
+            edges = res[orient].to_numpy() - widths / 2
 
             # Rescale the smoothed curve to match the histogram
             if kde and key in densities:
@@ -527,14 +519,14 @@ class _DistributionPlotter(VectorPlotter):
             # Convert edges back to original units for plotting
             ax = self._get_axes(sub_vars)
             _, inv = _get_transform_functions(ax, self.data_variable)
-            widths = inv(edges_left + widths) - inv(edges_left)
-            edges_left = inv(edges_left)
+            widths = inv(edges + widths) - inv(edges)
+            edges = inv(edges)
 
             # Pack the histogram data and metadata together
-            edges_left = edges_left + (1 - shrink) / 2 * widths
+            edges = edges + (1 - shrink) / 2 * widths
             widths *= shrink
             index = pd.MultiIndex.from_arrays([
-                pd.Index(edges_left, name="edges"),
+                pd.Index(edges, name="edges"),
                 pd.Index(widths, name="widths"),
             ])
             hist = pd.Series(heights, index=index, name="heights")
@@ -545,14 +537,6 @@ class _DistributionPlotter(VectorPlotter):
 
             # Store the finalized histogram data for future plotting
             histograms[key] = hist
-
-        # --- Flush diagnostics from HistGroupResults.
-        # Each keyed_result already has bin_edges, count, weight_sum,
-        # empty_reason, and normalization_denominator set correctly from
-        # the normalized (pre-common_norm) heights and the shared compute
-        # functions. No re-derivation or edge reconstruction needed.
-        for keyed_result in hist_results:
-            estimator._diagnostics_collector.add_group_from_result(keyed_result)
 
         # Modify the histogram and density data to resolve multiple groups
         histograms, baselines = self._resolve_multiple(histograms, multiple)
@@ -787,8 +771,8 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, fill, element, multiple, alpha, plot_kws, {},
             )
 
-        # Diagnostics are flushed below from the HistGroupResult
-        # objects; the collector is shared with the estimator.
+        # Note: diagnostics are written directly into self.diagnostics_ via
+        # the shared BinDiagnosticsCollector. No explicit update/copy needed.
 
     def plot_bivariate_histogram(
         self,
@@ -806,12 +790,14 @@ class _DistributionPlotter(VectorPlotter):
         # Now initialize the Histogram estimator
         estimator = Histogram(**estimate_kws)
         self._hist_estimator = estimator
+        # Share the estimator's collector directly - single source of truth.
+        # Histogram's collector is recreated in __init__ so no need to clear.
         self._diagnostics_collector = estimator._diagnostics_collector
         self.diagnostics_ = self._diagnostics_collector.diagnostics
 
         # Do pre-compute housekeeping related to multiple groups
-        all_data = self.comp_data.dropna()
         if set(self.variables) - {"x", "y"}:
+            all_data = self.comp_data.dropna()
             if common_bins:
                 estimator.define_bin_params(
                     all_data["x"],
@@ -821,32 +807,18 @@ class _DistributionPlotter(VectorPlotter):
         else:
             common_norm = False
 
-        # -- Compute all bivariate histograms once via compute_group(), caching
-        # the HistGroupResult objects in a dict keyed by group_key.  This
-        # ensures the full-heights pass and the draw pass consume the exact
-        # same intermediate results, while diagnostics are flushed only once
-        # at the end.  No duplicate histogram computation, no hidden side
-        # effects in private _eval_* methods.
-        # We iterate by hue (same as the draw loop) so group keys match.
-        bivariate_results: dict[tuple, HistGroupResult] = {}
-        for sub_vars, sub_data in self.iter_data("hue", from_comp_data=True):
+        # -- Determine colormap threshold and norm based on the full data
+
+        full_heights = []
+        for sub_vars, sub_data in self.iter_data(from_comp_data=True):
             group_key = tuple(sub_vars.items())
-            result = estimator.compute_group(
+            sub_heights, _ = estimator(
                 sub_data["x"], sub_data["y"], sub_data.get("weights", None),
                 group_key=group_key,
             )
-            bivariate_results[group_key] = result
-
-        full_heights = [r.hist for r in bivariate_results.values()]
+            full_heights.append(sub_heights)
 
         common_color_norm = not set(self.variables) - {"x", "y"} or common_norm
-
-        if common_color_norm:
-            all_result = estimator.compute_group(
-                all_data["x"], all_data["y"], all_data.get("weights", None),
-                group_key=(),
-            )
-            full_heights = [all_result.hist]
 
         if pthresh is not None and common_color_norm:
             thresh = self._quantile_to_level(full_heights, pthresh)
@@ -871,10 +843,14 @@ class _DistributionPlotter(VectorPlotter):
             if sub_data.empty:
                 continue
 
+            # Do the histogram computation
             group_key = tuple(sub_vars.items())
-            result = bivariate_results[group_key]
-            heights = result.hist
-            x_edges, y_edges = result.bin_edges
+            heights, (x_edges, y_edges) = estimator(
+                sub_data["x"],
+                sub_data["y"],
+                weights=sub_data.get("weights", None),
+                group_key=group_key,
+            )
 
             # Get the axes for this plot
             ax = self._get_axes(sub_vars)
@@ -964,12 +940,9 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, True, False, "layer", 1, artist_kws, {},
             )
 
-        # Diagnostics are flushed here once from the shared compute_group()
-        # results used for both the threshold calculation and the actual
-        # plotting.  This is the only collection point for bivariate
-        # diagnostics, matching the univariate pattern above.
-        for result in bivariate_results.values():
-            estimator._diagnostics_collector.add_group_from_result(result)
+        # Note: diagnostics are written directly into self.diagnostics_ via
+        # the shared BinDiagnosticsCollector that self._diagnostics_collector
+        # references. No explicit update/copy needed.
 
     def plot_univariate_density(
         self,
@@ -2183,6 +2156,51 @@ def displot(
     # Hue-mapping parameters
     palette=None, hue_order=None, hue_norm=None, color=None,
     # Faceting parameters
+    col_wrap=None, row_order=None, col_order=None,
+    height=5, aspect=1, facet_kws=None,
+    # Theme profile
+    theme=None, theme_context=None, theme_style=None, theme_palette=None,
+    theme_font=None, theme_font_scale=None, theme_color_codes=None,
+    theme_rc=None,
+    **kwargs,
+):
+    if theme is None:
+        any_theme_arg_set = any(
+            arg is not None for arg in (
+                theme_context, theme_style, theme_palette,
+                theme_font, theme_font_scale, theme_color_codes, theme_rc,
+            )
+        )
+        if not any_theme_arg_set:
+            theme = None
+        else:
+            theme = theme_profile(
+                context=theme_context if theme_context is not None else "notebook",
+                style=theme_style if theme_style is not None else "darkgrid",
+                palette=theme_palette if theme_palette is not None else "deep",
+                font=theme_font if theme_font is not None else "sans-serif",
+                font_scale=theme_font_scale if theme_font_scale is not None else 1,
+                color_codes=theme_color_codes if theme_color_codes is not None else True,
+                rc=theme_rc,
+            )
+
+    with ThemeContext(theme):
+        return _displot_impl(
+            data=data, x=x, y=y, hue=hue, row=row, col=col,
+            weights=weights, kind=kind, rug=rug, rug_kws=rug_kws,
+            log_scale=log_scale, legend=legend, palette=palette,
+            hue_order=hue_order, hue_norm=hue_norm, color=color,
+            col_wrap=col_wrap, row_order=row_order, col_order=col_order,
+            height=height, aspect=aspect, facet_kws=facet_kws,
+            **kwargs,
+        )
+
+
+def _displot_impl(
+    data=None, *,
+    x=None, y=None, hue=None, row=None, col=None, weights=None,
+    kind="hist", rug=False, rug_kws=None, log_scale=None, legend=True,
+    palette=None, hue_order=None, hue_norm=None, color=None,
     col_wrap=None, row_order=None, col_order=None,
     height=5, aspect=1, facet_kws=None,
     **kwargs,

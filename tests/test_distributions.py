@@ -2815,7 +2815,7 @@ class TestObjHistDiagnostics:
             "x": np.concatenate([rs.randn(40), rs.randn(60) + 3]),
             "hue": ["g1"] * 40 + ["g2"] * 60,
         })
-        h = ObjHist(stat="density", bins=12, common_norm=False)
+        h = ObjHist(stat="density", bins=12)
         gb = GroupBy(["hue"])
         _ = h(df, gb, "x", {"x": ContScale()})
         diags = h.diagnostics_
@@ -2827,8 +2827,7 @@ class TestObjHistDiagnostics:
             counts[k[0][1]] = v.count
         assert counts["g1"] == 40
         assert counts["g2"] == 60
-        # density with common_norm=False: each group independently
-        # normalized, so norm_denom (area) should integrate to 1
+        # density: norm_denom should integrate to 1 (within tolerance)
         for v in diags.values():
             assert abs(v.normalization_denominator - 1.0) < 0.1
 

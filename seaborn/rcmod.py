@@ -116,11 +116,17 @@ def set_theme(context="notebook", style="darkgrid", palette="deep",
     .. include:: ../docstrings/set_theme.rst
 
     """
-    set_context(context, font_scale)
-    set_style(style, rc={"font.family": font})
-    set_palette(palette, color_codes=color_codes)
-    if rc is not None:
-        mpl.rcParams.update(rc)
+    profile = _ThemeProfile.from_args(
+        context=context, style=style, palette=palette, font=font,
+        font_scale=font_scale, color_codes=color_codes, rc=rc,
+    )
+    target_rc = profile.resolve()
+    mpl.rcParams.update(target_rc)
+    if color_codes:
+        try:
+            palettes.set_color_codes(palette)
+        except (ValueError, TypeError):
+            pass
 
 
 def set(*args, **kwargs):
@@ -531,3 +537,359 @@ def set_palette(palette, n_colors=None, desat=None, color_codes=False):
             palettes.set_color_codes(palette)
         except (ValueError, TypeError):
             pass
+
+
+# =============================================================================
+# Unified Theme Lifecycle: _ThemeProfile, ThemeContext, theme_profile
+# =============================================================================
+
+# rc keys that are transiently modified by the theme system; these are the
+# union of style keys, context keys, palette (prop_cycle) and color codes
+_theme_rc_keys = (
+    *_style_keys,
+    *_context_keys,
+    "axes.prop_cycle",
+)
+
+# Shorthand color codes that may be remapped by set_color_codes
+_color_code_keys = "bgrmyck"
+
+
+class _ThemeProfile:
+    """Immutable, validated representation of a complete theme specification.
+
+    Encapsulates the set of parameters that define a visual theme — style,
+    context, palette, font, font_scale, color_codes, and an arbitrary rc
+    override dict — and centralises their validation so that figure-level
+    functions do not each need to re-implement the checks.
+
+    A profile can be constructed either from keyword arguments (matching the
+    :func:`set_theme` signature) via the :meth:`from_args` factory, or from
+    an existing profile dict via :meth:`from_dict`.  Both paths perform the
+    same validation and normalisation so that the resulting object is safe
+    to hand to :class:`ThemeContext`.
+
+    Notes
+    -----
+    This class intentionally does **not** touch ``mpl.rcParams``; it is
+    purely a data carrier with validation logic.  The side effects happen
+    exclusively inside :class:`ThemeContext`'s ``__enter__`` / ``__exit__``
+    methods, which guarantees a clean lifecycle even across exceptions.
+    """
+
+    __slots__ = ("context", "style", "palette", "font",
+                 "font_scale", "color_codes", "rc")
+
+    # ----- factories -------------------------------------------------------
+
+    @classmethod
+    def from_args(cls, context="notebook", style="darkgrid", palette="deep",
+                  font="sans-serif", font_scale=1, color_codes=True, rc=None):
+        """Build and validate a profile from individual keyword arguments.
+
+        The signature matches :func:`set_theme` exactly; see that function
+        for documentation of each parameter.
+        """
+        self = cls.__new__(cls)
+        self.context = context
+        self.style = style
+        self.palette = palette
+        self.font = font
+        self.font_scale = font_scale
+        self.color_codes = color_codes
+        self.rc = {} if rc is None else dict(rc)
+        self._validate()
+        return self
+
+    @classmethod
+    def from_dict(cls, profile):
+        """Build a profile from a dictionary.
+
+        Accepts the same keys as :func:`set_theme`'s parameters.  Missing
+        keys fall back to the :func:`set_theme` defaults.
+        """
+        if profile is None:
+            profile = {}
+        if not isinstance(profile, dict):
+            raise TypeError(
+                "theme profile must be a dict, got "
+                f"{type(profile).__name__}"
+            )
+        known = frozenset({"context", "style", "palette", "font",
+                           "font_scale", "color_codes", "rc"})
+        extra = {k for k in profile if k not in known}
+        if extra:
+            raise ValueError(
+                "unknown keys in theme profile: "
+                f"{', '.join(sorted(extra))}"
+            )
+        return cls.from_args(**profile)
+
+    @classmethod
+    def default(cls):
+        """Return the default profile (equivalent to ``set_theme()``)."""
+        return cls.from_args()
+
+    # ----- validation ------------------------------------------------------
+
+    def _validate(self):
+        """Run all per-field validations.
+
+        Validation is performed early (before any rcParams are touched) so
+        that mistakes surface immediately rather than half-way through
+        applying the theme.  The individual helpers delegate to the same
+        logic used by the public getters (:func:`axes_style`,
+        :func:`plotting_context`) by simply calling them without side
+        effects — this keeps the rules in a single authoritative place.
+        """
+        self._validate_style()
+        self._validate_context()
+        self._validate_font_scale()
+        self._validate_color_codes()
+        self._validate_rc()
+
+    def _validate_style(self):
+        if isinstance(self.style, dict):
+            bad = [k for k in self.style if k not in _style_keys]
+            if bad:
+                raise ValueError(
+                    "style dict contains keys that are not part of the "
+                    f"seaborn style definition: {', '.join(bad)}"
+                )
+        elif self.style is not None and not isinstance(self.style, str):
+            raise TypeError(
+                "style must be a string name, a dict, or None; got "
+                f"{type(self.style).__name__}"
+            )
+        # string names are validated by axes_style itself
+
+    def _validate_context(self):
+        if isinstance(self.context, dict):
+            bad = [k for k in self.context if k not in _context_keys]
+            if bad:
+                raise ValueError(
+                    "context dict contains keys that are not part of the "
+                    f"seaborn context definition: {', '.join(bad)}"
+                )
+        elif self.context is not None and not isinstance(self.context, str):
+            raise TypeError(
+                "context must be a string name, a dict, or None; got "
+                f"{type(self.context).__name__}"
+            )
+
+    def _validate_font_scale(self):
+        try:
+            scale = float(self.font_scale)
+        except (TypeError, ValueError):
+            raise TypeError(
+                "font_scale must be numeric, got "
+                f"{type(self.font_scale).__name__}"
+            )
+        if scale <= 0:
+            raise ValueError(f"font_scale must be positive, got {scale}")
+
+    def _validate_color_codes(self):
+        if not isinstance(self.color_codes, bool):
+            raise TypeError(
+                "color_codes must be bool, got "
+                f"{type(self.color_codes).__name__}"
+            )
+
+    def _validate_rc(self):
+        if not isinstance(self.rc, dict):
+            raise TypeError(
+                "rc must be a dict or None, got "
+                f"{type(self.rc).__name__}"
+            )
+
+    # ----- resolution → flat rc dict --------------------------------------
+
+    def resolve(self):
+        """Resolve the profile into a single flat dict of matplotlib rcParams.
+
+        The merge order is the same one documented for :func:`set_theme` —
+        later entries win:
+
+        1. style preset (axes_style)
+        2. context preset + font_scale (plotting_context)
+        3. font family (overrides the ``font.family`` coming from style)
+        4. palette → ``axes.prop_cycle``
+        5. user-provided ``rc`` overrides
+
+        This method does **not** mutate ``mpl.rcParams``; it merely computes
+        the target state so that the caller can apply and revert it
+        atomically.
+        """
+        merged = {}
+
+        # 1. style
+        merged.update(dict(axes_style(self.style)))
+
+        # 2. context (+ font_scale)
+        merged.update(dict(plotting_context(self.context, self.font_scale)))
+
+        # 3. font family override
+        merged["font.family"] = self.font
+
+        # 4. palette → prop_cycle
+        colors = palettes.color_palette(self.palette)
+        merged["axes.prop_cycle"] = cycler("color", colors)
+
+        # 5. user rc overrides (no key filtering — arbitrary rc is allowed)
+        merged.update(self.rc)
+
+        return merged
+
+    def palette_colors(self):
+        """Return the list of colors in the profile's palette."""
+        return palettes.color_palette(self.palette)
+
+    # ----- misc ------------------------------------------------------------
+
+    def __repr__(self):
+        return (
+            f"_ThemeProfile(context={self.context!r}, style={self.style!r}, "
+            f"palette={self.palette!r}, font={self.font!r}, "
+            f"font_scale={self.font_scale!r}, "
+            f"color_codes={self.color_codes!r}, rc={self.rc!r})"
+        )
+
+    def __eq__(self, other):
+        if not isinstance(other, _ThemeProfile):
+            return NotImplemented
+        return all(
+            getattr(self, k) == getattr(other, k)
+            for k in self.__slots__
+        )
+
+
+class ThemeContext:
+    """Context manager that applies a :class:`_ThemeProfile` and reverts it.
+
+    This is the authoritative place where the theme lifecycle actually
+    happens.  All figure-level functions that want to temporarily apply a
+    theme should do so via::
+
+        with ThemeContext(profile):
+            # ... plotting code ...
+
+    Responsibilities handled here, uniformly for all callers:
+
+    * snapshotting the previous state (rcParams + color codes)
+    * applying the profile (``resolve()`` + ``rcParams.update``)
+    * restoring the previous state on exit — **regardless** of whether an
+      exception was raised
+    * supporting the decorator form via ``__call__``
+
+    By concentrating all of that logic here we ensure that every entry
+    point gets the same merge order, the same exception-safety, and the
+    same behaviour around palette remapping (color codes).
+
+    Parameters
+    ----------
+    profile : _ThemeProfile or dict or None
+        Either a pre-built :class:`_ThemeProfile`, a dict suitable for
+        :meth:`_ThemeProfile.from_dict`, or ``None`` (in which case the
+        context is a no-op — useful for call sites that accept an optional
+        ``theme=`` argument).
+    """
+
+    def __init__(self, profile):
+        if profile is None:
+            self._profile = None
+        elif isinstance(profile, _ThemeProfile):
+            self._profile = profile
+        else:
+            self._profile = _ThemeProfile.from_dict(profile)
+
+        # Filled in by __enter__
+        self._orig_rc = None
+        self._orig_color_codes = None
+
+    # ----- context manager -------------------------------------------------
+
+    def __enter__(self):
+        if self._profile is None:
+            return self
+
+        # 1. snapshot — capture everything that we are about to mutate,
+        #    before touching rcParams at all.
+        self._orig_rc = {
+            k: mpl.rcParams[k] for k in _theme_rc_keys if k in mpl.rcParams
+        }
+        self._orig_color_codes = {
+            c: mpl.colors.colorConverter.colors[c] for c in _color_code_keys
+        }
+
+        # 2. resolve → flat rc dict
+        target_rc = self._profile.resolve()
+
+        # 3. apply
+        mpl.rcParams.update(target_rc)
+
+        # 4. palette → color codes (opt-in, matching set_theme / set_palette)
+        if self._profile.color_codes:
+            try:
+                palettes.set_color_codes(self._profile.palette)
+            except (ValueError, TypeError):
+                # Not every palette can be mapped to shorthand codes; that
+                # should never be fatal.
+                pass
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        if self._profile is None:
+            return False
+
+        # Restore in the reverse order of application so that the two
+        # systems (rcParams and color codes) are both fully reverted even
+        # if one step somehow raises.
+        try:
+            if self._orig_color_codes is not None:
+                for code, color in self._orig_color_codes.items():
+                    mpl.colors.colorConverter.colors[code] = color
+        finally:
+            if self._orig_rc is not None:
+                mpl.rcParams.update(self._orig_rc)
+
+        # Always let exceptions propagate (the context is purely for
+        # cleanup, not for error handling).
+        return False
+
+    # ----- decorator form --------------------------------------------------
+
+    def __call__(self, func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+        return wrapper
+
+
+def theme_profile(context="notebook", style="darkgrid", palette="deep",
+                  font="sans-serif", font_scale=1, color_codes=True, rc=None):
+    """Build a validated :class:`_ThemeProfile` without applying it.
+
+    This is the canonical parsing entry point.  Figure-level functions
+    that expose theme-related keyword arguments should collect them, pass
+    them through ``theme_profile``, and wrap their plotting body in a
+    :class:`ThemeContext`::
+
+        def some_figure_plot(..., theme=None, **theme_kws):
+            if theme is None:
+                theme = theme_profile(**theme_kws)
+            with ThemeContext(theme):
+                # ... plotting code ...
+
+    Parameters are identical to :func:`set_theme` and are documented there.
+
+    Returns
+    -------
+    _ThemeProfile
+        A validated, immutable profile ready for :class:`ThemeContext`.
+    """
+    return _ThemeProfile.from_args(
+        context=context, style=style, palette=palette, font=font,
+        font_scale=font_scale, color_codes=color_codes, rc=rc,
+    )

@@ -279,512 +279,6 @@ class BinDiagnosticsCollector:
         """Convenience wrapper for bivariate case."""
         return self.add_group(group_key, (x1, x2), bin_edges, hist, weights)
 
-    def add_group_from_result(self, result: HistGroupResult) -> BinDiagnostics:
-        """Add diagnostics from a HistGroupResult (zero-copy where possible).
-
-        This is the preferred entry point when a :class:`HistGroupResult`
-        is already available, because it avoids re-deriving count /
-        weight_sum / empty_reason from the raw data.
-        """
-        diag = BinDiagnostics(
-            bin_edges=result.bin_edges,
-            count=result.count,
-            weight_sum=result.weight_sum,
-            normalization_denominator=result.normalization_denominator,
-            empty_reason=result.empty_reason,
-            extra={"stat": self.stat, "cumulative": self.cumulative},
-        )
-        self._diagnostics[result.group_key] = diag
-        return diag
-
-
-@dataclass
-class HistGroupResult:
-    """Unified intermediate result of histogram computation for one group.
-
-    Every histogram-producing code path (legacy ``Histogram``, objects-layer
-    ``Hist``, and the ``plot_univariate_histogram`` / ``plot_bivariate_histogram``
-    helpers in :mod:`seaborn.distributions`) should produce one
-    :class:`HistGroupResult` per group so that downstream consumers can
-    derive plotting data and :class:`BinDiagnostics` from the *same*
-    structure, eliminating the risk of divergent bookkeeping.
-
-    Attributes
-    ----------
-    hist : np.ndarray
-        Normalized histogram values (after stat and cumulative transforms).
-    bin_edges : np.ndarray or tuple[np.ndarray, np.ndarray]
-        Bin edges used.  Univariate: 1-D ``(n_bins+1,)``; bivariate:
-        ``(x_edges, y_edges)``.
-    group_key : tuple
-        Canonical group identifier, e.g. ``(("hue", "A"),)``.
-    count : int
-        Number of valid (finite, non-NaN) samples.
-    weight_sum : float
-        Sum of weights for valid samples (equals *count* when unweighted).
-    empty_reason : str or None
-        ``"no_data"``, ``"all_nan"``, ``"zero_variance"``, or ``None``.
-    normalization_denominator : float or None
-        Denominator used for the chosen *stat* (``None`` for ``"count"``).
-    """
-
-    hist: np.ndarray
-    bin_edges: np.ndarray | tuple[np.ndarray, np.ndarray]
-    group_key: tuple = ()
-    count: int = 0
-    weight_sum: float = 0.0
-    empty_reason: str | None = None
-    normalization_denominator: float | None = None
-
-
-def _clean_data(x):
-    """Return a finite-only numpy view and a boolean mask of valid entries.
-
-    Parameters
-    ----------
-    x : array-like or Series
-        Raw data.
-
-    Returns
-    -------
-    x_arr : np.ndarray
-        Original data as float64 array (inf replaced with NaN).
-    valid_mask : np.ndarray[bool]
-        True where the element is finite.
-    """
-    x_arr = np.asarray(x, dtype=float)
-    x_arr = np.where(np.isfinite(x_arr), x_arr, np.nan)
-    valid_mask = np.isfinite(x_arr)
-    return x_arr, valid_mask
-
-
-def define_bin_edges(x, weights, bins, binwidth, binrange, discrete):
-    """Unified bin-edge computation for univariate histograms.
-
-    This is the single source of truth for converting the high-level
-    ``bins`` / ``binwidth`` / ``binrange`` / ``discrete`` parameters into an
-    array of bin edges.  Both :class:`Histogram` and
-    :class:`~seaborn._stats.counting.Hist` delegate to this function so
-    that edge-case handling (round-off, single-observation, inf/NaN) is
-    consistent across the legacy and objects layers.
-
-    Parameters
-    ----------
-    x : array-like or Series
-        Data values.
-    weights : array-like or None
-        Sample weights.
-    bins : str, int, or array-like
-        Bin specification forwarded to :func:`numpy.histogram_bin_edges`.
-    binwidth : float or None
-        Desired bin width; overrides *bins* but can be combined with
-        *binrange*.
-    binrange : tuple(float, float) or None
-        ``(min, max)`` for bin edges.
-    discrete : bool
-        If True, produce unit-width bins centred on integers.
-
-    Returns
-    -------
-    np.ndarray
-        1-D array of bin edges with shape ``(n_bins + 1,)``.
-    """
-    x_arr, valid_mask = _clean_data(x)
-    valid = x_arr[valid_mask]
-
-    if len(valid) == 0:
-        if binrange is not None:
-            start, stop = float(binrange[0]), float(binrange[1])
-        else:
-            return np.array([0.0, 1.0])
-    elif binrange is None:
-        start, stop = float(valid.min()), float(valid.max())
-    else:
-        start, stop = float(binrange[0]), float(binrange[1])
-
-    if discrete:
-        bin_edges = np.arange(start - .5, stop + 1.5)
-    elif binwidth is not None:
-        step = binwidth
-        bin_edges = np.arange(start, stop + step, step)
-        if bin_edges.max() < stop or len(bin_edges) < 2:
-            bin_edges = np.append(bin_edges, bin_edges.max() + step)
-    else:
-        w = np.asarray(weights, dtype=float) if weights is not None else None
-        if w is not None:
-            w = w[valid_mask] if len(w) == len(x_arr) else w
-        bin_edges = np.histogram_bin_edges(valid, bins, binrange, w)
-
-    return bin_edges
-
-
-def define_bin_edges_bivariate(x1, x2, weights, bins, binwidth, binrange, discrete):
-    """Unified bin-edge computation for bivariate histograms.
-
-    Parameters
-    ----------
-    x1, x2 : array-like or Series
-        Data values for the two axes.
-    weights : array-like or None
-        Sample weights.
-    bins : str, int, array-like, or pair of such values
-        Bin specification (possibly per-axis).
-    binwidth : float or pair of floats or None
-        Desired bin width (possibly per-axis).
-    binrange : pair of floats or pair of pairs or None
-        Bin range (possibly per-axis).
-    discrete : bool or pair of bools
-        Discrete flag (possibly per-axis).
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        ``(x_edges, y_edges)``, each a 1-D array of bin edges.
-    """
-    edges_list = []
-    for i, x in enumerate([x1, x2]):
-        b = bins
-        if not b or isinstance(b, (str, Number, np.integer)):
-            pass
-        elif isinstance(b[i], str):
-            b = b[i]
-        elif len(b) == 2:
-            b = b[i]
-
-        bw = binwidth
-        if bw is None:
-            pass
-        elif not isinstance(bw, Number):
-            bw = bw[i]
-
-        br = binrange
-        if br is None:
-            pass
-        elif not isinstance(br[0], Number):
-            br = br[i]
-
-        d = discrete
-        if not isinstance(d, bool):
-            d = d[i]
-
-        edges_list.append(define_bin_edges(x, weights, b, bw, br, d))
-
-    return tuple(edges_list)
-
-
-def bin_edges_to_kws(bin_edges, bins):
-    """Convert bin edges to ``numpy.histogram`` keyword arguments.
-
-    Parameters
-    ----------
-    bin_edges : np.ndarray
-        1-D array of bin edges.
-    bins : str, int, or array-like
-        Original *bins* parameter (used to choose output format).
-
-    Returns
-    -------
-    dict
-        ``{"bins": int, "range": (float, float)}`` or ``{"bins": ndarray}``.
-    """
-    if isinstance(bins, (str, int, np.integer)):
-        n_bins = len(bin_edges) - 1
-        bin_range = float(bin_edges.min()), float(bin_edges.max())
-        return dict(bins=n_bins, range=bin_range)
-    else:
-        return dict(bins=bin_edges)
-
-
-def normalize_hist_array(hist, edges, stat, cumulative, is_bivariate=False):
-    """Apply normalization and cumulative transforms to a raw histogram.
-
-    This is the single source of truth for the stat→normalization mapping
-    used by both :class:`Histogram` and
-    :class:`~seaborn._stats.counting.Hist`.
-
-    Parameters
-    ----------
-    hist : np.ndarray
-        Raw histogram counts (or density values when *stat* is ``"density"``).
-    edges : np.ndarray or tuple[np.ndarray, np.ndarray]
-        Bin edges.
-    stat : str
-        One of ``"count"``, ``"frequency"``, ``"density"``,
-        ``"probability"``, ``"proportion"``, ``"percent"``.
-    cumulative : bool
-        Whether to apply cumulative summation.
-    is_bivariate : bool
-        Whether the histogram is bivariate.
-
-    Returns
-    -------
-    np.ndarray
-        Normalized (and possibly cumulated) histogram values.
-    """
-    if stat == "density":
-        if is_bivariate:
-            area = np.outer(np.diff(edges[0]), np.diff(edges[1]))
-            total = (hist * area).sum()
-            hist = hist.astype(float) / total if total > 0 else hist.astype(float)
-        else:
-            width = np.diff(edges)
-            total = (hist * width).sum()
-            hist = hist.astype(float) / total if total > 0 else hist.astype(float)
-    elif stat == "probability" or stat == "proportion":
-        total = hist.sum()
-        hist = hist.astype(float) / total if total > 0 else hist.astype(float)
-    elif stat == "percent":
-        total = hist.sum()
-        hist = hist.astype(float) / total * 100 if total > 0 else hist.astype(float)
-    elif stat == "frequency":
-        if is_bivariate:
-            area = np.outer(np.diff(edges[0]), np.diff(edges[1]))
-            hist = hist.astype(float) / area
-        else:
-            width = np.diff(edges)
-            hist = hist.astype(float) / width
-
-    if cumulative:
-        if stat in ["density", "frequency"]:
-            if is_bivariate:
-                area = np.outer(np.diff(edges[0]), np.diff(edges[1]))
-                hist = (hist * area).cumsum(axis=0).cumsum(axis=1)
-            else:
-                width = np.diff(edges)
-                hist = (hist * width).cumsum()
-        else:
-            if is_bivariate:
-                hist = hist.cumsum(axis=0).cumsum(axis=1)
-            else:
-                hist = hist.cumsum()
-
-    return hist
-
-
-def compute_valid_stats(x, weights=None):
-    """Compute valid count, weight sum, and empty reason for data.
-
-    Parameters
-    ----------
-    x : array-like, Series, or tuple of two array-likes
-        Raw data.  For bivariate data pass ``(x1, x2)``.
-    weights : array-like or None
-        Sample weights.
-
-    Returns
-    -------
-    count : int
-        Number of valid samples.
-    weight_sum : float
-        Sum of weights for valid samples.
-    empty_reason : str or None
-        ``"no_data"``, ``"all_nan"``, ``"zero_variance"``, or ``None``.
-    """
-    is_bivariate = (
-        isinstance(x, (tuple, list)) and len(x) == 2
-        and not isinstance(x[0], (int, float))
-    )
-
-    if is_bivariate:
-        x1_arr = np.asarray(x[0], dtype=float)
-        x2_arr = np.asarray(x[1], dtype=float)
-        n_samples = len(x1_arr)
-        valid_mask = np.isfinite(x1_arr) & np.isfinite(x2_arr)
-    else:
-        x_arr = np.asarray(x, dtype=float)
-        n_samples = len(x_arr)
-        valid_mask = np.isfinite(x_arr)
-
-    if weights is not None:
-        weights_arr = np.asarray(weights, dtype=float)
-        if len(weights_arr) == len(valid_mask):
-            valid_mask = valid_mask & np.isfinite(weights_arr)
-        weight_sum = float(weights_arr[valid_mask].sum()) if valid_mask.any() else 0.0
-    else:
-        weight_sum = float(valid_mask.sum())
-
-    count = int(valid_mask.sum())
-
-    empty_reason = None
-    if count == 0:
-        if n_samples == 0:
-            empty_reason = "no_data"
-        else:
-            empty_reason = "all_nan"
-    else:
-        if is_bivariate:
-            v1 = float(np.nan_to_num(x1_arr[valid_mask].var()))
-            v2 = float(np.nan_to_num(x2_arr[valid_mask].var()))
-            if v1 == 0 and v2 == 0:
-                empty_reason = "zero_variance"
-        else:
-            if float(np.nan_to_num(x_arr[valid_mask].var())) == 0:
-                empty_reason = "zero_variance"
-
-    return count, weight_sum, empty_reason
-
-
-def compute_normalization_denominator(hist, bin_edges, stat, is_bivariate=False):
-    """Compute the normalization denominator for a given stat.
-
-    Parameters
-    ----------
-    hist : np.ndarray
-        Histogram values (after normalization if applicable).
-    bin_edges : np.ndarray or tuple[np.ndarray, np.ndarray]
-        Bin edges.
-    stat : str
-        Normalization statistic.
-    is_bivariate : bool
-        Whether the histogram is bivariate.
-
-    Returns
-    -------
-    float or None
-        Normalization denominator, or ``None`` for ``stat="count"``.
-    """
-    if stat == "count":
-        return None
-    elif stat in ("probability", "proportion"):
-        return float(hist.sum()) if hist.size > 0 else 0.0
-    elif stat == "percent":
-        return float(hist.sum()) / 100.0 if hist.size > 0 else 0.0
-    elif stat == "density":
-        if is_bivariate:
-            area = np.outer(np.diff(bin_edges[0]), np.diff(bin_edges[1]))
-            return float((hist * area).sum()) if hist.size > 0 else 0.0
-        else:
-            edges_arr = np.asarray(bin_edges)
-            return float((hist * np.diff(edges_arr)).sum()) if hist.size > 0 else 0.0
-    elif stat == "frequency":
-        if is_bivariate:
-            area = np.outer(np.diff(bin_edges[0]), np.diff(bin_edges[1]))
-            return float(area.mean()) if area.size > 0 else 0.0
-        else:
-            edges_arr = np.asarray(bin_edges)
-            return float(np.mean(np.diff(edges_arr))) if len(edges_arr) > 1 else 0.0
-    else:
-        return None
-
-
-def make_group_key(groupby_vars, key):
-    """Create a canonical group key from grouping variable names and a key.
-
-    This ensures that :class:`Histogram`, objects-layer :class:`Hist`,
-    and the helpers in :mod:`seaborn.distributions` all produce the same
-    key representation for equivalent groups.
-
-    Parameters
-    ----------
-    groupby_vars : str or list of str
-        Name(s) of the grouping variable(s).
-    key : scalar or tuple
-        Key value(s) from a ``groupby`` iteration.
-
-    Returns
-    -------
-    tuple
-        Tuple of ``(variable_name, value)`` pairs, e.g.
-        ``(("hue", "A"), ("col", 1))``.
-    """
-    if isinstance(groupby_vars, (list, tuple)):
-        if not isinstance(key, tuple):
-            key = (key,)
-        return tuple(zip(groupby_vars, key))
-    else:
-        if isinstance(key, tuple):
-            return tuple(zip([groupby_vars], key))
-        return ((groupby_vars, key),)
-
-
-def compute_hist_group_univariate(
-    x, weights, bin_kws, stat, cumulative, group_key=(),
-):
-    """Compute a univariate histogram for one group and return HistGroupResult.
-
-    This is the unified entry point that combines histogram computation,
-    normalization, and diagnostics into a single pass so that downstream
-    consumers never need to re-derive any intermediate values.
-
-    Parameters
-    ----------
-    x : array-like or Series
-        Data values.
-    weights : array-like or None
-        Sample weights.
-    bin_kws : dict
-        Keyword arguments for :func:`numpy.histogram`.
-    stat : str
-        Normalization statistic.
-    cumulative : bool
-        Whether to cumulate.
-    group_key : tuple
-        Canonical group key.
-
-    Returns
-    -------
-    HistGroupResult
-        Complete intermediate result for this group.
-    """
-    hist, edges = np.histogram(x, **bin_kws, weights=weights, density=False)
-    hist = normalize_hist_array(hist, edges, stat, cumulative, is_bivariate=False)
-
-    count, weight_sum, empty_reason = compute_valid_stats(x, weights)
-    norm_denom = compute_normalization_denominator(hist, edges, stat, is_bivariate=False)
-
-    return HistGroupResult(
-        hist=hist,
-        bin_edges=edges,
-        group_key=group_key,
-        count=count,
-        weight_sum=weight_sum,
-        empty_reason=empty_reason,
-        normalization_denominator=norm_denom,
-    )
-
-
-def compute_hist_group_bivariate(
-    x1, x2, weights, bin_kws, stat, cumulative, group_key=(),
-):
-    """Compute a bivariate histogram for one group and return HistGroupResult.
-
-    Parameters
-    ----------
-    x1, x2 : array-like or Series
-        Data values for the two axes.
-    weights : array-like or None
-        Sample weights.
-    bin_kws : dict
-        Keyword arguments for :func:`numpy.histogram2d`.
-    stat : str
-        Normalization statistic.
-    cumulative : bool
-        Whether to cumulate.
-    group_key : tuple
-        Canonical group key.
-
-    Returns
-    -------
-    HistGroupResult
-        Complete intermediate result for this group.
-    """
-    hist, *bin_edges = np.histogram2d(x1, x2, **bin_kws, weights=weights, density=False)
-    bin_edges = tuple(bin_edges)
-    hist = normalize_hist_array(hist, bin_edges, stat, cumulative, is_bivariate=True)
-
-    count, weight_sum, empty_reason = compute_valid_stats((x1, x2), weights)
-    norm_denom = compute_normalization_denominator(hist, bin_edges, stat, is_bivariate=True)
-
-    return HistGroupResult(
-        hist=hist,
-        bin_edges=bin_edges,
-        group_key=group_key,
-        count=count,
-        weight_sum=weight_sum,
-        empty_reason=empty_reason,
-        normalization_denominator=norm_denom,
-    )
-
 
 class KDE:
     """Univariate and bivariate kernel density estimator."""
@@ -1003,12 +497,25 @@ class Histogram:
         )
 
     def _define_bin_edges(self, x, weights, bins, binwidth, binrange, discrete):
-        """Inner function that takes bin parameters as arguments.
+        """Inner function that takes bin parameters as arguments."""
+        if binrange is None:
+            start, stop = x.min(), x.max()
+        else:
+            start, stop = binrange
 
-        Delegates to the shared :func:`define_bin_edges` for consistent
-        edge-case handling across all histogram code paths.
-        """
-        return define_bin_edges(x, weights, bins, binwidth, binrange, discrete)
+        if discrete:
+            bin_edges = np.arange(start - .5, stop + 1.5)
+        elif binwidth is not None:
+            step = binwidth
+            bin_edges = np.arange(start, stop + step, step)
+            # Handle roundoff error (maybe there is a less clumsy way?)
+            if bin_edges.max() < stop or len(bin_edges) < 2:
+                bin_edges = np.append(bin_edges, bin_edges.max() + step)
+        else:
+            bin_edges = np.histogram_bin_edges(
+                x, bins, binrange, weights,
+            )
+        return bin_edges
 
     def define_bin_params(self, x1, x2=None, weights=None, cache=True):
         """Given data, return numpy.histogram parameters to define bins."""
@@ -1017,15 +524,53 @@ class Histogram:
             bin_edges = self._define_bin_edges(
                 x1, weights, self.bins, self.binwidth, self.binrange, self.discrete,
             )
-            bin_kws = bin_edges_to_kws(bin_edges, self.bins)
+
+            if isinstance(self.bins, (str, Number)):
+                n_bins = len(bin_edges) - 1
+                bin_range = bin_edges.min(), bin_edges.max()
+                bin_kws = dict(bins=n_bins, range=bin_range)
+            else:
+                bin_kws = dict(bins=bin_edges)
 
         else:
 
-            bin_edges = define_bin_edges_bivariate(
-                x1, x2, weights,
-                self.bins, self.binwidth, self.binrange, self.discrete,
-            )
-            bin_kws = dict(bins=bin_edges)
+            bin_edges = []
+            for i, x in enumerate([x1, x2]):
+
+                # Resolve out whether bin parameters are shared
+                # or specific to each variable
+
+                bins = self.bins
+                if not bins or isinstance(bins, (str, Number)):
+                    pass
+                elif isinstance(bins[i], str):
+                    bins = bins[i]
+                elif len(bins) == 2:
+                    bins = bins[i]
+
+                binwidth = self.binwidth
+                if binwidth is None:
+                    pass
+                elif not isinstance(binwidth, Number):
+                    binwidth = binwidth[i]
+
+                binrange = self.binrange
+                if binrange is None:
+                    pass
+                elif not isinstance(binrange[0], Number):
+                    binrange = binrange[i]
+
+                discrete = self.discrete
+                if not isinstance(discrete, bool):
+                    discrete = discrete[i]
+
+                # Define the bins for this variable
+
+                bin_edges.append(self._define_bin_edges(
+                    x, weights, bins, binwidth, binrange, discrete,
+                ))
+
+            bin_kws = dict(bins=tuple(bin_edges))
 
         if cache:
             self.bin_kws = bin_kws
@@ -1037,61 +582,89 @@ class Histogram:
         """Collected bin diagnostics (read-only dict view into collector)."""
         return self._diagnostics_collector.diagnostics
 
-    def compute_group(self, x1, x2=None, weights=None, group_key=()):
-        """Compute histogram for one group and return the full result object.
+    def _collect_diagnostics(
+        self, x, weights, bin_edges, hist, area=None, group_key=()
+    ):
+        """Collect diagnostic information about the binning for this group.
 
-        This is the single internal computation entry point used by the
-        public :meth:`__call__`, the objects-layer :class:`Hist`, and the
-        plotter-level :func:`histplot`/``displot``.  All three layers
-        consume the same :class:`HistGroupResult` structure so bin edges,
-        effective sample counts, weights, normalization denominators, and
-        empty-group reasons are guaranteed to be identical.
-
-        Parameters
-        ----------
-        x1 : array-like
-            First variable values.
-        x2 : array-like, optional
-            Second variable values for bivariate histograms.
-        weights : array-like, optional
-            Observation weights.
-        group_key : tuple
-            Identifier for this group (e.g. ``(("hue", "A"),)``).
-
-        Returns
-        -------
-        HistGroupResult
-            The complete histogram result including bin edges, counts,
-            diagnostics info, and normalized hist values.
+        Delegates to the shared BinDiagnosticsCollector for unified logic.
         """
+        return self._diagnostics_collector.add_group(
+            group_key=group_key,
+            x=x,
+            bin_edges=bin_edges,
+            hist=hist,
+            weights=weights,
+        )
+
+    def _eval_bivariate(self, x1, x2, weights, group_key=()):
+        """Inner function for histogram of two variables."""
         bin_kws = self.bin_kws
-        if x2 is None:
-            if bin_kws is None:
-                bin_kws = self.define_bin_params(x1, weights=weights, cache=False)
-            return compute_hist_group_univariate(
-                x1, weights, bin_kws, self.stat, self.cumulative, group_key,
-            )
-        else:
-            if bin_kws is None:
-                bin_kws = self.define_bin_params(x1, x2, cache=False)
-            return compute_hist_group_bivariate(
-                x1, x2, weights, bin_kws, self.stat, self.cumulative, group_key,
-            )
+        if bin_kws is None:
+            bin_kws = self.define_bin_params(x1, x2, cache=False)
+
+        density = self.stat == "density"
+
+        hist, *bin_edges = np.histogram2d(
+            x1, x2, **bin_kws, weights=weights, density=density
+        )
+
+        area = np.outer(
+            np.diff(bin_edges[0]),
+            np.diff(bin_edges[1]),
+        )
+
+        if self.stat == "probability" or self.stat == "proportion":
+            hist = hist.astype(float) / hist.sum()
+        elif self.stat == "percent":
+            hist = hist.astype(float) / hist.sum() * 100
+        elif self.stat == "frequency":
+            hist = hist.astype(float) / area
+
+        if self.cumulative:
+            if self.stat in ["density", "frequency"]:
+                hist = (hist * area).cumsum(axis=0).cumsum(axis=1)
+            else:
+                hist = hist.cumsum(axis=0).cumsum(axis=1)
+
+        self._collect_diagnostics(
+            (x1, x2), weights, bin_edges, hist, area, group_key
+        )
+        return hist, bin_edges
+
+    def _eval_univariate(self, x, weights, group_key=()):
+        """Inner function for histogram of one variable."""
+        bin_kws = self.bin_kws
+        if bin_kws is None:
+            bin_kws = self.define_bin_params(x, weights=weights, cache=False)
+
+        density = self.stat == "density"
+        hist, bin_edges = np.histogram(
+            x, **bin_kws, weights=weights, density=density,
+        )
+
+        if self.stat == "probability" or self.stat == "proportion":
+            hist = hist.astype(float) / hist.sum()
+        elif self.stat == "percent":
+            hist = hist.astype(float) / hist.sum() * 100
+        elif self.stat == "frequency":
+            hist = hist.astype(float) / np.diff(bin_edges)
+
+        if self.cumulative:
+            if self.stat in ["density", "frequency"]:
+                hist = (hist * np.diff(bin_edges)).cumsum()
+            else:
+                hist = hist.cumsum()
+
+        self._collect_diagnostics(x, weights, bin_edges, hist, None, group_key)
+        return hist, bin_edges
 
     def __call__(self, x1, x2=None, weights=None, group_key=()):
-        """Count the occurrences in each bin, maybe normalize.
-
-        Returns
-        -------
-        hist : ndarray
-            The histogram counts/values (1D for univariate, 2D for bivariate).
-        bin_edges : ndarray or tuple of ndarray
-            The bin edges (single array for univariate, ``(x_edges, y_edges)``
-            for bivariate).
-        """
-        result = self.compute_group(x1, x2, weights, group_key)
-        self._diagnostics_collector.add_group_from_result(result)
-        return result.hist, result.bin_edges
+        """Count the occurrences in each bin, maybe normalize."""
+        if x2 is None:
+            return self._eval_univariate(x1, weights, group_key)
+        else:
+            return self._eval_bivariate(x1, x2, weights, group_key)
 
 
 class ECDF:
