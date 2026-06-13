@@ -872,15 +872,10 @@ def theme_profile(context="notebook", style="darkgrid", palette="deep",
     """Build a validated :class:`_ThemeProfile` without applying it.
 
     This is the canonical parsing entry point.  Figure-level functions
-    that expose theme-related keyword arguments should collect them, pass
-    them through ``theme_profile``, and wrap their plotting body in a
-    :class:`ThemeContext`::
-
-        def some_figure_plot(..., theme=None, **theme_kws):
-            if theme is None:
-                theme = theme_profile(**theme_kws)
-            with ThemeContext(theme):
-                # ... plotting code ...
+    that expose a ``theme`` keyword argument should accept either a
+    pre-built profile, a dict suitable for :meth:`_ThemeProfile.from_dict`,
+    or ``None`` (meaning "use the current global rcParams as-is") and pass
+    that value through :func:`_apply_theme_context`.
 
     Parameters are identical to :func:`set_theme` and are documented there.
 
@@ -893,3 +888,32 @@ def theme_profile(context="notebook", style="darkgrid", palette="deep",
         context=context, style=style, palette=palette, font=font,
         font_scale=font_scale, color_codes=color_codes, rc=rc,
     )
+
+
+def _apply_theme_context(theme, func, *args, **kwargs):
+    """Single entry point that wraps a figure-level call in a theme context.
+
+    All figure-level functions should route their ``theme`` handling through
+    here so that the lifecycle (normalisation, context entry/exit,
+    exception-safety) lives in exactly one place and can never drift
+    between entry points.
+
+    Parameters
+    ----------
+    theme : _ThemeProfile or dict or None
+        The theme profile as supplied by the caller.  ``None`` is a no-op —
+        the function is executed in the current global rcParams environment
+        with no snapshotting / restoration.
+    func : callable
+        The *actual* plotting implementation (e.g. ``_relplot_impl``).
+    *args, **kwargs
+        Positional and keyword arguments forwarded verbatim to ``func``.
+
+    Returns
+    -------
+    The return value of ``func(*args, **kwargs)``.
+    """
+    if theme is None:
+        return func(*args, **kwargs)
+    with ThemeContext(theme):
+        return func(*args, **kwargs)

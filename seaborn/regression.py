@@ -17,7 +17,7 @@ except ImportError:
 from . import utils
 from . import algorithms as algo
 from .axisgrid import FacetGrid, _facet_docs
-from .rcmod import ThemeContext, theme_profile
+from .rcmod import _apply_theme_context
 
 
 __all__ = ["lmplot", "regplot", "residplot"]
@@ -589,44 +589,22 @@ def lmplot(
     robust=False, logx=False, x_partial=None, y_partial=None,
     truncate=True, x_jitter=None, y_jitter=None, scatter_kws=None,
     line_kws=None, facet_kws=None,
-    theme=None, theme_context=None, theme_style=None, theme_palette=None,
-    theme_font=None, theme_font_scale=None, theme_color_codes=None,
-    theme_rc=None,
+    theme=None,
 ):
-    if theme is None:
-        any_theme_arg_set = any(
-            arg is not None for arg in (
-                theme_context, theme_style, theme_palette,
-                theme_font, theme_font_scale, theme_color_codes, theme_rc,
-            )
-        )
-        if not any_theme_arg_set:
-            theme = None
-        else:
-            theme = theme_profile(
-                context=theme_context if theme_context is not None else "notebook",
-                style=theme_style if theme_style is not None else "darkgrid",
-                palette=theme_palette if theme_palette is not None else "deep",
-                font=theme_font if theme_font is not None else "sans-serif",
-                font_scale=theme_font_scale if theme_font_scale is not None else 1,
-                color_codes=theme_color_codes if theme_color_codes is not None else True,
-                rc=theme_rc,
-            )
-
-    with ThemeContext(theme):
-        return _lmplot_impl(
-            data=data, x=x, y=y, hue=hue, col=col, row=row,
-            palette=palette, col_wrap=col_wrap, height=height, aspect=aspect,
-            markers=markers, sharex=sharex, sharey=sharey, hue_order=hue_order,
-            col_order=col_order, row_order=row_order, legend=legend,
-            legend_out=legend_out, x_estimator=x_estimator, x_bins=x_bins,
-            x_ci=x_ci, scatter=scatter, fit_reg=fit_reg, ci=ci, n_boot=n_boot,
-            units=units, seed=seed, order=order, logistic=logistic,
-            lowess=lowess, robust=robust, logx=logx, x_partial=x_partial,
-            y_partial=y_partial, truncate=truncate, x_jitter=x_jitter,
-            y_jitter=y_jitter, scatter_kws=scatter_kws, line_kws=line_kws,
-            facet_kws=facet_kws,
-        )
+    return _apply_theme_context(
+        theme, _lmplot_impl,
+        data=data, x=x, y=y, hue=hue, col=col, row=row,
+        palette=palette, col_wrap=col_wrap, height=height, aspect=aspect,
+        markers=markers, sharex=sharex, sharey=sharey, hue_order=hue_order,
+        col_order=col_order, row_order=row_order, legend=legend,
+        legend_out=legend_out, x_estimator=x_estimator, x_bins=x_bins,
+        x_ci=x_ci, scatter=scatter, fit_reg=fit_reg, ci=ci, n_boot=n_boot,
+        units=units, seed=seed, order=order, logistic=logistic,
+        lowess=lowess, robust=robust, logx=logx, x_partial=x_partial,
+        y_partial=y_partial, truncate=truncate, x_jitter=x_jitter,
+        y_jitter=y_jitter, scatter_kws=scatter_kws, line_kws=line_kws,
+        facet_kws=facet_kws,
+    )
 
 
 def _lmplot_impl(

@@ -21,7 +21,7 @@ from ._compat import groupby_apply_include_groups
 from ._statistics import EstimateAggregator, WeightedAggregator
 from .axisgrid import FacetGrid, _facet_docs
 from ._docstrings import DocstringComponents, _core_docs
-from .rcmod import ThemeContext, theme_profile
+from .rcmod import _apply_theme_context
 
 
 __all__ = ["relplot", "scatterplot", "lineplot"]
@@ -706,42 +706,20 @@ def relplot(
     sizes=None, size_order=None, size_norm=None,
     markers=None, dashes=None, style_order=None,
     legend="auto", kind="scatter", height=5, aspect=1, facet_kws=None,
-    theme=None, theme_context=None, theme_style=None, theme_palette=None,
-    theme_font=None, theme_font_scale=None, theme_color_codes=None,
-    theme_rc=None,
+    theme=None,
     **kwargs
 ):
-    if theme is None:
-        any_theme_arg_set = any(
-            arg is not None for arg in (
-                theme_context, theme_style, theme_palette,
-                theme_font, theme_font_scale, theme_color_codes, theme_rc,
-            )
-        )
-        if not any_theme_arg_set:
-            theme = None
-        else:
-            theme = theme_profile(
-                context=theme_context if theme_context is not None else "notebook",
-                style=theme_style if theme_style is not None else "darkgrid",
-                palette=theme_palette if theme_palette is not None else "deep",
-                font=theme_font if theme_font is not None else "sans-serif",
-                font_scale=theme_font_scale if theme_font_scale is not None else 1,
-                color_codes=theme_color_codes if theme_color_codes is not None else True,
-                rc=theme_rc,
-            )
-
-    with ThemeContext(theme):
-        return _relplot_impl(
-            data=data, x=x, y=y, hue=hue, size=size, style=style,
-            units=units, weights=weights, row=row, col=col,
-            col_wrap=col_wrap, row_order=row_order, col_order=col_order,
-            palette=palette, hue_order=hue_order, hue_norm=hue_norm,
-            sizes=sizes, size_order=size_order, size_norm=size_norm,
-            markers=markers, dashes=dashes, style_order=style_order,
-            legend=legend, kind=kind, height=height, aspect=aspect,
-            facet_kws=facet_kws, **kwargs,
-        )
+    return _apply_theme_context(
+        theme, _relplot_impl,
+        data=data, x=x, y=y, hue=hue, size=size, style=style,
+        units=units, weights=weights, row=row, col=col,
+        col_wrap=col_wrap, row_order=row_order, col_order=col_order,
+        palette=palette, hue_order=hue_order, hue_norm=hue_norm,
+        sizes=sizes, size_order=size_order, size_norm=size_norm,
+        markers=markers, dashes=dashes, style_order=style_order,
+        legend=legend, kind=kind, height=height, aspect=aspect,
+        facet_kws=facet_kws, **kwargs,
+    )
 
 
 def _relplot_impl(

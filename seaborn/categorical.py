@@ -28,7 +28,7 @@ from seaborn.utils import (
     _scatter_legend_artist,
     _version_predates,
 )
-from seaborn.rcmod import ThemeContext, theme_profile
+from seaborn.rcmod import _apply_theme_context
 from seaborn._compat import groupby_apply_include_groups
 from seaborn._statistics import (
     EstimateAggregator,
@@ -2767,44 +2767,22 @@ def catplot(
     formatter=None, orient=None, color=None, palette=None, hue_norm=None,
     legend="auto", legend_out=True, sharex=True, sharey=True,
     margin_titles=False, facet_kws=None, ci=deprecated,
-    theme=None, theme_context=None, theme_style=None, theme_palette=None,
-    theme_font=None, theme_font_scale=None, theme_color_codes=None,
-    theme_rc=None,
+    theme=None,
     **kwargs
 ):
-    if theme is None:
-        any_theme_arg_set = any(
-            arg is not None for arg in (
-                theme_context, theme_style, theme_palette,
-                theme_font, theme_font_scale, theme_color_codes, theme_rc,
-            )
-        )
-        if not any_theme_arg_set:
-            theme = None
-        else:
-            theme = theme_profile(
-                context=theme_context if theme_context is not None else "notebook",
-                style=theme_style if theme_style is not None else "darkgrid",
-                palette=theme_palette if theme_palette is not None else "deep",
-                font=theme_font if theme_font is not None else "sans-serif",
-                font_scale=theme_font_scale if theme_font_scale is not None else 1,
-                color_codes=theme_color_codes if theme_color_codes is not None else True,
-                rc=theme_rc,
-            )
-
-    with ThemeContext(theme):
-        return _catplot_impl(
-            data=data, x=x, y=y, hue=hue, row=row, col=col, kind=kind,
-            estimator=estimator, errorbar=errorbar, n_boot=n_boot, seed=seed,
-            units=units, weights=weights, order=order, hue_order=hue_order,
-            row_order=row_order, col_order=col_order, col_wrap=col_wrap,
-            height=height, aspect=aspect, log_scale=log_scale,
-            native_scale=native_scale, formatter=formatter, orient=orient,
-            color=color, palette=palette, hue_norm=hue_norm, legend=legend,
-            legend_out=legend_out, sharex=sharex, sharey=sharey,
-            margin_titles=margin_titles, facet_kws=facet_kws, ci=ci,
-            **kwargs,
-        )
+    return _apply_theme_context(
+        theme, _catplot_impl,
+        data=data, x=x, y=y, hue=hue, row=row, col=col, kind=kind,
+        estimator=estimator, errorbar=errorbar, n_boot=n_boot, seed=seed,
+        units=units, weights=weights, order=order, hue_order=hue_order,
+        row_order=row_order, col_order=col_order, col_wrap=col_wrap,
+        height=height, aspect=aspect, log_scale=log_scale,
+        native_scale=native_scale, formatter=formatter, orient=orient,
+        color=color, palette=palette, hue_norm=hue_norm, legend=legend,
+        legend_out=legend_out, sharex=sharex, sharey=sharey,
+        margin_titles=margin_titles, facet_kws=facet_kws, ci=ci,
+        **kwargs,
+    )
 
 
 def _catplot_impl(

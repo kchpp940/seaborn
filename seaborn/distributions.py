@@ -34,7 +34,7 @@ from .utils import (
     _default_color,
 )
 from .palettes import color_palette
-from .rcmod import ThemeContext, theme_profile
+from .rcmod import _apply_theme_context
 from .external import husl
 from .external.kde import gaussian_kde
 from ._docstrings import (
@@ -2159,41 +2159,19 @@ def displot(
     col_wrap=None, row_order=None, col_order=None,
     height=5, aspect=1, facet_kws=None,
     # Theme profile
-    theme=None, theme_context=None, theme_style=None, theme_palette=None,
-    theme_font=None, theme_font_scale=None, theme_color_codes=None,
-    theme_rc=None,
+    theme=None,
     **kwargs,
 ):
-    if theme is None:
-        any_theme_arg_set = any(
-            arg is not None for arg in (
-                theme_context, theme_style, theme_palette,
-                theme_font, theme_font_scale, theme_color_codes, theme_rc,
-            )
-        )
-        if not any_theme_arg_set:
-            theme = None
-        else:
-            theme = theme_profile(
-                context=theme_context if theme_context is not None else "notebook",
-                style=theme_style if theme_style is not None else "darkgrid",
-                palette=theme_palette if theme_palette is not None else "deep",
-                font=theme_font if theme_font is not None else "sans-serif",
-                font_scale=theme_font_scale if theme_font_scale is not None else 1,
-                color_codes=theme_color_codes if theme_color_codes is not None else True,
-                rc=theme_rc,
-            )
-
-    with ThemeContext(theme):
-        return _displot_impl(
-            data=data, x=x, y=y, hue=hue, row=row, col=col,
-            weights=weights, kind=kind, rug=rug, rug_kws=rug_kws,
-            log_scale=log_scale, legend=legend, palette=palette,
-            hue_order=hue_order, hue_norm=hue_norm, color=color,
-            col_wrap=col_wrap, row_order=row_order, col_order=col_order,
-            height=height, aspect=aspect, facet_kws=facet_kws,
-            **kwargs,
-        )
+    return _apply_theme_context(
+        theme, _displot_impl,
+        data=data, x=x, y=y, hue=hue, row=row, col=col,
+        weights=weights, kind=kind, rug=rug, rug_kws=rug_kws,
+        log_scale=log_scale, legend=legend, palette=palette,
+        hue_order=hue_order, hue_norm=hue_norm, color=color,
+        col_wrap=col_wrap, row_order=row_order, col_order=col_order,
+        height=height, aspect=aspect, facet_kws=facet_kws,
+        **kwargs,
+    )
 
 
 def _displot_impl(
