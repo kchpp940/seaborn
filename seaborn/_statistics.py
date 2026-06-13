@@ -1031,35 +1031,50 @@ class Histogram:
         return self._diagnostics_collector.diagnostics
 
     def _eval_bivariate(self, x1, x2, weights, group_key=()):
-        """Inner function for histogram of two variables."""
+        """Inner function for histogram of two variables.
+
+        Returns a :class:`HistGroupResult` containing the full histogram
+        result, including bin edges, counts, and diagnostics info.
+        """
         bin_kws = self.bin_kws
         if bin_kws is None:
             bin_kws = self.define_bin_params(x1, x2, cache=False)
 
-        result = compute_hist_group_bivariate(
+        return compute_hist_group_bivariate(
             x1, x2, weights, bin_kws, self.stat, self.cumulative, group_key,
         )
-        self._diagnostics_collector.add_group_from_result(result)
-        return result.hist, result.bin_edges
 
     def _eval_univariate(self, x, weights, group_key=()):
-        """Inner function for histogram of one variable."""
+        """Inner function for histogram of one variable.
+
+        Returns a :class:`HistGroupResult` containing the full histogram
+        result, including bin edges, counts, and diagnostics info.
+        """
         bin_kws = self.bin_kws
         if bin_kws is None:
             bin_kws = self.define_bin_params(x, weights=weights, cache=False)
 
-        result = compute_hist_group_univariate(
+        return compute_hist_group_univariate(
             x, weights, bin_kws, self.stat, self.cumulative, group_key,
         )
-        self._diagnostics_collector.add_group_from_result(result)
-        return result.hist, result.bin_edges
 
     def __call__(self, x1, x2=None, weights=None, group_key=()):
-        """Count the occurrences in each bin, maybe normalize."""
+        """Count the occurrences in each bin, maybe normalize.
+
+        Returns
+        -------
+        hist : ndarray
+            The histogram counts/values (1D for univariate, 2D for bivariate).
+        bin_edges : ndarray or tuple of ndarray
+            The bin edges (single array for univariate, ``(x_edges, y_edges)``
+            for bivariate).
+        """
         if x2 is None:
-            return self._eval_univariate(x1, weights, group_key)
+            result = self._eval_univariate(x1, weights, group_key)
         else:
-            return self._eval_bivariate(x1, x2, weights, group_key)
+            result = self._eval_bivariate(x1, x2, weights, group_key)
+        self._diagnostics_collector.add_group_from_result(result)
+        return result.hist, result.bin_edges
 
 
 class ECDF:
