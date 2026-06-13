@@ -20,7 +20,7 @@ from ._base import VectorPlotter
 # but still use the older Histogram for bivariate computation.
 from ._statistics import (
     ECDF, Histogram, KDE, BinDiagnostics, HistGroupResult,
-    compute_normalization_denominator,
+    normalize_hist_array, compute_normalization_denominator,
 )
 from ._stats.counting import Hist
 
@@ -479,17 +479,31 @@ class _DistributionPlotter(VectorPlotter):
 
             eval_df = estimator._eval(sub_data, orient, bin_kws)
             result = eval_df["__hist_result__"].iloc[0]
-            res = estimator._normalize(eval_df.drop(columns=["__hist_result__"]))
 
-            heights = res[estimator.stat].to_numpy()
-            widths = res["space"].to_numpy()
-            edges = res[orient].to_numpy() - widths / 2
+            # --- Apply per-group normalization using the shared utility.
+            # *result* from _eval carries stat=count raw histograms so that
+            # common_norm / cross-group semantics can be applied correctly
+            # at the plotter level.  Re-run normalization here (with bin
+            # edges taken from *result*) so the computed heights and
+            # normalization denominator are produced by the exact same
+            # shared function as the legacy Histogram and objects Hist
+            # layers.  No local arithmetic, no edge reconstruction.
+            heights = normalize_hist_array(
+                result.hist.astype(float).copy(),
+                result.bin_edges,
+                estimator.stat,
+                estimator.cumulative,
+            )
+            widths = np.diff(result.bin_edges)
+            edges_left = result.bin_edges[:-1]
+            norm_denom = compute_normalization_denominator(
+                heights, result.bin_edges, estimator.stat,
+            )
 
-            # --- Build the HistGroupResult with the normalized heights
-            # (before common_norm scaling) so diagnostics reflect the intrinsic
-            # statistic value, not the plot-level cross-group rescaling.
-            # This matches the objects API where common_norm is handled by
-            # normalization step itself.
+            # --- Build keyed_result from result + the normalized heights.
+            # Diagnostics reflect the intrinsic (per-group, pre-common_norm)
+            # statistic value; cross-group rescaling happens later on the
+            # plotting Series and is intentionally not reflected here.
             keyed_result = HistGroupResult(
                 hist=heights.copy(),
                 bin_edges=result.bin_edges,
@@ -497,9 +511,7 @@ class _DistributionPlotter(VectorPlotter):
                 count=result.count,
                 weight_sum=result.weight_sum,
                 empty_reason=result.empty_reason,
-                normalization_denominator=compute_normalization_denominator(
-                    heights, result.bin_edges, estimator.stat,
-                ),
+                normalization_denominator=norm_denom,
             )
             hist_results.append(keyed_result)
 
@@ -515,14 +527,14 @@ class _DistributionPlotter(VectorPlotter):
             # Convert edges back to original units for plotting
             ax = self._get_axes(sub_vars)
             _, inv = _get_transform_functions(ax, self.data_variable)
-            widths = inv(edges + widths) - inv(edges)
-            edges = inv(edges)
+            widths = inv(edges_left + widths) - inv(edges_left)
+            edges_left = inv(edges_left)
 
             # Pack the histogram data and metadata together
-            edges = edges + (1 - shrink) / 2 * widths
+            edges_left = edges_left + (1 - shrink) / 2 * widths
             widths *= shrink
             index = pd.MultiIndex.from_arrays([
-                pd.Index(edges, name="edges"),
+                pd.Index(edges_left, name="edges"),
                 pd.Index(widths, name="widths"),
             ])
             hist = pd.Series(heights, index=index, name="heights")

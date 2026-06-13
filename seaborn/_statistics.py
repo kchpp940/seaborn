@@ -521,7 +521,16 @@ def normalize_hist_array(hist, edges, stat, cumulative, is_bivariate=False):
     np.ndarray
         Normalized (and possibly cumulated) histogram values.
     """
-    if stat == "probability" or stat == "proportion":
+    if stat == "density":
+        if is_bivariate:
+            area = np.outer(np.diff(edges[0]), np.diff(edges[1]))
+            total = (hist * area).sum()
+            hist = hist.astype(float) / total if total > 0 else hist.astype(float)
+        else:
+            width = np.diff(edges)
+            total = (hist * width).sum()
+            hist = hist.astype(float) / total if total > 0 else hist.astype(float)
+    elif stat == "probability" or stat == "proportion":
         total = hist.sum()
         hist = hist.astype(float) / total if total > 0 else hist.astype(float)
     elif stat == "percent":
@@ -717,8 +726,7 @@ def compute_hist_group_univariate(
     HistGroupResult
         Complete intermediate result for this group.
     """
-    density = stat == "density"
-    hist, edges = np.histogram(x, **bin_kws, weights=weights, density=density)
+    hist, edges = np.histogram(x, **bin_kws, weights=weights, density=False)
     hist = normalize_hist_array(hist, edges, stat, cumulative, is_bivariate=False)
 
     count, weight_sum, empty_reason = compute_valid_stats(x, weights)
@@ -760,8 +768,7 @@ def compute_hist_group_bivariate(
     HistGroupResult
         Complete intermediate result for this group.
     """
-    density = stat == "density"
-    hist, *bin_edges = np.histogram2d(x1, x2, **bin_kws, weights=weights, density=density)
+    hist, *bin_edges = np.histogram2d(x1, x2, **bin_kws, weights=weights, density=False)
     bin_edges = tuple(bin_edges)
     hist = normalize_hist_array(hist, bin_edges, stat, cumulative, is_bivariate=True)
 

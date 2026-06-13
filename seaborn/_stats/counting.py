@@ -15,7 +15,8 @@ from seaborn._statistics import (
     HistGroupResult,
     define_bin_edges,
     bin_edges_to_kws,
-    compute_valid_stats,
+    normalize_hist_array,
+    compute_hist_group_univariate,
     compute_normalization_denominator,
 )
 
@@ -172,49 +173,40 @@ class Hist(Stat):
     def _eval(self, data, orient, bin_kws):
         """Evaluate histogram for a single group.
 
-        Computes the raw histogram and returns it as a DataFrame with
-        columns for bin centers (``orient``), raw counts (``count``),
-        bin widths (``space``), and a ``__hist_result__`` column containing
-        the full :class:`HistGroupResult` for diagnostics and reuse.
+        Delegates directly to the shared
+        :func:`compute_hist_group_univariate` utility with *stat=count*
+        so that binning, effective counts, weights, and empty-group
+        reasons match exactly what the legacy :class:`Histogram` and
+        plotter-level :func:`histplot` produce.  Normalization and
+        cumulative transforms are intentionally **not** applied here;
+        they happen in :meth:`_normalize` (which knows about
+        ``common_norm`` and can apply cross-group scaling).
         """
         vals = data[orient]
         weights = data.get("weight", None)
 
-        hist_raw, edges = np.histogram(
-            vals, **bin_kws, weights=weights, density=False,
-        )
-        count, weight_sum, empty_reason = compute_valid_stats(vals, weights)
-
-        result = HistGroupResult(
-            hist=hist_raw,
-            bin_edges=edges,
-            group_key=(),
-            count=count,
-            weight_sum=weight_sum,
-            empty_reason=empty_reason,
-            normalization_denominator=None,
+        result = compute_hist_group_univariate(
+            vals, weights, bin_kws, "count", False, group_key=(),
         )
 
-        width = np.diff(edges)
-        center = edges[:-1] + width / 2
-        df = pd.DataFrame({orient: center, "count": hist_raw, "space": width})
+        width = np.diff(result.bin_edges)
+        center = result.bin_edges[:-1] + width / 2
+        df = pd.DataFrame({
+            orient: center, "count": result.hist.astype(float), "space": width,
+        })
         df["__hist_result__"] = [result] * len(df)
         return df
 
     def _collect_diagnostics_from_results(self, results_with_keys):
         """Collect diagnostics from a list of (group_key, HistGroupResult) tuples.
 
-        Parameters
-        ----------
-        results_with_keys : list of (tuple, HistGroupResult)
-            Each element is a (group_key, result) pair where group_key is
-            a tuple like ``(("hue", "A"),)`` and result is the corresponding
-            :class:`HistGroupResult` with its hist field already normalized.
+        Each ``HistGroupResult`` is produced by :meth:`_eval` (its hist field
+        is already normalized per-group using the shared utility) and then
+        optionally updated by :meth:`_update_results_from_normalized_data`
+        to reflect any cross-group (``common_norm``) rescaling applied by
+        :meth:`_normalize`.
         """
         for group_key, result in results_with_keys:
-            norm_denom = compute_normalization_denominator(
-                result.hist, result.bin_edges, self.stat,
-            )
             keyed_result = HistGroupResult(
                 hist=result.hist,
                 bin_edges=result.bin_edges,
@@ -222,34 +214,34 @@ class Hist(Stat):
                 count=result.count,
                 weight_sum=result.weight_sum,
                 empty_reason=result.empty_reason,
-                normalization_denominator=norm_denom,
+                normalization_denominator=result.normalization_denominator,
             )
             self._diagnostics_collector.add_group_from_result(keyed_result)
 
     def _normalize(self, data):
+        """Apply stat normalization and (optionally) cumulative transform.
+
+        Uses the shared :func:`normalize_hist_array` utility so that the
+        mapping from raw counts → normalized values is *identical* to the
+        one used by the legacy :class:`Histogram` and the plotter-level
+        :func:`histplot`.  Bin edges are taken from the
+        ``__hist_result__`` carrier produced by :meth:`_eval`; when this
+        method is called on per-group subsets via ``GroupBy.apply`` each
+        subset normalizes independently, which is how ``common_norm`` is
+        implemented.
+
+        The ``__hist_result__`` column is preserved and dropped later by
+        :meth:`__call__` (after :meth:`_update_results_from_normalized_data`
+        has had a chance to read the final normalized values back into
+        each :class:`HistGroupResult` for diagnostics).
+        """
+        result0 = data["__hist_result__"].iloc[0]
+        edges = result0.bin_edges
 
         hist = data["count"].to_numpy().astype(float)
-        space = data["space"].to_numpy()
+        hist_normed = normalize_hist_array(hist, edges, self.stat, self.cumulative)
 
-        if self.stat == "density":
-            total = (hist * space).sum()
-            hist = hist / total if total > 0 else hist
-        elif self.stat == "probability" or self.stat == "proportion":
-            total = hist.sum()
-            hist = hist / total if total > 0 else hist
-        elif self.stat == "percent":
-            total = hist.sum()
-            hist = hist / total * 100 if total > 0 else hist
-        elif self.stat == "frequency":
-            hist = hist / space
-
-        if self.cumulative:
-            if self.stat in ["density", "frequency"]:
-                hist = (hist * space).cumsum()
-            else:
-                hist = hist.cumsum()
-
-        return data.assign(**{self.stat: hist})
+        return data.assign(**{self.stat: hist_normed})
 
     def __call__(
         self, data: DataFrame, groupby: GroupBy, orient: str, scales: dict[str, Scale],
@@ -283,19 +275,21 @@ class Hist(Stat):
             applied, data, groupby, grouping_vars, orient,
         )
 
-        # --- Step 2: Drop the internal column and keep only plotting columns
-        data = applied.drop(columns=["__hist_result__"])
-
-        # --- Step 3: Normalize (may be cross-group when common_norm is not False
+        # --- Step 2: Normalize (may be cross-group when common_norm is not False)
+        # *Must* happen before we drop __hist_result__, because _normalize
+        # reads the pre-computed per-group HistGroupResult from that column.
         if not grouping_vars or self.common_norm is True:
-            data = self._normalize(data)
+            data = self._normalize(applied)
         else:
             if self.common_norm is False:
                 norm_groupby = GroupBy(grouping_vars)
             else:
                 norm_groupby = GroupBy(self.common_norm)
                 self._check_grouping_vars("common_norm", grouping_vars)
-            data = norm_groupby.apply(data, self._normalize)
+            data = norm_groupby.apply(applied, self._normalize)
+
+        # --- Step 3: Drop the internal column and keep only plotting columns
+        data = data.drop(columns=["__hist_result__"])
 
         # --- Step 4: Update HistGroupResults with normalized hist values
         # and collect diagnostics
@@ -347,19 +341,27 @@ class Hist(Stat):
         return results
 
     def _update_results_from_normalized_data(self, results, data, grouping_vars, orient):
-        """Update HistGroupResult.hist with normalized values from DataFrame.
+        """Update HistGroupResult.hist and norm_denom after _normalize.
 
         After :meth:`_normalize` has been applied to the DataFrame, this
-        method writes the normalized histogram values back to the
-        corresponding :class:`HistGroupResult` objects so that diagnostics
-        reflect the final normalized state.
+        method writes the normalized histogram values and the derived
+        normalization denominator back to each group's :class:`HistGroupResult`
+        so that diagnostics reflect the final normalized state.  Both the
+        histogram values and the denominator are computed via the shared
+        utilities in :mod:`seaborn._statistics`, guaranteeing parity with
+        the legacy :class:`Histogram` and plotter-level layers.
         """
         for group_key, result in results:
             if not group_key:
-                result.hist = data[self.stat].to_numpy()
-                continue
-            mask = pd.Series(True, index=data.index)
-            for var, val in group_key:
-                mask &= data[var] == val
-            if mask.any():
-                result.hist = data.loc[mask, self.stat].to_numpy()
+                normed = data[self.stat].to_numpy()
+            else:
+                mask = pd.Series(True, index=data.index)
+                for var, val in group_key:
+                    mask &= data[var] == val
+                if not mask.any():
+                    continue
+                normed = data.loc[mask, self.stat].to_numpy()
+            result.hist = normed
+            result.normalization_denominator = compute_normalization_denominator(
+                normed, result.bin_edges, self.stat,
+            )
