@@ -24,6 +24,9 @@ The classes should behave roughly in the style of scikit-learn.
   class instantiation.
 
 """
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Any
 from numbers import Number
 from statistics import NormalDist
 import numpy as np
@@ -37,6 +40,52 @@ except ImportError:
 
 from .algorithms import bootstrap
 from .utils import _check_argument
+
+
+@dataclass
+class BinDiagnostics:
+    """Diagnostic information about histogram binning for a single data group.
+
+    Attributes
+    ----------
+    bin_edges : np.ndarray
+        Actual bin edges used for this group.
+    count : int
+        Number of valid (non-NaN, finite) samples used for binning.
+    weight_sum : float
+        Sum of weights for valid samples (1.0 * count if no weights).
+    normalization_denominator : float
+        Denominator used for normalization (hist.sum() for probability/percent,
+        total area for density, etc.). None if stat == "count".
+    empty_reason : str or None
+        If the group produced no valid bins or data, explanation why.
+        One of: "no_data", "all_nan", "zero_variance", or None if valid.
+    extra : dict
+        Additional implementation-specific metadata.
+    """
+    bin_edges: np.ndarray | None = None
+    count: int = 0
+    weight_sum: float = 0.0
+    normalization_denominator: float | None = None
+    empty_reason: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def __repr__(self):
+        parts = []
+        if self.bin_edges is not None:
+            if isinstance(self.bin_edges, (tuple, list)) and len(self.bin_edges) == 2:
+                parts.append(f"bin_edges=(array(shape={self.bin_edges[0].shape}), array(shape={self.bin_edges[1].shape}))")
+            else:
+                parts.append(f"bin_edges=array(shape={self.bin_edges.shape})")
+        parts.append(f"count={self.count}")
+        parts.append(f"weight_sum={self.weight_sum}")
+        if self.normalization_denominator is not None:
+            parts.append(f"norm_denom={self.normalization_denominator}")
+        if self.empty_reason is not None:
+            parts.append(f"empty_reason={self.empty_reason!r}")
+        if self.extra:
+            parts.append(f"extra={self.extra}")
+        return f"BinDiagnostics({', '.join(parts)})"
 
 
 class KDE:
@@ -251,6 +300,7 @@ class Histogram:
         self.cumulative = cumulative
 
         self.bin_kws = None
+        self.diagnostics_: dict[tuple, BinDiagnostics] = {}
 
     def _define_bin_edges(self, x, weights, bins, binwidth, binrange, discrete):
         """Inner function that takes bin parameters as arguments."""
@@ -333,7 +383,90 @@ class Histogram:
 
         return bin_kws
 
-    def _eval_bivariate(self, x1, x2, weights):
+    def _collect_diagnostics(
+        self, x, weights, bin_edges, hist, area=None, group_key=()
+    ):
+        """Collect diagnostic information about the binning for this group.
+
+        Parameters
+        ----------
+        x : array-like or tuple of array-like
+            For univariate: single array of values.
+            For bivariate: tuple of (x1, x2) arrays.
+        """
+        # Handle bivariate case where x is a tuple of (x1, x2)
+        if isinstance(x, tuple) and len(x) == 2:
+            x1, x2 = np.asarray(x[0]), np.asarray(x[1])
+            n_samples = len(x1)
+            valid_mask = np.isfinite(x1) & np.isfinite(x2)
+        else:
+            x = np.asarray(x)
+            n_samples = len(x)
+            valid_mask = np.isfinite(x)
+
+        if weights is not None:
+            weights = np.asarray(weights)
+            valid_mask &= np.isfinite(weights)
+            weight_sum = float(weights[valid_mask].sum())
+        else:
+            weight_sum = float(valid_mask.sum())
+
+        count = int(valid_mask.sum())
+
+        empty_reason = None
+        if count == 0:
+            if n_samples == 0:
+                empty_reason = "no_data"
+            else:
+                empty_reason = "all_nan"
+        else:
+            # Check for zero variance in the valid data
+            if isinstance(x, tuple) and len(x) == 2:
+                var1 = np.nan_to_num(x1[valid_mask].var()) if n_samples > 0 else 0
+                var2 = np.nan_to_num(x2[valid_mask].var()) if n_samples > 0 else 0
+                if var1 == 0 and var2 == 0:
+                    empty_reason = "zero_variance"
+            else:
+                if np.nan_to_num(x[valid_mask].var()) == 0:
+                    empty_reason = "zero_variance"
+
+        if self.stat == "count":
+            norm_denom = None
+        elif self.stat in ("probability", "proportion", "percent"):
+            norm_denom = float(hist.sum()) if self.stat != "count" else None
+            if self.stat == "percent" and norm_denom is not None:
+                norm_denom = norm_denom / 100.0
+        elif self.stat == "density":
+            if area is not None:
+                norm_denom = float((hist * area).sum())
+            else:
+                norm_denom = float((hist * np.diff(bin_edges)).sum())
+        elif self.stat == "frequency":
+            if area is not None:
+                norm_denom = float(area.sum() / hist.size)
+            else:
+                norm_denom = float(np.mean(np.diff(bin_edges)))
+        else:
+            norm_denom = None
+
+        # Handle bivariate case where bin_edges is a tuple/list of (x_edges, y_edges)
+        if isinstance(bin_edges, (tuple, list)) and len(bin_edges) == 2:
+            edges_tuple = (np.asarray(bin_edges[0]), np.asarray(bin_edges[1]))
+        else:
+            edges_tuple = np.asarray(bin_edges)
+
+        diagnostics = BinDiagnostics(
+            bin_edges=edges_tuple,
+            count=count,
+            weight_sum=weight_sum,
+            normalization_denominator=norm_denom,
+            empty_reason=empty_reason,
+            extra={"stat": self.stat, "cumulative": self.cumulative},
+        )
+        self.diagnostics_[group_key] = diagnostics
+        return diagnostics
+
+    def _eval_bivariate(self, x1, x2, weights, group_key=()):
         """Inner function for histogram of two variables."""
         bin_kws = self.bin_kws
         if bin_kws is None:
@@ -363,9 +496,12 @@ class Histogram:
             else:
                 hist = hist.cumsum(axis=0).cumsum(axis=1)
 
+        self._collect_diagnostics(
+            (x1, x2), weights, bin_edges, hist, area, group_key
+        )
         return hist, bin_edges
 
-    def _eval_univariate(self, x, weights):
+    def _eval_univariate(self, x, weights, group_key=()):
         """Inner function for histogram of one variable."""
         bin_kws = self.bin_kws
         if bin_kws is None:
@@ -389,14 +525,15 @@ class Histogram:
             else:
                 hist = hist.cumsum()
 
+        self._collect_diagnostics(x, weights, bin_edges, hist, None, group_key)
         return hist, bin_edges
 
-    def __call__(self, x1, x2=None, weights=None):
+    def __call__(self, x1, x2=None, weights=None, group_key=()):
         """Count the occurrences in each bin, maybe normalize."""
         if x2 is None:
-            return self._eval_univariate(x1, weights)
+            return self._eval_univariate(x1, weights, group_key)
         else:
-            return self._eval_bivariate(x1, x2, weights)
+            return self._eval_bivariate(x1, x2, weights, group_key)
 
 
 class ECDF:

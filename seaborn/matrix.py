@@ -101,7 +101,6 @@ class _HeatMapper:
                  annot_kws, cbar, cbar_kws,
                  xticklabels=True, yticklabels=True, mask=None,
                  annot_format=None, original_data=None,
-                 original_mask=None, original_annot_df=None,
                  row_ind=None, col_ind=None):
         """Initialize the plotting object."""
         # We always want to have a DataFrame with semantic information
@@ -193,12 +192,6 @@ class _HeatMapper:
         if original_data is None:
             original_data = data
 
-        if original_mask is None:
-            original_mask = mask
-
-        if original_annot_df is None:
-            original_annot_df = annot_data_df
-
         # Set up reorder indices
         n_rows, n_cols = data.shape
         if row_ind is None:
@@ -222,8 +215,6 @@ class _HeatMapper:
         self.cbar_kws = {} if cbar_kws is None else cbar_kws.copy()
 
         self.original_data = original_data
-        self.original_mask = original_mask
-        self.original_annot_df = original_annot_df
         self.row_ind = row_ind
         self.col_ind = col_ind
 
@@ -297,47 +288,45 @@ class _HeatMapper:
                 xpos.flat, ypos.flat,
                 mesh.get_array().flat, mesh.get_facecolors(),
                 self.annot_data.flat)):
-            row_idx_plot = i // width
-            col_idx_plot = i % width
+            if m is not np.ma.masked:
+                row_idx_plot = i // width
+                col_idx_plot = i % width
 
-            orig_row_idx = self.row_ind[row_idx_plot]
-            orig_col_idx = self.col_ind[col_idx_plot]
+                orig_row_idx = self.row_ind[row_idx_plot]
+                orig_col_idx = self.col_ind[col_idx_plot]
 
-            row_label = orig_index[orig_row_idx]
-            col_label = orig_columns[orig_col_idx]
+                row_label = orig_index[orig_row_idx]
+                col_label = orig_columns[orig_col_idx]
 
-            if self.original_annot_df is not None:
-                try:
-                    value = self.original_annot_df.iloc[orig_row_idx, orig_col_idx]
-                except (IndexError, AttributeError):
-                    value = val
-            else:
-                value = val
-
-            masked = bool(self.original_mask.iloc[orig_row_idx, orig_col_idx])
-
-            if self.annot_format is not None:
-                annotation = self.annot_format(
-                    row_label=row_label,
-                    col_label=col_label,
-                    value=value,
-                    masked=masked,
-                    row_idx=row_idx_plot,
-                    col_idx=col_idx_plot
-                )
-                if annotation is None or annotation == "":
-                    continue
-            else:
-                if m is not np.ma.masked:
-                    annotation = ("{:" + self.fmt + "}").format(val)
+                if self.annot_data_df is not None:
+                    try:
+                        value = self.annot_data_df.iloc[orig_row_idx, orig_col_idx]
+                    except (IndexError, AttributeError):
+                        value = val
                 else:
-                    continue
+                    value = val
 
-            lum = relative_luminance(color)
-            text_color = ".15" if lum > .408 else "w"
-            text_kwargs = dict(color=text_color, ha="center", va="center")
-            text_kwargs.update(self.annot_kws)
-            ax.text(x, y, annotation, **text_kwargs)
+                masked = bool(self.mask.iloc[orig_row_idx, orig_col_idx])
+
+                if self.annot_format is not None:
+                    annotation = self.annot_format(
+                        row_label=row_label,
+                        col_label=col_label,
+                        value=value,
+                        masked=masked,
+                        row_idx=row_idx_plot,
+                        col_idx=col_idx_plot
+                    )
+                    if annotation is None or annotation == "":
+                        continue
+                else:
+                    annotation = ("{:" + self.fmt + "}").format(val)
+
+                lum = relative_luminance(color)
+                text_color = ".15" if lum > .408 else "w"
+                text_kwargs = dict(color=text_color, ha="center", va="center")
+                text_kwargs.update(self.annot_kws)
+                ax.text(x, y, annotation, **text_kwargs)
 
     def _skip_ticks(self, labels, tickevery):
         """Return ticks and labels at evenly spaced intervals."""
@@ -437,6 +426,7 @@ def heatmap(
     cbar=True, cbar_kws=None, cbar_ax=None,
     square=False, xticklabels="auto", yticklabels="auto",
     mask=None, ax=None,
+    original_data=None, row_ind=None, col_ind=None,
     **kwargs
 ):
     """Plot rectangular data as a color-encoded matrix.
@@ -537,16 +527,10 @@ def heatmap(
     .. include:: ../docstrings/heatmap.rst
 
     """
-    original_data = kwargs.pop("_original_data", None)
-    original_mask = kwargs.pop("_original_mask", None)
-    original_annot_df = kwargs.pop("_original_annot_df", None)
-    row_ind = kwargs.pop("_row_ind", None)
-    col_ind = kwargs.pop("_col_ind", None)
-
+    # Initialize the plotter object
     plotter = _HeatMapper(data, vmin, vmax, cmap, center, robust, annot, fmt,
                           annot_kws, cbar, cbar_kws, xticklabels,
                           yticklabels, mask, annot_format, original_data,
-                          original_mask, original_annot_df,
                           row_ind, col_ind)
 
     # Add the pcolormesh kwargs here
@@ -1163,8 +1147,8 @@ class ClusterGrid(Grid):
             despine(self.ax_col_colors, left=True, bottom=True)
 
     def plot_matrix(self, colorbar_kws, xind, yind, **kws):
+        # Store original data before reordering for label/value lookup
         original_data = self.data2d
-        original_mask = self.mask
 
         self.data2d = self.data2d.iloc[yind, xind]
         self.mask = self.mask.iloc[yind, xind]
@@ -1181,31 +1165,25 @@ class ClusterGrid(Grid):
         except (TypeError, IndexError):
             pass
 
+        # Extract annot_format before processing annot
         annot_format = kws.pop("annot_format", None)
 
+        # Reorganize the annotations to match the heatmap
         annot = kws.pop("annot", None)
-        original_annot_df = None
         if annot is None or annot is False:
             pass
         else:
             if isinstance(annot, bool):
                 annot_data = self.data2d
-                original_annot_df = original_data
             else:
                 if isinstance(annot, pd.DataFrame):
-                    original_annot_df = annot
                     annot_data = annot.iloc[yind, xind]
                 else:
-                    annot_arr = np.asarray(annot)
-                    if annot_arr.shape != original_data.shape:
+                    annot_data = np.asarray(annot)
+                    if annot_data.shape != original_data.shape:
                         err = "`data` and `annot` must have same shape."
                         raise ValueError(err)
-                    original_annot_df = pd.DataFrame(
-                        annot_arr,
-                        index=original_data.index,
-                        columns=original_data.columns
-                    )
-                    annot_data = annot_arr[yind][:, xind]
+                    annot_data = annot_data[yind][:, xind]
                     annot_data = pd.DataFrame(annot_data,
                                               index=self.data2d.index,
                                               columns=self.data2d.columns)
@@ -1216,10 +1194,8 @@ class ClusterGrid(Grid):
         heatmap(self.data2d, ax=self.ax_heatmap, cbar_ax=self.ax_cbar,
                 cbar_kws=colorbar_kws, mask=self.mask,
                 xticklabels=xtl, yticklabels=ytl, annot=annot,
-                annot_format=annot_format, _original_data=original_data,
-                _original_mask=original_mask,
-                _original_annot_df=original_annot_df,
-                _row_ind=yind, _col_ind=xind, **kws)
+                annot_format=annot_format, original_data=original_data,
+                row_ind=yind, col_ind=xind, **kws)
 
         ytl = self.ax_heatmap.get_yticklabels()
         ytl_rot = None if not ytl else ytl[0].get_rotation()

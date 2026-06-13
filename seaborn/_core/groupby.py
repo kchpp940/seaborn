@@ -1,6 +1,6 @@
 """Simplified split-apply-combine paradigm on dataframes for internal use."""
 from __future__ import annotations
-
+import inspect
 from typing import cast, Iterable
 
 import pandas as pd
@@ -114,7 +114,12 @@ class GroupBy:
 
         parts = {}
         for key, part_df in data.groupby(grouper, sort=False, observed=False):
-            parts[key] = func(part_df, *args, **kwargs)
+            # Pass group key to func if it accepts _group_key parameter
+            sig = inspect.signature(func)
+            if "_group_key" in sig.parameters:
+                parts[key] = func(part_df, *args, _group_key=key, **kwargs)
+            else:
+                parts[key] = func(part_df, *args, **kwargs)
         stack = []
         for key in groups:
             if key in parts:

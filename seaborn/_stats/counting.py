@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 import numpy as np
@@ -9,6 +9,7 @@ from pandas import DataFrame
 from seaborn._core.groupby import GroupBy
 from seaborn._core.scales import Scale
 from seaborn._stats.base import Stat
+from seaborn._statistics import BinDiagnostics
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -113,6 +114,8 @@ class Hist(Stat):
     cumulative: bool = False
     discrete: bool = False
 
+    diagnostics_: dict[tuple, BinDiagnostics] = field(default_factory=dict, init=False)
+
     def __post_init__(self):
 
         stat_options = [
@@ -162,18 +165,93 @@ class Hist(Stat):
 
         return bin_kws
 
-    def _get_bins_and_eval(self, data, orient, groupby, scale_type):
+    def _get_bins_and_eval(self, data, orient, groupby, scale_type, groupby_vars=None):
 
+        if groupby_vars is None:
+            groupby_vars = [str(v) for v in data if v in groupby.order]
         bin_kws = self._define_bin_params(data, orient, scale_type)
-        return groupby.apply(data, self._eval, orient, bin_kws)
+        return groupby.apply(data, self._eval, orient, bin_kws, groupby_vars)
 
-    def _eval(self, data, orient, bin_kws):
+    def _get_group_key(self, data, groupby_vars, _group_key=None):
+        """Extract the group key from a subset DataFrame for diagnostics tracking."""
+        if _group_key is not None:
+            if isinstance(_group_key, tuple):
+                key_vals = _group_key
+            else:
+                key_vals = (_group_key,)
+            if len(groupby_vars) == len(key_vals):
+                return tuple(zip(groupby_vars, key_vals))
+            return ((groupby_vars[0], key_vals[0]),)
+        if not groupby_vars:
+            return ()
+        key_parts = []
+        for var in groupby_vars:
+            if var in data.columns and len(data) > 0:
+                val = data[var].iloc[0]
+                key_parts.append((var, val))
+        return tuple(key_parts)
+
+    def _collect_diagnostics(self, vals, weights, bin_edges, hist, data, groupby_vars, _group_key=None):
+        """Collect diagnostic information about the binning for this group."""
+        group_key = self._get_group_key(data, groupby_vars, _group_key)
+
+        vals = np.asarray(vals)
+        valid_mask = np.isfinite(vals)
+        if weights is not None:
+            weights = np.asarray(weights)
+            valid_mask &= np.isfinite(weights)
+            weight_sum = float(weights[valid_mask].sum())
+        else:
+            weight_sum = float(valid_mask.sum())
+
+        count = int(valid_mask.sum())
+
+        empty_reason = None
+        if count == 0:
+            if len(vals) == 0:
+                empty_reason = "no_data"
+            else:
+                empty_reason = "all_nan"
+        elif np.nan_to_num(vals[valid_mask].var()) == 0:
+            empty_reason = "zero_variance"
+
+        width = np.diff(bin_edges)
+        if self.stat == "count":
+            norm_denom = None
+        elif self.stat in ("probability", "proportion", "percent"):
+            norm_denom = float(hist.sum())
+            if self.stat == "percent":
+                norm_denom = norm_denom / 100.0
+        elif self.stat == "density":
+            norm_denom = float((hist * width).sum())
+        elif self.stat == "frequency":
+            norm_denom = float(np.mean(width))
+        else:
+            norm_denom = None
+
+        diagnostics = BinDiagnostics(
+            bin_edges=np.asarray(bin_edges),
+            count=count,
+            weight_sum=weight_sum,
+            normalization_denominator=norm_denom,
+            empty_reason=empty_reason,
+            extra={"stat": self.stat, "cumulative": self.cumulative},
+        )
+        self.diagnostics_[group_key] = diagnostics
+        return diagnostics
+
+    def _eval(self, data, orient, bin_kws, groupby_vars=None, _group_key=None):
+
+        if groupby_vars is None:
+            groupby_vars = []
 
         vals = data[orient]
         weights = data.get("weight", None)
 
         density = self.stat == "density"
         hist, edges = np.histogram(vals, **bin_kws, weights=weights, density=density)
+
+        self._collect_diagnostics(vals, weights, edges, hist, data, groupby_vars, _group_key)
 
         width = np.diff(edges)
         center = edges[:-1] + width / 2
@@ -202,11 +280,13 @@ class Hist(Stat):
         self, data: DataFrame, groupby: GroupBy, orient: str, scales: dict[str, Scale],
     ) -> DataFrame:
 
+        self.diagnostics_.clear()
+
         scale_type = scales[orient].__class__.__name__.lower()
         grouping_vars = [str(v) for v in data if v in groupby.order]
         if not grouping_vars or self.common_bins is True:
             bin_kws = self._define_bin_params(data, orient, scale_type)
-            data = groupby.apply(data, self._eval, orient, bin_kws)
+            data = groupby.apply(data, self._eval, orient, bin_kws, grouping_vars)
         else:
             if self.common_bins is False:
                 bin_groupby = GroupBy(grouping_vars)

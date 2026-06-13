@@ -18,7 +18,7 @@ from ._base import VectorPlotter
 
 # We have moved univariate histogram computation over to the new Hist class,
 # but still use the older Histogram for bivariate computation.
-from ._statistics import ECDF, Histogram, KDE
+from ._statistics import ECDF, Histogram, KDE, BinDiagnostics
 from ._stats.counting import Hist
 
 from .axisgrid import (
@@ -108,6 +108,8 @@ class _DistributionPlotter(VectorPlotter):
     ):
 
         super().__init__(data=data, variables=variables)
+        self.diagnostics_: dict[tuple, BinDiagnostics] = {}
+        self._hist_estimator: Hist | Histogram | None = None
 
     @property
     def univariate(self):
@@ -421,6 +423,7 @@ class _DistributionPlotter(VectorPlotter):
 
         # Now initialize the Histogram estimator
         estimator = Hist(**estimate_kws)
+        self._hist_estimator = estimator
         histograms = {}
 
         # Do pre-compute housekeeping related to multiple groups
@@ -468,7 +471,20 @@ class _DistributionPlotter(VectorPlotter):
             # Do the histogram computation
             if not (multiple_histograms and common_bins):
                 bin_kws = estimator._define_bin_params(sub_data, orient, None)
-            res = estimator._normalize(estimator._eval(sub_data, orient, bin_kws))
+            
+            # Determine groupby variables for diagnostics
+            groupby_vars = [k for k in ["hue", "row", "col"] if k in sub_vars]
+            # Extract _group_key from sub_vars for objects-layer Hist
+            _group_key = None
+            if groupby_vars:
+                if len(groupby_vars) == 1:
+                    _group_key = sub_vars[groupby_vars[0]]
+                else:
+                    _group_key = tuple(sub_vars[k] for k in groupby_vars)
+            
+            res = estimator._normalize(
+                estimator._eval(sub_data, orient, bin_kws, groupby_vars, _group_key)
+            )
             heights = res[estimator.stat].to_numpy()
             widths = res["space"].to_numpy()
             edges = res[orient].to_numpy() - widths / 2
@@ -737,6 +753,10 @@ class _DistributionPlotter(VectorPlotter):
                 ax_obj, artist, fill, element, multiple, alpha, plot_kws, {},
             )
 
+        # Collect diagnostic information from the estimator
+        if hasattr(estimator, "diagnostics_"):
+            self.diagnostics_.update(estimator.diagnostics_)
+
     def plot_bivariate_histogram(
         self,
         common_bins, common_norm,
@@ -752,6 +772,8 @@ class _DistributionPlotter(VectorPlotter):
 
         # Now initialize the Histogram estimator
         estimator = Histogram(**estimate_kws)
+        self._hist_estimator = estimator
+        estimator.diagnostics_.clear()
 
         # Do pre-compute housekeeping related to multiple groups
         if set(self.variables) - {"x", "y"}:
@@ -768,9 +790,11 @@ class _DistributionPlotter(VectorPlotter):
         # -- Determine colormap threshold and norm based on the full data
 
         full_heights = []
-        for _, sub_data in self.iter_data(from_comp_data=True):
+        for sub_vars, sub_data in self.iter_data(from_comp_data=True):
+            group_key = tuple(sub_vars.items())
             sub_heights, _ = estimator(
-                sub_data["x"], sub_data["y"], sub_data.get("weights", None)
+                sub_data["x"], sub_data["y"], sub_data.get("weights", None),
+                group_key=group_key,
             )
             full_heights.append(sub_heights)
 
@@ -800,10 +824,12 @@ class _DistributionPlotter(VectorPlotter):
                 continue
 
             # Do the histogram computation
+            group_key = tuple(sub_vars.items())
             heights, (x_edges, y_edges) = estimator(
                 sub_data["x"],
                 sub_data["y"],
                 weights=sub_data.get("weights", None),
+                group_key=group_key,
             )
 
             # Get the axes for this plot
@@ -893,6 +919,10 @@ class _DistributionPlotter(VectorPlotter):
             self._add_legend(
                 ax_obj, artist, True, False, "layer", 1, artist_kws, {},
             )
+
+        # Collect diagnostic information from the estimator
+        if hasattr(estimator, "diagnostics_"):
+            self.diagnostics_.update(estimator.diagnostics_)
 
     def plot_univariate_density(
         self,
@@ -1445,6 +1475,12 @@ def histplot(
             estimate_kws=estimate_kws,
             **kwargs,
         )
+
+    # Attach diagnostic information to the returned Axes
+    if hasattr(p, "diagnostics_"):
+        ax.diagnostics_ = p.diagnostics_
+    if hasattr(p, "_hist_estimator"):
+        ax._hist_estimator = p._hist_estimator
 
     return ax
 
@@ -2279,6 +2315,12 @@ def displot(
             k: f"_{k}_" if v is None else v for k, v in p.variables.items()
         }
         g.data = p.plot_data.rename(columns=wide_cols)
+
+    # Attach diagnostic information to the returned FacetGrid
+    if hasattr(p, "diagnostics_"):
+        g.diagnostics_ = p.diagnostics_
+    if hasattr(p, "_hist_estimator"):
+        g._hist_estimator = p._hist_estimator
 
     return g
 
