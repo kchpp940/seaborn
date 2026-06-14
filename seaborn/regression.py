@@ -17,7 +17,6 @@ except ImportError:
 from . import utils
 from . import algorithms as algo
 from .axisgrid import FacetGrid, _facet_docs
-from .rcmod import _apply_theme_context
 
 
 __all__ = ["lmplot", "regplot", "residplot"]
@@ -579,35 +578,6 @@ _regression_docs.update(_facet_docs)
 
 
 def lmplot(
-    data, *,
-    x=None, y=None, hue=None, col=None, row=None,
-    palette=None, col_wrap=None, height=5, aspect=1, markers="o",
-    sharex=None, sharey=None, hue_order=None, col_order=None, row_order=None,
-    legend=True, legend_out=None, x_estimator=None, x_bins=None,
-    x_ci="ci", scatter=True, fit_reg=True, ci=95, n_boot=1000,
-    units=None, seed=None, order=1, logistic=False, lowess=False,
-    robust=False, logx=False, x_partial=None, y_partial=None,
-    truncate=True, x_jitter=None, y_jitter=None, scatter_kws=None,
-    line_kws=None, facet_kws=None,
-    profile=None,
-):
-    return _apply_theme_context(
-        profile, _lmplot_impl,
-        data=data, x=x, y=y, hue=hue, col=col, row=row,
-        palette=palette, col_wrap=col_wrap, height=height, aspect=aspect,
-        markers=markers, sharex=sharex, sharey=sharey, hue_order=hue_order,
-        col_order=col_order, row_order=row_order, legend=legend,
-        legend_out=legend_out, x_estimator=x_estimator, x_bins=x_bins,
-        x_ci=x_ci, scatter=scatter, fit_reg=fit_reg, ci=ci, n_boot=n_boot,
-        units=units, seed=seed, order=order, logistic=logistic,
-        lowess=lowess, robust=robust, logx=logx, x_partial=x_partial,
-        y_partial=y_partial, truncate=truncate, x_jitter=x_jitter,
-        y_jitter=y_jitter, scatter_kws=scatter_kws, line_kws=line_kws,
-        facet_kws=facet_kws,
-    )
-
-
-def _lmplot_impl(
     data, *,
     x=None, y=None, hue=None, col=None, row=None,
     palette=None, col_wrap=None, height=5, aspect=1, markers="o",

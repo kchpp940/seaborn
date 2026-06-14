@@ -15,7 +15,8 @@ from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
 
 from seaborn._core.typing import default, deprecated
-from seaborn._base import VectorPlotter, infer_orient, categorical_order
+from seaborn._base import VectorPlotter, infer_orient
+from seaborn._core.order import categorical_order
 from seaborn._stats.density import KDE
 from seaborn import utils
 from seaborn.utils import (
@@ -28,7 +29,6 @@ from seaborn.utils import (
     _scatter_legend_artist,
     _version_predates,
 )
-from seaborn.rcmod import _apply_theme_context
 from seaborn._compat import groupby_apply_include_groups
 from seaborn._statistics import (
     EstimateAggregator,
@@ -2766,32 +2766,6 @@ def catplot(
     col_wrap=None, height=5, aspect=1, log_scale=None, native_scale=False,
     formatter=None, orient=None, color=None, palette=None, hue_norm=None,
     legend="auto", legend_out=True, sharex=True, sharey=True,
-    margin_titles=False, facet_kws=None, ci=deprecated,
-    profile=None,
-    **kwargs
-):
-    return _apply_theme_context(
-        profile, _catplot_impl,
-        data=data, x=x, y=y, hue=hue, row=row, col=col, kind=kind,
-        estimator=estimator, errorbar=errorbar, n_boot=n_boot, seed=seed,
-        units=units, weights=weights, order=order, hue_order=hue_order,
-        row_order=row_order, col_order=col_order, col_wrap=col_wrap,
-        height=height, aspect=aspect, log_scale=log_scale,
-        native_scale=native_scale, formatter=formatter, orient=orient,
-        color=color, palette=palette, hue_norm=hue_norm, legend=legend,
-        legend_out=legend_out, sharex=sharex, sharey=sharey,
-        margin_titles=margin_titles, facet_kws=facet_kws, ci=ci,
-        **kwargs,
-    )
-
-
-def _catplot_impl(
-    data=None, *, x=None, y=None, hue=None, row=None, col=None, kind="strip",
-    estimator="mean", errorbar=("ci", 95), n_boot=1000, seed=None, units=None,
-    weights=None, order=None, hue_order=None, row_order=None, col_order=None,
-    col_wrap=None, height=5, aspect=1, log_scale=None, native_scale=False,
-    formatter=None, orient=None, color=None, palette=None, hue_norm=None,
-    legend="auto", legend_out=True, sharex=True, sharey=True,
     margin_titles=False, facet_kws=None, ci=deprecated, **kwargs
 ):
 
@@ -2838,6 +2812,12 @@ def _catplot_impl(
         if var in p.variables and p.variables[var] is None:
             p.variables[var] = f"_{var}_"
 
+    # Register faceting variables with the order registry
+    if row is not None:
+        p._order_registry.register("row", order=row_order)
+    if col is not None:
+        p._order_registry.register("col", order=col_order)
+
     # Adapt the plot_data dataframe for use with FacetGrid
     facet_data = p.plot_data.rename(columns=p.variables)
     facet_data = facet_data.loc[:, ~facet_data.columns.duplicated()]
@@ -2853,6 +2833,7 @@ def _catplot_impl(
         row_order=row_order, col_order=col_order, sharex=sharex, sharey=sharey,
         legend_out=legend_out, margin_titles=margin_titles,
         height=height, aspect=aspect,
+        order_registry=p._order_registry,
         **facet_kws,
     )
 

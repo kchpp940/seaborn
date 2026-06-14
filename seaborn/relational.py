@@ -21,7 +21,6 @@ from ._compat import groupby_apply_include_groups
 from ._statistics import EstimateAggregator, WeightedAggregator
 from .axisgrid import FacetGrid, _facet_docs
 from ._docstrings import DocstringComponents, _core_docs
-from .rcmod import _apply_theme_context
 
 
 __all__ = ["relplot", "scatterplot", "lineplot"]
@@ -706,30 +705,6 @@ def relplot(
     sizes=None, size_order=None, size_norm=None,
     markers=None, dashes=None, style_order=None,
     legend="auto", kind="scatter", height=5, aspect=1, facet_kws=None,
-    profile=None,
-    **kwargs
-):
-    return _apply_theme_context(
-        profile, _relplot_impl,
-        data=data, x=x, y=y, hue=hue, size=size, style=style,
-        units=units, weights=weights, row=row, col=col,
-        col_wrap=col_wrap, row_order=row_order, col_order=col_order,
-        palette=palette, hue_order=hue_order, hue_norm=hue_norm,
-        sizes=sizes, size_order=size_order, size_norm=size_norm,
-        markers=markers, dashes=dashes, style_order=style_order,
-        legend=legend, kind=kind, height=height, aspect=aspect,
-        facet_kws=facet_kws, **kwargs,
-    )
-
-
-def _relplot_impl(
-    data=None, *,
-    x=None, y=None, hue=None, size=None, style=None, units=None, weights=None,
-    row=None, col=None, col_wrap=None, row_order=None, col_order=None,
-    palette=None, hue_order=None, hue_norm=None,
-    sizes=None, size_order=None, size_norm=None,
-    markers=None, dashes=None, style_order=None,
-    legend="auto", kind="scatter", height=5, aspect=1, facet_kws=None,
     **kwargs
 ):
 
@@ -828,6 +803,12 @@ def _relplot_impl(
         grid_variables.update(units=units, weights=weights)
     p.assign_variables(data, grid_variables)
 
+    # Register faceting variables with the order registry
+    if row is not None:
+        p._order_registry.register("row", order=row_order)
+    if col is not None:
+        p._order_registry.register("col", order=col_order)
+
     # Define the named variables for plotting on each facet
     # Rename the variables with a leading underscore to avoid
     # collisions with faceting variable names
@@ -849,13 +830,14 @@ def _relplot_impl(
     new_cols.update(grid_kws)
     full_data = p.plot_data.rename(columns=new_cols)
 
-    # Set up the FacetGrid object
+    # Set up the FacetGrid object, sharing the order registry
     facet_kws = {} if facet_kws is None else facet_kws.copy()
     g = FacetGrid(
         data=full_data.dropna(axis=1, how="all"),
         **grid_kws,
         col_wrap=col_wrap, row_order=row_order, col_order=col_order,
         height=height, aspect=aspect, dropna=False,
+        order_registry=p._order_registry,
         **facet_kws
     )
 

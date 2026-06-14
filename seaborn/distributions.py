@@ -34,7 +34,6 @@ from .utils import (
     _default_color,
 )
 from .palettes import color_palette
-from .rcmod import _apply_theme_context
 from .external import husl
 from .external.kde import gaussian_kde
 from ._docstrings import (
@@ -2158,29 +2157,6 @@ def displot(
     # Faceting parameters
     col_wrap=None, row_order=None, col_order=None,
     height=5, aspect=1, facet_kws=None,
-    # Theme profile
-    profile=None,
-    **kwargs,
-):
-    return _apply_theme_context(
-        profile, _displot_impl,
-        data=data, x=x, y=y, hue=hue, row=row, col=col,
-        weights=weights, kind=kind, rug=rug, rug_kws=rug_kws,
-        log_scale=log_scale, legend=legend, palette=palette,
-        hue_order=hue_order, hue_norm=hue_norm, color=color,
-        col_wrap=col_wrap, row_order=row_order, col_order=col_order,
-        height=height, aspect=aspect, facet_kws=facet_kws,
-        **kwargs,
-    )
-
-
-def _displot_impl(
-    data=None, *,
-    x=None, y=None, hue=None, row=None, col=None, weights=None,
-    kind="hist", rug=False, rug_kws=None, log_scale=None, legend=True,
-    palette=None, hue_order=None, hue_norm=None, color=None,
-    col_wrap=None, row_order=None, col_order=None,
-    height=5, aspect=1, facet_kws=None,
     **kwargs,
 ):
 
@@ -2209,6 +2185,12 @@ def _displot_impl(
         if var in p.variables and p.variables[var] is None:
             p.variables[var] = f"_{var}_"
 
+    # Register faceting variables with the order registry
+    if row is not None:
+        p._order_registry.register("row", order=row_order)
+    if col is not None:
+        p._order_registry.register("col", order=col_order)
+
     # Adapt the plot_data dataframe for use with FacetGrid
     grid_data = p.plot_data.rename(columns=p.variables)
     grid_data = grid_data.loc[:, ~grid_data.columns.duplicated()]
@@ -2224,6 +2206,7 @@ def _displot_impl(
         col_wrap=col_wrap, row_order=row_order,
         col_order=col_order, height=height,
         aspect=aspect,
+        order_registry=p._order_registry,
         **facet_kws,
     )
 

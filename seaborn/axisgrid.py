@@ -9,8 +9,9 @@ import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-from ._base import VectorPlotter, variable_type, categorical_order
+from ._base import VectorPlotter, variable_type
 from ._core.data import handle_data_source
+from ._core.order import OrderRegistry, categorical_order
 from ._compat import share_axis, get_legend_handles
 from . import utils
 from .utils import (
@@ -21,7 +22,6 @@ from .utils import (
     _disable_autolayout
 )
 from .palettes import color_palette, blend_palette
-from .rcmod import _apply_theme_context
 from ._docstrings import (
     DocstringComponents,
     _core_docs,
@@ -377,17 +377,53 @@ class FacetGrid(Grid):
         dropna=False, legend_out=True, despine=True,
         margin_titles=False, xlim=None, ylim=None, subplot_kws=None,
         gridspec_kws=None,
+        order_registry: OrderRegistry | None = None,
     ):
 
         super().__init__()
         data = handle_data_source(data)
+
+        # Initialize the order registry for managing variable orders
+        var_names = {}
+        if hue is not None:
+            var_names["hue"] = hue
+        if row is not None:
+            var_names["row"] = row
+        if col is not None:
+            var_names["col"] = col
+
+        if order_registry is None:
+            self._order_registry = OrderRegistry(data=data, var_names=var_names)
+            # Register variables with their user-specified orders
+            if hue is not None:
+                self._order_registry.register("hue", order=hue_order)
+            if row is not None:
+                self._order_registry.register("row", order=row_order)
+            if col is not None:
+                self._order_registry.register("col", order=col_order)
+        else:
+            self._order_registry = order_registry
+            # Register faceting variables with explicit data vectors
+            # to avoid clobbering the registry's data reference
+            if hue is not None:
+                self._order_registry.register(
+                    "hue", order=hue_order, data=data[hue]
+                )
+            if row is not None:
+                self._order_registry.register(
+                    "row", order=row_order, data=data[row]
+                )
+            if col is not None:
+                self._order_registry.register(
+                    "col", order=col_order, data=data[col]
+                )
 
         # Determine the hue facet layer information
         hue_var = hue
         if hue is None:
             hue_names = None
         else:
-            hue_names = categorical_order(data[hue], hue_order)
+            hue_names = self._order_registry.get("hue")
 
         colors = self._get_palette(data, hue, hue_order, palette)
 
@@ -395,12 +431,12 @@ class FacetGrid(Grid):
         if row is None:
             row_names = []
         else:
-            row_names = categorical_order(data[row], row_order)
+            row_names = self._order_registry.get("row")
 
         if col is None:
             col_names = []
         else:
-            col_names = categorical_order(data[col], col_order)
+            col_names = self._order_registry.get("col")
 
         # Additional dict of kwarg -> list of values for mapping the hue var
         hue_kws = hue_kws if hue_kws is not None else {}
@@ -2015,25 +2051,6 @@ def pairplot(
     kind="scatter", diag_kind="auto", markers=None,
     height=2.5, aspect=1, corner=False, dropna=False,
     plot_kws=None, diag_kws=None, grid_kws=None, size=None,
-    profile=None,
-):
-    return _apply_theme_context(
-        profile, _pairplot_impl,
-        data=data, hue=hue, hue_order=hue_order, palette=palette,
-        vars=vars, x_vars=x_vars, y_vars=y_vars, kind=kind,
-        diag_kind=diag_kind, markers=markers, height=height,
-        aspect=aspect, corner=corner, dropna=dropna, plot_kws=plot_kws,
-        diag_kws=diag_kws, grid_kws=grid_kws, size=size,
-    )
-
-
-def _pairplot_impl(
-    data, *,
-    hue=None, hue_order=None, palette=None,
-    vars=None, x_vars=None, y_vars=None,
-    kind="scatter", diag_kind="auto", markers=None,
-    height=2.5, aspect=1, corner=False, dropna=False,
-    plot_kws=None, diag_kws=None, grid_kws=None, size=None,
 ):
     """Plot pairwise relationships in a dataset.
 
@@ -2202,25 +2219,6 @@ def _pairplot_impl(
 
 
 def jointplot(
-    data=None, *, x=None, y=None, hue=None, kind="scatter",
-    height=6, ratio=5, space=.2, dropna=False, xlim=None, ylim=None,
-    color=None, palette=None, hue_order=None, hue_norm=None, marginal_ticks=False,
-    joint_kws=None, marginal_kws=None,
-    profile=None,
-    **kwargs
-):
-    return _apply_theme_context(
-        profile, _jointplot_impl,
-        data=data, x=x, y=y, hue=hue, kind=kind, height=height,
-        ratio=ratio, space=space, dropna=dropna, xlim=xlim, ylim=ylim,
-        color=color, palette=palette, hue_order=hue_order,
-        hue_norm=hue_norm, marginal_ticks=marginal_ticks,
-        joint_kws=joint_kws, marginal_kws=marginal_kws,
-        **kwargs,
-    )
-
-
-def _jointplot_impl(
     data=None, *, x=None, y=None, hue=None, kind="scatter",
     height=6, ratio=5, space=.2, dropna=False, xlim=None, ylim=None,
     color=None, palette=None, hue_order=None, hue_norm=None, marginal_ticks=False,

@@ -12,6 +12,7 @@ import pandas as pd
 import matplotlib as mpl
 
 from seaborn._core.data import PlotData
+from seaborn._core.order import OrderRegistry, categorical_order
 from seaborn.palettes import (
     QUAL_PALETTES,
     color_palette,
@@ -633,6 +634,10 @@ class VectorPlotter:
         self._var_ordered = {"x": False, "y": False}  # alt., used DefaultDict
         self.assign_variables(data, variables)
 
+        self._order_registry = OrderRegistry(
+            data=self.plot_data,
+        )
+
         # TODO Lots of tests assume that these are called to initialize the
         # mappings to default values on class initialization. I'd prefer to
         # move away from that and only have a mapping when explicitly called.
@@ -661,6 +666,8 @@ class VectorPlotter:
         for var in self.variables:
             if (map_obj := getattr(self, f"_{var}_map", None)) is not None:
                 self._var_levels[var] = map_obj.levels
+            elif var in self._order_registry:
+                self._var_levels[var] = self._order_registry.get(var)
         return self._var_levels
 
     def assign_variables(self, data=None, variables={}):
@@ -689,6 +696,9 @@ class VectorPlotter:
             )
             for v in names
         }
+
+        if hasattr(self, '_order_registry'):
+            self._order_registry.update_data(frame)
 
         return self
 
@@ -834,15 +844,21 @@ class VectorPlotter:
         return plot_data, variables
 
     def map_hue(self, palette=None, order=None, norm=None, saturation=1):
-        mapping = HueMapping(self, palette, order, norm, saturation)
+        self._order_registry.register("hue", order=order)
+        resolved_order = self._order_registry.get("hue")
+        mapping = HueMapping(self, palette, resolved_order, norm, saturation)
         self._hue_map = mapping
 
     def map_size(self, sizes=None, order=None, norm=None):
-        mapping = SizeMapping(self, sizes, order, norm)
+        self._order_registry.register("size", order=order)
+        resolved_order = self._order_registry.get("size")
+        mapping = SizeMapping(self, sizes, resolved_order, norm)
         self._size_map = mapping
 
     def map_style(self, markers=None, dashes=None, order=None):
-        mapping = StyleMapping(self, markers, dashes, order)
+        self._order_registry.register("style", order=order)
+        resolved_order = self._order_registry.get("style")
+        mapping = StyleMapping(self, markers, dashes, resolved_order)
         self._style_map = mapping
 
     def iter_data(
@@ -1422,8 +1438,12 @@ class VectorPlotter:
         # conversion to respect the original types of the order list.
         # Track whether the order is given explicitly so that we can know
         # whether or not to use the order constructed here downstream
-        self._var_ordered[axis] = order is not None or cat_data.dtype.name == "category"
-        order = pd.Index(categorical_order(cat_data, order), name=axis)
+        self._order_registry.register(axis, order=order, data=cat_data)
+        self._var_ordered[axis] = (
+            self._order_registry.is_explicit(axis) 
+            or cat_data.dtype.name == "category"
+        )
+        order = pd.Index(self._order_registry.get(axis), name=axis)
 
         # Then convert data to strings. This is because in matplotlib,
         # "categorical" data really mean "string" data, so doing this artists
@@ -1435,6 +1455,9 @@ class VectorPlotter:
         else:
             cat_data = cat_data.astype(str)
             order = order.astype(str)
+
+        # Update the registry with the type-converted order
+        self._order_registry.update_resolved(axis, list(order))
 
         # Update the levels list with the type-converted order variable
         self.var_levels[axis] = order
