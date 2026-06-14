@@ -9,6 +9,7 @@ from matplotlib.cbook import normalize_kwargs
 
 from ._base import (
     VectorPlotter,
+    _FacetGridBuilder,
 )
 from .utils import (
     adjust_legend_subtitles,
@@ -724,15 +725,6 @@ def relplot(
         err = f"Plot kind {kind} not recognized"
         raise ValueError(err)
 
-    # Check for attempt to plot onto specific axes and warn
-    if "ax" in kwargs:
-        msg = (
-            "relplot is a figure-level function and does not accept "
-            "the `ax` parameter. You may wish to try {}".format(kind + "plot")
-        )
-        warnings.warn(msg, UserWarning)
-        kwargs.pop("ax")
-
     # Use the full dataset to map the semantics
     variables = dict(x=x, y=y, hue=hue, size=size, style=style)
     if kind == "line":
@@ -750,6 +742,12 @@ def relplot(
         variables=variables,
         legend=legend,
     )
+
+    builder = _FacetGridBuilder("relplot", plotter=p)
+
+    # Check for attempt to plot onto specific axes and warn
+    builder.check_ax(kwargs, axes_level_func=f"{kind}plot")
+
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
     p.map_size(sizes=sizes, order=size_order, norm=size_norm)
     p.map_style(markers=markers, dashes=dashes, order=style_order)
@@ -804,25 +802,18 @@ def relplot(
     p.assign_variables(data, grid_variables)
 
     # Register faceting variables with the order registry
-    if row is not None:
-        p._order_registry.register("row", order=row_order)
-    if col is not None:
-        p._order_registry.register("col", order=col_order)
+    builder.normalize_facet_vars(row=row, col=col, row_order=row_order, col_order=col_order)
 
     # Define the named variables for plotting on each facet
     # Rename the variables with a leading underscore to avoid
     # collisions with faceting variable names
-    plot_variables = {v: f"_{v}" for v in variables}
-    if "weight" in plot_variables:
-        plot_variables["weights"] = plot_variables.pop("weight")
+    plot_variables = builder.setup_plot_variables_for_map(
+        variables, variable_renames={"weight": "weights"}
+    )
     plot_kws.update(plot_variables)
 
     # Pass the row/col variables to FacetGrid with their original
     # names so that the axes titles render correctly
-    for var in ["row", "col"]:
-        # Handle faceting variables that lack name information
-        if var in p.variables and p.variables[var] is None:
-            p.variables[var] = f"_{var}_"
     grid_kws = {v: p.variables.get(v) for v in ["row", "col"]}
 
     # Rename the columns of the plot_data structure appropriately
@@ -831,22 +822,29 @@ def relplot(
     full_data = p.plot_data.rename(columns=new_cols)
 
     # Set up the FacetGrid object, sharing the order registry
-    facet_kws = {} if facet_kws is None else facet_kws.copy()
-    g = FacetGrid(
+    builder.init_facet_grid(
         data=full_data.dropna(axis=1, how="all"),
-        **grid_kws,
-        col_wrap=col_wrap, row_order=row_order, col_order=col_order,
-        height=height, aspect=aspect, dropna=False,
-        order_registry=p._order_registry,
-        **facet_kws
+        row=grid_kws["row"],
+        col=grid_kws["col"],
+        col_wrap=col_wrap,
+        row_order=row_order,
+        col_order=col_order,
+        height=height,
+        aspect=aspect,
+        dropna=False,
+        facet_kws=facet_kws,
     )
+    g = builder.g
 
     # Draw the plot
     g.map_dataframe(func, **plot_kws)
 
     # Label the axes, using the original variables
     # Pass "" when the variable name is None to overwrite internal variables
-    g.set_axis_labels(variables.get("x") or "", variables.get("y") or "")
+    builder.set_axis_labels(
+        x_var=variables.get("x") or "",
+        y_var=variables.get("y") or "",
+    )
 
     if legend:
         # Replace the original plot data so the legend uses numeric data with
@@ -879,29 +877,11 @@ def relplot(
         elif kind == "line":
             attrs["size"] = "linewidth"
         p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
-        if p.legend_data:
-            g.add_legend(legend_data=p.legend_data,
-                         label_order=p.legend_order,
-                         title=p.legend_title,
-                         adjust_subtitles=True)
+        builder.add_legend_from_plotter(adjust_subtitles=True)
 
     # Rename the columns of the FacetGrid's `data` attribute
-    # to match the original column names
-    orig_cols = {
-        f"_{k}": f"_{k}_" if v is None else v for k, v in variables.items()
-    }
-    grid_data = g.data.rename(columns=orig_cols)
-    if data is not None and (x is not None or y is not None):
-        if not isinstance(data, pd.DataFrame):
-            data = pd.DataFrame(data)
-        g.data = pd.merge(
-            data,
-            grid_data[grid_data.columns.difference(data.columns)],
-            left_index=True,
-            right_index=True,
-        )
-    else:
-        g.data = grid_data
+    # to match the original column names and merge with original data
+    builder.finalize_data(original_data=data, x=x, y=y, variables=variables)
 
     return g
 

@@ -14,7 +14,7 @@ from matplotlib.cbook import normalize_kwargs
 from matplotlib.colors import to_rgba
 from matplotlib.collections import LineCollection
 
-from ._base import VectorPlotter
+from ._base import VectorPlotter, _FacetGridBuilder
 
 # We have moved univariate histogram computation over to the new Hist class,
 # but still use the older Histogram for bivariate computation.
@@ -2165,50 +2165,35 @@ def displot(
         variables=dict(x=x, y=y, hue=hue, weights=weights, row=row, col=col),
     )
 
+    builder = _FacetGridBuilder("displot", plotter=p)
+
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
 
     _check_argument("kind", ["hist", "kde", "ecdf"], kind)
 
     # --- Initialize the FacetGrid object
 
-    # Check for attempt to plot onto specific axes and warn
-    if "ax" in kwargs:
-        msg = (
-            "`displot` is a figure-level function and does not accept "
-            "the ax= parameter. You may wish to try {}plot.".format(kind)
-        )
-        warnings.warn(msg, UserWarning)
-        kwargs.pop("ax")
+    builder.check_ax(kwargs, axes_level_func=f"{kind}plot")
 
-    for var in ["row", "col"]:
-        # Handle faceting variables that lack name information
-        if var in p.variables and p.variables[var] is None:
-            p.variables[var] = f"_{var}_"
+    builder.normalize_facet_vars(row=row, col=col, row_order=row_order, col_order=col_order)
 
-    # Register faceting variables with the order registry
-    if row is not None:
-        p._order_registry.register("row", order=row_order)
-    if col is not None:
-        p._order_registry.register("col", order=col_order)
-
-    # Adapt the plot_data dataframe for use with FacetGrid
-    grid_data = p.plot_data.rename(columns=p.variables)
-    grid_data = grid_data.loc[:, ~grid_data.columns.duplicated()]
+    grid_data = builder.prepare_grid_data()
 
     col_name = p.variables.get("col")
     row_name = p.variables.get("row")
 
-    if facet_kws is None:
-        facet_kws = {}
-
-    g = FacetGrid(
-        data=grid_data, row=row_name, col=col_name,
-        col_wrap=col_wrap, row_order=row_order,
-        col_order=col_order, height=height,
+    builder.init_facet_grid(
+        data=grid_data,
+        row=row_name,
+        col=col_name,
+        col_wrap=col_wrap,
+        row_order=row_order,
+        col_order=col_order,
+        height=height,
         aspect=aspect,
-        order_registry=p._order_registry,
-        **facet_kws,
+        facet_kws=facet_kws,
     )
+    g = builder.g
 
     # Now attach the axes object to the plotter object
     if kind == "kde":
@@ -2320,33 +2305,16 @@ def displot(
 
     # Call FacetGrid annotation methods
     # Note that the legend is currently set inside the plotting method
-    g.set_axis_labels(
+    builder.set_axis_labels(
         x_var=p.variables.get("x", g.axes.flat[0].get_xlabel()),
         y_var=p.variables.get("y", g.axes.flat[0].get_ylabel()),
     )
-    g.set_titles()
-    g.tight_layout()
+    builder.finalize_layout()
 
-    if data is not None and (x is not None or y is not None):
-        if not isinstance(data, pd.DataFrame):
-            data = pd.DataFrame(data)
-        g.data = pd.merge(
-            data,
-            g.data[g.data.columns.difference(data.columns)],
-            left_index=True,
-            right_index=True,
-        )
-    else:
-        wide_cols = {
-            k: f"_{k}_" if v is None else v for k, v in p.variables.items()
-        }
-        g.data = p.plot_data.rename(columns=wide_cols)
+    builder.finalize_data(original_data=data, x=x, y=y, variables=p.variables)
 
     # Attach diagnostic information to the returned FacetGrid
-    if hasattr(p, "diagnostics_"):
-        g.diagnostics_ = p.diagnostics_
-    if hasattr(p, "_hist_estimator"):
-        g._hist_estimator = p._hist_estimator
+    builder.attach_plotter_attrs("diagnostics_", "_hist_estimator")
 
     return g
 

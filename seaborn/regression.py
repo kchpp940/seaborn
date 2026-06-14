@@ -17,6 +17,7 @@ except ImportError:
 from . import utils
 from . import algorithms as algo
 from .axisgrid import FacetGrid, _facet_docs
+from ._base import _FacetGridBuilder
 
 
 __all__ = ["lmplot", "regplot", "residplot"]
@@ -590,6 +591,8 @@ def lmplot(
     line_kws=None, facet_kws=None,
 ):
 
+    builder = _FacetGridBuilder("lmplot")
+
     if facet_kws is None:
         facet_kws = {}
 
@@ -609,22 +612,26 @@ def lmplot(
     if data is None:
         raise TypeError("Missing required keyword argument `data`.")
 
-    # Reduce the dataframe to only needed columns
     need_cols = [x, y, hue, col, row, units, x_partial, y_partial]
     cols = np.unique([a for a in need_cols if a is not None]).tolist()
     data = data[cols]
 
-    # Initialize the grid
-    facets = FacetGrid(
-        data, row=row, col=col, hue=hue,
+    builder.init_facet_grid(
+        data=data,
+        row=row,
+        col=col,
+        col_wrap=col_wrap,
+        row_order=row_order,
+        col_order=col_order,
+        height=height,
+        aspect=aspect,
+        facet_kws=facet_kws,
+        hue=hue,
         palette=palette,
-        row_order=row_order, col_order=col_order, hue_order=hue_order,
-        height=height, aspect=aspect, col_wrap=col_wrap,
-        **facet_kws,
+        hue_order=hue_order,
     )
+    facets = builder.g
 
-    # Add the markers here as FacetGrid has figured out how many levels of the
-    # hue variable are needed and we don't want to duplicate that process
     if facets.hue_names is None:
         n_markers = 1
     else:
@@ -643,7 +650,6 @@ def lmplot(
 
     facets.map_dataframe(update_datalim, x=x, y=y)
 
-    # Draw the regression plot on each facet
     regplot_kws = dict(
         x_estimator=x_estimator, x_bins=x_bins, x_ci=x_ci,
         scatter=scatter, fit_reg=fit_reg, ci=ci, n_boot=n_boot, units=units,
@@ -653,11 +659,14 @@ def lmplot(
         scatter_kws=scatter_kws, line_kws=line_kws,
     )
     facets.map_dataframe(regplot, x=x, y=y, **regplot_kws)
-    facets.set_axis_labels(x, y)
 
-    # Add a legend
+    builder.set_axis_labels(x_var=x, y_var=y)
+
     if legend and (hue is not None) and (hue not in [col, row]):
         facets.add_legend()
+
+    builder.finalize_data(original_data=data)
+
     return facets
 
 

@@ -15,7 +15,7 @@ from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
 
 from seaborn._core.typing import default, deprecated
-from seaborn._base import VectorPlotter, infer_orient
+from seaborn._base import VectorPlotter, infer_orient, _FacetGridBuilder
 from seaborn._stats.density import KDE
 from seaborn import utils
 from seaborn.utils import (
@@ -2770,13 +2770,6 @@ def catplot(
     margin_titles=False, facet_kws=None, ci=deprecated, **kwargs
 ):
 
-    # Check for attempt to plot onto specific axes and warn
-    if "ax" in kwargs:
-        msg = ("catplot is a figure-level function and does not accept "
-               f"target axes. You may wish to try {kind}plot")
-        warnings.warn(msg, UserWarning)
-        kwargs.pop("ax")
-
     desaturated_kinds = ["bar", "count", "box", "violin", "boxen"]
     undodged_kinds = ["strip", "swarm", "point"]
 
@@ -2808,35 +2801,34 @@ def catplot(
         legend=legend,
     )
 
-    for var in ["row", "col"]:
-        # Handle faceting variables that lack name information
-        if var in p.variables and p.variables[var] is None:
-            p.variables[var] = f"_{var}_"
+    builder = _FacetGridBuilder("catplot", plotter=p)
 
-    # Register faceting variables with the order registry
-    if row is not None:
-        p._order_registry.register("row", order=row_order)
-    if col is not None:
-        p._order_registry.register("col", order=col_order)
+    # Check for attempt to plot onto specific axes and warn
+    builder.check_ax(kwargs, axes_level_func=f"{kind}plot", backtick_name=False)
 
-    # Adapt the plot_data dataframe for use with FacetGrid
-    facet_data = p.plot_data.rename(columns=p.variables)
-    facet_data = facet_data.loc[:, ~facet_data.columns.duplicated()]
+    builder.normalize_facet_vars(row=row, col=col, row_order=row_order, col_order=col_order)
+
+    facet_data = builder.prepare_grid_data()
 
     col_name = p.variables.get("col", None)
     row_name = p.variables.get("row", None)
 
-    if facet_kws is None:
-        facet_kws = {}
-
-    g = FacetGrid(
-        data=facet_data, row=row_name, col=col_name, col_wrap=col_wrap,
-        row_order=row_order, col_order=col_order, sharex=sharex, sharey=sharey,
-        legend_out=legend_out, margin_titles=margin_titles,
-        height=height, aspect=aspect,
-        order_registry=p._order_registry,
-        **facet_kws,
+    builder.init_facet_grid(
+        data=facet_data,
+        row=row_name,
+        col=col_name,
+        col_wrap=col_wrap,
+        row_order=row_order,
+        col_order=col_order,
+        height=height,
+        aspect=aspect,
+        facet_kws=facet_kws,
+        sharex=sharex,
+        sharey=sharey,
+        legend_out=legend_out,
+        margin_titles=margin_titles,
     )
+    g = builder.g
 
     # Capture this here because scale_categorical is going to insert a (null)
     # x variable even if it is empty. It's not clear whether that needs to
@@ -3135,24 +3127,23 @@ def catplot(
     for ax in g.axes.flat:
         p._adjust_cat_axis(ax, axis=p.orient)
 
-    g.set_axis_labels(p.variables.get("x"), p.variables.get("y"))
-    g.set_titles()
-    g.tight_layout()
+    builder.set_axis_labels()
 
-    for ax in g.axes.flat:
-        g._update_legend_data(ax)
-        ax.legend_ = None
+    builder.finalize_layout()
 
+    # Collect legend from individual axes
+    legend_title = p.variables.get("hue")
     if legend == "auto":
         show_legend = not p._redundant_hue and p.input_format != "wide"
     else:
         show_legend = bool(legend)
     if show_legend:
-        g.add_legend(title=p.variables.get("hue"), label_order=hue_order)
+        builder.collect_legend_from_axes(
+            legend_title=legend_title,
+            label_order=hue_order,
+        )
 
-    if data is not None:
-        # Replace the dataframe on the FacetGrid for any subsequent maps
-        g.data = data
+    builder.finalize_data(original_data=data)
 
     return g
 
