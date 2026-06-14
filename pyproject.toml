@@ -55,10 +55,35 @@ docs = [
     "pydata_sphinx_theme==0.10.0rc2",
 ]
 dev = [
-    "seaborn[test,lint,devtools]",
+    "pytest",
+    "pytest-cov",
+    "pytest-xdist",
+    "flake8",
+    "mypy~=1.10.0",
+    "pandas-stubs",
+    "pre-commit",
+    "flit",
 ]
 build = [
-    "seaborn[stats,dev,docs]",
+    "scipy>=1.7",
+    "statsmodels>=0.12",
+    "pytest",
+    "pytest-cov",
+    "pytest-xdist",
+    "flake8",
+    "mypy~=1.10.0",
+    "pandas-stubs",
+    "pre-commit",
+    "flit",
+    "numpydoc",
+    "nbconvert",
+    "ipykernel",
+    "sphinx<6.0.0",
+    "sphinx-copybutton",
+    "sphinx-issues",
+    "sphinx-design",
+    "pyyaml",
+    "pydata_sphinx_theme==0.10.0rc2",
 ]
 
 [project.urls]
