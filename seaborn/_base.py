@@ -12,7 +12,10 @@ import pandas as pd
 import matplotlib as mpl
 
 from seaborn._core.data import PlotData
-from seaborn._core.order import OrderRegistry, categorical_order
+from seaborn._core.order import (
+    OrderRegistry,
+    categorical_order as _categorical_order_impl,
+)
 from seaborn.palettes import (
     QUAL_PALETTES,
     color_palette,
@@ -120,6 +123,9 @@ class HueMapping(SemanticMapping):
             warnings.warn(msg, stacklevel=4)
             palette = palette.tolist()
 
+        if order is None and hasattr(plotter, '_order_registry') and "hue" in plotter.variables:
+            order = plotter._order_registry.get("hue")
+
         if data.isna().all():
             if palette is not None:
                 msg = "Ignoring `palette` because no `hue` variable has been assigned."
@@ -222,7 +228,10 @@ class HueMapping(SemanticMapping):
         """Determine colors when the hue mapping is categorical."""
         # -- Identify the order and name of the levels
 
-        levels = categorical_order(data, order)
+        if order is not None:
+            levels = list(order)
+        else:
+            levels = _categorical_order_impl(data, order)
         n_colors = len(levels)
 
         # -- Identify the set of colors to use
@@ -315,6 +324,9 @@ class SizeMapping(SemanticMapping):
 
         data = plotter.plot_data.get("size", pd.Series(dtype=float))
 
+        if order is None and hasattr(plotter, '_order_registry') and "size" in plotter.variables:
+            order = plotter._order_registry.get("size")
+
         if data.notna().any():
 
             map_type = self.infer_map_type(
@@ -381,7 +393,10 @@ class SizeMapping(SemanticMapping):
 
     def categorical_mapping(self, data, sizes, order):
 
-        levels = categorical_order(data, order)
+        if order is not None:
+            levels = list(order)
+        else:
+            levels = _categorical_order_impl(data, order)
 
         if isinstance(sizes, dict):
 
@@ -535,6 +550,9 @@ class StyleMapping(SemanticMapping):
 
         data = plotter.plot_data.get("style", pd.Series(dtype=float))
 
+        if order is None and hasattr(plotter, '_order_registry') and "style" in plotter.variables:
+            order = plotter._order_registry.get("style")
+
         if data.notna().any():
 
             # Cast to list to handle numpy/pandas datetime quirks
@@ -542,7 +560,10 @@ class StyleMapping(SemanticMapping):
                 data = list(data)
 
             # Find ordered unique values
-            levels = categorical_order(data, order)
+            if order is not None:
+                levels = list(order)
+            else:
+                levels = _categorical_order_impl(data, order)
 
             markers = self._map_attributes(
                 markers, levels, unique_markers(len(levels)), "markers",
@@ -1067,8 +1088,10 @@ class VectorPlotter:
             self.facets = obj
             ax_list = obj.axes.flatten()
             if obj.col_names is not None:
+                self._order_registry.update_resolved("col", list(obj.col_names))
                 self.var_levels["col"] = obj.col_names
             if obj.row_names is not None:
+                self._order_registry.update_resolved("row", list(obj.row_names))
                 self.var_levels["row"] = obj.row_names
         else:
             self.ax = obj
@@ -1142,11 +1165,19 @@ class VectorPlotter:
             grouped = self.plot_data[var].groupby(self.converters[var], sort=False)
             for converter, seed_data in grouped:
                 if self.var_types[var] == "categorical":
-                    if self._var_ordered[var]:
-                        order = self.var_levels[var]
+                    use_global_order = (
+                        hasattr(self, '_order_registry')
+                        and var in self.variables
+                        and self._order_registry.is_explicit(var)
+                    ) or self._var_ordered[var]
+                    if use_global_order:
+                        if hasattr(self, '_order_registry') and var in self.variables:
+                            order = self._order_registry.get(var)
+                        else:
+                            order = self.var_levels.get(var, [])
+                        seed_data = list(order) if order else []
                     else:
-                        order = None
-                    seed_data = categorical_order(seed_data, order)
+                        seed_data = _categorical_order_impl(seed_data)
                 converter.update_units(seed_data)
 
         # -- Set numerical axis scales
@@ -1781,19 +1812,9 @@ def categorical_order(vector, order=None):
     order : list
         Ordered list of category levels not including null values.
 
+    Notes
+    -----
+    This is a backward-compatible wrapper around
+    :func:`seaborn._core.order.categorical_order`.
     """
-    if order is None:
-        if hasattr(vector, "categories"):
-            order = vector.categories
-        else:
-            try:
-                order = vector.cat.categories
-            except (TypeError, AttributeError):
-
-                order = pd.Series(vector).unique()
-
-                if variable_type(vector) == "numeric":
-                    order = np.sort(order)
-
-        order = filter(pd.notnull, order)
-    return list(order)
+    return _categorical_order_impl(vector, order)

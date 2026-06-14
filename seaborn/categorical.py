@@ -16,7 +16,6 @@ import matplotlib.pyplot as plt
 
 from seaborn._core.typing import default, deprecated
 from seaborn._base import VectorPlotter, infer_orient
-from seaborn._core.order import categorical_order
 from seaborn._stats.density import KDE
 from seaborn import utils
 from seaborn.utils import (
@@ -129,7 +128,8 @@ class _CategoricalPlotter(VectorPlotter):
             self.plot_data[self.orient] = ""
 
         # Categorical variables have discrete levels that we need to track
-        cat_levels = categorical_order(self.plot_data[self.orient], order)
+        self._order_registry.register(self.orient, order=order, data=self.plot_data[self.orient])
+        cat_levels = self._order_registry.get(self.orient)
         self.var_levels[self.orient] = cat_levels
 
     def _hue_backcompat(self, color, palette, hue_order, force_hue=False):

@@ -253,7 +253,7 @@ class Grid(_BaseGrid):
             palette = color_palette(n_colors=1)
 
         else:
-            hue_names = categorical_order(data[hue], hue_order)
+            hue_names = self._order_registry.get("hue")
             n_colors = len(hue_names)
 
             # By default use either the current color palette or HUSL
@@ -1346,6 +1346,12 @@ class PairGrid(Grid):
         # Label the axes
         self._add_axis_labels()
 
+        # Initialize order registry for consistent order resolution
+        self._order_registry = OrderRegistry(
+            data=data,
+            var_names={"hue": hue} if hue is not None else {},
+        )
+
         # Sort out the hue variable
         self._hue_var = hue
         if hue is None:
@@ -1353,15 +1359,9 @@ class PairGrid(Grid):
             self.hue_vals = pd.Series(["_nolegend_"] * len(data),
                                       index=data.index)
         else:
-            # We need hue_order and hue_names because the former is used to control
-            # the order of drawing and the latter is used to control the order of
-            # the legend. hue_names can become string-typed while hue_order must
-            # retain the type of the input data. This is messy but results from
-            # the fact that PairGrid can implement the hue-mapping logic itself
-            # (and was originally written exclusively that way) but now can delegate
-            # to the axes-level functions, while always handling legend creation.
-            # See GH2307
-            hue_names = hue_order = categorical_order(data[hue], hue_order)
+            self._order_registry.register("hue", order=hue_order)
+            hue_order = self._order_registry.get("hue")
+            hue_names = list(hue_order)
             if dropna:
                 # Filter NA from the list of unique hue names
                 hue_names = list(filter(pd.notnull, hue_names))

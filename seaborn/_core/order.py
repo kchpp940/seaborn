@@ -287,7 +287,7 @@ class OrderRegistry:
         return f"OrderRegistry({', '.join(entries)})"
 
 
-def categorical_order(vector: Series, order: list | None = None) -> list:
+def categorical_order(vector, order=None):
     """
     Return a list of unique data values using seaborn's ordering rules.
 
@@ -296,7 +296,7 @@ def categorical_order(vector: Series, order: list | None = None) -> list:
 
     Parameters
     ----------
-    vector : Series
+    vector : list, array, Categorical, or Series
         Vector of "categorical" values.
     order : list, optional
         Desired order of category levels to override the order determined
@@ -310,11 +310,17 @@ def categorical_order(vector: Series, order: list | None = None) -> list:
     if order is not None:
         return list(order)
 
-    if vector.dtype.name == "category":
-        order = list(vector.cat.categories)
+    if hasattr(vector, "categories"):
+        order = vector.categories
     else:
-        order = list(filter(pd.notnull, vector.unique()))
-        if variable_type(pd.Series(order)) == "numeric":
-            order.sort()
+        try:
+            order = vector.cat.categories
+        except (TypeError, AttributeError):
 
+            order = pd.Series(vector).unique()
+
+            if variable_type(pd.Series(vector)) == "numeric":
+                order = np.sort(order)
+
+        order = filter(pd.notnull, order)
     return list(order)
