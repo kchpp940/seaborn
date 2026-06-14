@@ -795,7 +795,6 @@ def relplot(
     # --- Hook: prepare grid_data (relplot custom pipeline) ---
 
     def _before_grid_data(builder):
-        # Second pass: add faceting variables to the plotter
         grid_variables = dict(
             x=x, y=y, row=row, col=col, hue=hue, size=size, style=style,
         )
@@ -803,13 +802,20 @@ def relplot(
             grid_variables.update(units=units, weights=weights)
         p.assign_variables(data, grid_variables)
 
-        # Define the named variables for plotting on each facet
+        if row is not None:
+            p._order_registry.register("row", order=row_order)
+        if col is not None:
+            p._order_registry.register("col", order=col_order)
+
+        for var in ["row", "col"]:
+            if var in p.variables and p.variables[var] is None:
+                p.variables[var] = f"_{var}_"
+
         plot_variables = {v: f"_{v}" for v in single_variables}
         if "weight" in plot_variables:
             plot_variables["weights"] = plot_variables.pop("weight")
         plot_kws.update(plot_variables)
 
-        # Row/col names for FacetGrid (also saved for init step)
         grid_kws = {v: p.variables.get(v) for v in ["row", "col"]}
         extra["grid_row"] = grid_kws["row"]
         extra["grid_col"] = grid_kws["col"]

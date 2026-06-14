@@ -2265,19 +2265,15 @@ def displot(
 
     # --- Assemble and run the pipeline ---
 
-    col_name = p.variables.get("col")
-    row_name = p.variables.get("row")
-
-    x_label = p.variables.get("x") if p.variables.get("x") else None
-    y_label = p.variables.get("y") if p.variables.get("y") else None
+    def _axis_label(var, fallback_getter):
+        val = p.variables.get(var)
+        return val if val else fallback_getter()
 
     builder = _FacetGridBuilder("displot", plotter=p)
     builder.configure(
         check_ax_opts=dict(axes_level_func=f"{kind}plot"),
         facet_opts=dict(row=row, col=col, row_order=row_order, col_order=col_order),
         grid_init_kwargs=dict(
-            row=row_name,
-            col=col_name,
             col_wrap=col_wrap,
             row_order=row_order,
             col_order=col_order,
@@ -2285,7 +2281,10 @@ def displot(
             aspect=aspect,
             facet_kws=facet_kws,
         ),
-        axis_label_opts=dict(x_var=x_label, y_var=y_label),
+        axis_label_opts=dict(
+            x_var=lambda: _axis_label("x", lambda: builder.g.axes.flat[0].get_xlabel()),
+            y_var=lambda: _axis_label("y", lambda: builder.g.axes.flat[0].get_ylabel()),
+        ),
         data_opts=dict(original_data=data, x=x, y=y, variables=p.variables),
         attach_plotter_attrs=("diagnostics_", "_hist_estimator"),
         on_draw=_draw,

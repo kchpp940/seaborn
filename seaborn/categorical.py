@@ -2799,11 +2799,6 @@ def catplot(
         legend=legend,
     )
 
-    col_name = p.variables.get("col", None)
-    row_name = p.variables.get("row", None)
-
-    # These will be mutated by the drawing callback so the legend predicate
-    # and options can close over the final values.
     state = dict(hue_order=hue_order)
 
     # --- Plot-specific drawing callback ---
@@ -3117,8 +3112,6 @@ def catplot(
         check_ax_opts=dict(axes_level_func=f"{kind}plot", backtick_name=False),
         facet_opts=dict(row=row, col=col, row_order=row_order, col_order=col_order),
         grid_init_kwargs=dict(
-            row=row_name,
-            col=col_name,
             col_wrap=col_wrap,
             row_order=row_order,
             col_order=col_order,
@@ -3129,6 +3122,10 @@ def catplot(
             sharey=sharey,
             legend_out=legend_out,
             margin_titles=margin_titles,
+        ),
+        axis_label_opts=dict(
+            x_var=lambda: p.variables.get("x"),
+            y_var=lambda: p.variables.get("y"),
         ),
         legend_strategy="axes",
         legend_opts=dict(

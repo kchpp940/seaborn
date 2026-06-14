@@ -1833,14 +1833,15 @@ class _FacetGridBuilder:
     Pipeline stages (in order):
         1.  check_ax          – warn if `ax` kwarg is passed
         2.  normalize_facet_vars – handle anonymous faceting variables
-        3.  prepare_grid_data – build the dataframe passed to FacetGrid
-        4.  init_facet_grid   – instantiate the FacetGrid
-        5.  on_draw (hook)    – function-specific plotting callback
-        6.  set_axis_labels
-        7.  finalize_layout
-        8.  handle_legend     – driven by ``legend_strategy``
-        9.  finalize_data     – merge grid data back with original input
-        10. attach_attributes – copy plotter / extra attributes onto FacetGrid
+        3.  resolve_facet_names – backfill row/col names from plotter.variables
+        4.  prepare_grid_data – build the dataframe passed to FacetGrid
+        5.  init_facet_grid   – instantiate the FacetGrid
+        6.  on_draw (hook)    – function-specific plotting callback
+        7.  set_axis_labels
+        8.  finalize_layout
+        9.  handle_legend     – driven by ``legend_strategy``
+        10. finalize_data     – merge grid data back with original input
+        11. attach_attributes – copy plotter / extra attributes onto FacetGrid
 
     Hooks that a caller may set (all optional unless marked required):
         ``on_draw``            (callable, required) – receives ``(builder,)`` and
@@ -2020,6 +2021,14 @@ class _FacetGridBuilder:
 
         return grid_data
 
+    def _resolve_facet_names(self):
+        if self.plotter is None:
+            return
+        for var in ("row", "col"):
+            if var in self.plotter.variables:
+                if var not in self._grid_init_kwargs or self._grid_init_kwargs[var] is None:
+                    self._grid_init_kwargs[var] = self.plotter.variables[var]
+
     def _init_facet_grid(self, grid_data):
         from seaborn.axisgrid import FacetGrid
 
@@ -2032,13 +2041,8 @@ class _FacetGridBuilder:
 
         kws.setdefault("data", grid_data)
 
-        if self.plotter is not None:
-            if "order_registry" not in kws:
-                kws["order_registry"] = self.plotter._order_registry
-            if kws.get("row") is None and "row" in self.plotter.variables:
-                kws["row"] = self.plotter.variables["row"]
-            if kws.get("col") is None and "col" in self.plotter.variables:
-                kws["col"] = self.plotter.variables["col"]
+        if self.plotter is not None and "order_registry" not in kws:
+            kws["order_registry"] = self.plotter._order_registry
 
         kws.update(facet_kws)
 
@@ -2048,14 +2052,11 @@ class _FacetGridBuilder:
     def _set_axis_labels(self):
         x_var = self._axis_label_opts.get("x_var")
         y_var = self._axis_label_opts.get("y_var")
-
-        if self.plotter is not None:
-            if x_var is None:
-                x_var = self.plotter.variables.get("x", "")
-            if y_var is None:
-                y_var = self.plotter.variables.get("y", "")
-
-        self.g.set_axis_labels(x_var or "", y_var or "")
+        if callable(x_var):
+            x_var = x_var()
+        if callable(y_var):
+            y_var = y_var()
+        self.g.set_axis_labels(x_var=x_var, y_var=y_var)
 
     def _finalize_layout(self):
         self.g.set_titles()
@@ -2178,6 +2179,7 @@ class _FacetGridBuilder:
 
         self._check_ax(kwargs)
         self._normalize_facet_vars()
+        self._resolve_facet_names()
 
         grid_data = self._prepare_grid_data()
         self._init_facet_grid(grid_data)
