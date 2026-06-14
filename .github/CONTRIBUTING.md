@@ -52,6 +52,36 @@ commands, so you can run ``make install-test``, ``make install-dev``,
 ``pip install`` lines. After installation, run ``make check-deps`` at any time
 to verify that the composition extras are still internally consistent.
 
+Maintaining the dependency extras
+---------------------------------
+
+The extras in ``pyproject.toml`` follow a **single-source-of-truth** rule:
+
+- **Atomic extras** (``stats``, ``test``, ``lint``, ``devtools``, ``docs``)
+  are hand-edited. Add, remove, or update packages *only* in these sections.
+- **Composition extras** (``dev``, ``build``) are **generated** — they are
+  expanded copies of their atomic components. *Do not edit them by hand.*
+
+After you modify an atomic extra, sync the composition extras with::
+
+    make fix-deps
+
+Or directly::
+
+    python3 ci/check_extras_consistency.py --fix
+
+Two levels of verification guard against drift:
+
+1. ``make check-deps`` — fast text-level check that verifies composition
+   extras match the union of their atomic components.
+2. ``make check-deps-wheel`` — builds a real wheel and inspects its
+   ``METADATA`` to ensure no self-references (``seaborn[...]``) leak into the
+   published package, and that every extra declared in ``pyproject.toml``
+   actually appears in the built wheel with the correct packages.
+
+Both checks run in CI on every PR. If the lint job fails with an extras
+consistency error, run ``make fix-deps`` locally and commit the result.
+
 Reporting bugs
 --------------
 

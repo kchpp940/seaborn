@@ -113,6 +113,9 @@ jobs:
       - name: Extras consistency
         run: python3 ci/check_extras_consistency.py
 
+      - name: Wheel metadata check
+        run: python3 ci/check_extras_consistency.py --check-wheel
+
       - name: Flake8
         run: make lint
 

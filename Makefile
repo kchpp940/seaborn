@@ -15,6 +15,12 @@ install-all:
 check-deps:
 	python3 ci/check_extras_consistency.py
 
+check-deps-wheel:
+	python3 ci/check_extras_consistency.py --check-wheel
+
+fix-deps:
+	python3 ci/check_extras_consistency.py --fix
+
 test:
 	pytest -n auto --cov=seaborn --cov=tests --cov-config=setup.cfg tests
 

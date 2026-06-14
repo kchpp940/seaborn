@@ -108,6 +108,13 @@ task:
 - ``docs`` — Everything required to build the documentation locally
 - ``build`` — All-in-one combination of ``stats`` + ``dev`` + ``docs``
 
+> **Note for maintainers:** ``dev`` and ``build`` are *generated* composition
+> extras. Always edit the atomic extras (``stats`` / ``test`` / ``lint`` /
+> ``devtools`` / ``docs``) and then run ``make fix-deps`` (or
+> ``python3 ci/check_extras_consistency.py --fix``) to regenerate the
+> composition lists. CI runs both a text-level consistency check and a
+> wheel-metadata check to ensure no self-references or drift slip through.
+
 For most contributors, ``pip install -e .[build]`` (editable install with the
 ``build`` extra) gives you everything needed to run tests, lint code, and build
 documentation. See [`CONTRIBUTING.md`](.github/CONTRIBUTING.md) for more
