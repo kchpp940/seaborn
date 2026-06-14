@@ -688,7 +688,11 @@ class VectorPlotter:
             if (map_obj := getattr(self, f"_{var}_map", None)) is not None:
                 self._var_levels[var] = map_obj.levels
             elif var in self._order_registry:
-                self._var_levels[var] = self._order_registry.get(var)
+                if (
+                    self.var_types.get(var) == "categorical"
+                    or self._order_registry.is_explicit(var)
+                ):
+                    self._var_levels[var] = self._order_registry.get(var)
         return self._var_levels
 
     def assign_variables(self, data=None, variables={}):
@@ -1162,22 +1166,21 @@ class VectorPlotter:
             self.converters[var] = converter
 
             # Now actually update the matplotlib objects to do the conversion we want
+            use_global = (
+                self._var_ordered[var]
+                or self._order_registry.is_explicit(var)
+            )
+            global_order = self._order_registry.get(var) if var in self.variables else None
             grouped = self.plot_data[var].groupby(self.converters[var], sort=False)
             for converter, seed_data in grouped:
                 if self.var_types[var] == "categorical":
-                    use_global_order = (
-                        hasattr(self, '_order_registry')
-                        and var in self.variables
-                        and self._order_registry.is_explicit(var)
-                    ) or self._var_ordered[var]
-                    if use_global_order:
-                        if hasattr(self, '_order_registry') and var in self.variables:
-                            order = self._order_registry.get(var)
-                        else:
-                            order = self.var_levels.get(var, [])
-                        seed_data = list(order) if order else []
+                    if use_global and global_order:
+                        seed_data = list(global_order)
                     else:
-                        seed_data = _categorical_order_impl(seed_data)
+                        local_order = _categorical_order_impl(seed_data)
+                        axis_id = id(converter)
+                        self._order_registry.set_axis_scope(var, axis_id, local_order)
+                        seed_data = local_order
                 converter.update_units(seed_data)
 
         # -- Set numerical axis scales

@@ -77,6 +77,7 @@ class _CategoricalPlotter(VectorPlotter):
         # _base variable assignment, we'll want to figure out how to express that.
         if self.input_format == "wide" and orient in ["h", "y"]:
             self.plot_data = self.plot_data.rename(columns={"x": "y", "y": "x"})
+            self._order_registry.update_data(self.plot_data)
             orig_variables = set(self.variables)
             orig_x = self.variables.pop("x", None)
             orig_y = self.variables.pop("y", None)

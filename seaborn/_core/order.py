@@ -28,6 +28,19 @@ class OrderRegistry:
     col, x, y). It ensures consistency between figure-level APIs, FacetGrid,
     VectorPlotter, legend generation, and categorical axis ticks.
 
+    The registry maintains two layers of order information:
+
+    - **Global resolved order**: The canonical order for each variable, used
+      by semantic mappings, legends, and row/col faceting. Every variable
+      that appears in the plot gets a global resolved order, whether or not
+      the user explicitly specified one.
+
+    - **Axis-scope order**: Per-facet overrides for categorical axis
+      variables (x, y). When ``sharex=False`` or ``sharey=False``, each
+      facet may resolve its own tick order from local data. These local
+      orders are recorded in the registry so they remain discoverable and
+      don't rely on hidden local derivations.
+
     Parameters
     ----------
     data : DataFrame
@@ -65,6 +78,7 @@ class OrderRegistry:
         self._data = data
         self._var_names = var_names or {}
         self._orders: dict[str, _OrderEntry] = {}
+        self._axis_scopes: dict[tuple[str, int], list] = {}
 
     def _get_data_vector(self, var: str) -> Series:
         """Get the data vector for a given seaborn variable name."""
@@ -262,6 +276,48 @@ class OrderRegistry:
         """
         self._var_names.update(var_names)
 
+    def set_axis_scope(self, var: str, axis_id: int, order: list) -> None:
+        """
+        Record a per-facet (axis-scope) order for a categorical axis variable.
+
+        This is used when ``sharex=False`` or ``sharey=False``: each facet
+        may resolve its own tick order from local data.  The local order is
+        stored here so it is discoverable and does not rely on hidden
+        local derivations.
+
+        Parameters
+        ----------
+        var : str
+            The seaborn variable name (typically ``"x"`` or ``"y"``).
+        axis_id : int
+            Identifier for the axis object (``id(axis)``).
+        order : list
+            The locally resolved order for this axis.
+        """
+        self._axis_scopes[(var, axis_id)] = list(order)
+
+    def get_axis_scope(self, var: str, axis_id: int) -> list | None:
+        """
+        Retrieve a previously recorded per-facet order.
+
+        Parameters
+        ----------
+        var : str
+            The seaborn variable name (typically ``"x"`` or ``"y"``).
+        axis_id : int
+            Identifier for the axis object (``id(axis)``).
+
+        Returns
+        -------
+        order : list or None
+            The locally resolved order, or ``None`` if not recorded.
+        """
+        return self._axis_scopes.get((var, axis_id))
+
+    def has_axis_scope(self, var: str, axis_id: int) -> bool:
+        """Check whether an axis-scope order has been recorded."""
+        return (var, axis_id) in self._axis_scopes
+
     def __contains__(self, var: str) -> bool:
         """Check if a variable is registered."""
         return var in self._orders
@@ -284,6 +340,9 @@ class OrderRegistry:
                 entries.append(f"{var}: {status} ({n} levels)")
             else:
                 entries.append(f"{var}: {status} (unresolved)")
+        n_scopes = len(self._axis_scopes)
+        if n_scopes:
+            entries.append(f"axis_scopes: {n_scopes}")
         return f"OrderRegistry({', '.join(entries)})"
 
 
