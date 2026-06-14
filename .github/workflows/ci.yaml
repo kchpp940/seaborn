@@ -82,9 +82,9 @@ jobs:
       - name: Install seaborn
         run: |
           pip install --upgrade pip wheel
-          if [[ ${{matrix.install}} == 'full' ]]; then EXTRAS=',stats'; fi
+          if [[ ${{matrix.install}} == 'full' ]]; then EXTRAS='dev,stats'; else EXTRAS='test'; fi
           if [[ ${{matrix.deps }} == 'pinned' ]]; then DEPS='-r ci/deps_pinned.txt'; fi
-          pip install .[dev$EXTRAS] $DEPS
+          pip install .[$EXTRAS] $DEPS
 
       - name: Run tests
         run: make test
@@ -105,8 +105,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
 
-      - name: Install tools
-        run: pip install mypy~=1.10.0 flake8
+      - name: Install seaborn with lint tools
+        run: |
+          pip install --upgrade pip
+          pip install .[lint]
 
       - name: Flake8
         run: make lint

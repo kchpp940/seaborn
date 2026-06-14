@@ -50,6 +50,34 @@ Optional dependencies
 
 - `fastcluster <https://pypi.org/project/fastcluster/>`__, faster clustering of large matrices
 
+Development dependencies
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+If you are working on seaborn itself (rather than using it as a library),
+additional tools are needed for running the test suite, checking code style,
+and building the documentation. These are all managed via ``pip`` extras defined
+in ``pyproject.toml``. Install from a local clone of the repository:
+
+.. parsed-literal::
+
+    # Full development environment (all dependencies)
+    pip install -e .[build]
+
+    # Minimal install — just the test runner
+    pip install -e .[test]
+
+Available extras for contributors:
+
+- ``stats`` — ``scipy`` and ``statsmodels`` (same as the user-facing optional extra)
+- ``test`` — ``pytest`` with coverage and parallel execution plugins
+- ``lint`` — ``flake8``, ``mypy``, and ``pandas-stubs`` for code quality checks
+- ``devtools`` — ``pre-commit`` hooks and the ``flit`` build tool
+- ``dev`` — combination of ``test`` + ``lint`` + ``devtools``
+- ``docs`` — Sphinx, nbconvert, and the theme for building these docs
+- ``build`` — the all-in-one set: ``stats`` + ``dev`` + ``docs``
+
+
+
 Quickstart
 ~~~~~~~~~~
 

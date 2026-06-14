@@ -9,7 +9,6 @@ from matplotlib.cbook import normalize_kwargs
 
 from ._base import (
     VectorPlotter,
-    _FacetGridBuilder,
 )
 from .utils import (
     adjust_legend_subtitles,
@@ -725,6 +724,15 @@ def relplot(
         err = f"Plot kind {kind} not recognized"
         raise ValueError(err)
 
+    # Check for attempt to plot onto specific axes and warn
+    if "ax" in kwargs:
+        msg = (
+            "relplot is a figure-level function and does not accept "
+            "the `ax` parameter. You may wish to try {}".format(kind + "plot")
+        )
+        warnings.warn(msg, UserWarning)
+        kwargs.pop("ax")
+
     # Use the full dataset to map the semantics
     variables = dict(x=x, y=y, hue=hue, size=size, style=style)
     if kind == "line":
@@ -742,12 +750,11 @@ def relplot(
         variables=variables,
         legend=legend,
     )
-
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
     p.map_size(sizes=sizes, order=size_order, norm=size_norm)
     p.map_style(markers=markers, dashes=dashes, order=style_order)
 
-    # Extract the semantic mappings (first pass)
+    # Extract the semantic mappings
     if "hue" in p.variables:
         palette = p._hue_map.lookup_table
         hue_order = p._hue_map.levels
@@ -773,9 +780,11 @@ def relplot(
     else:
         markers = dashes = style_order = None
 
-    single_variables = p.variables
-    single_plot_data = p.plot_data
+    # Now extract the data that would be used to draw a single plot
+    variables = p.variables
+    plot_data = p.plot_data
 
+    # Define the common plotting parameters
     plot_kws = dict(
         palette=palette, hue_order=hue_order, hue_norm=hue_norm,
         sizes=sizes, size_order=size_order, size_norm=size_norm,
@@ -786,112 +795,115 @@ def relplot(
     if kind == "scatter":
         plot_kws.pop("dashes")
 
-    # Shared state mutated by hooks
-    extra = dict(
-        grid_row=None,
-        grid_col=None,
+    # Add the grid semantics onto the plotter
+    grid_variables = dict(
+        x=x, y=y, row=row, col=col, hue=hue, size=size, style=style,
+    )
+    if kind == "line":
+        grid_variables.update(units=units, weights=weights)
+    p.assign_variables(data, grid_variables)
+
+    # Register faceting variables with the order registry
+    if row is not None:
+        p._order_registry.register("row", order=row_order)
+    if col is not None:
+        p._order_registry.register("col", order=col_order)
+
+    # Define the named variables for plotting on each facet
+    # Rename the variables with a leading underscore to avoid
+    # collisions with faceting variable names
+    plot_variables = {v: f"_{v}" for v in variables}
+    if "weight" in plot_variables:
+        plot_variables["weights"] = plot_variables.pop("weight")
+    plot_kws.update(plot_variables)
+
+    # Pass the row/col variables to FacetGrid with their original
+    # names so that the axes titles render correctly
+    for var in ["row", "col"]:
+        # Handle faceting variables that lack name information
+        if var in p.variables and p.variables[var] is None:
+            p.variables[var] = f"_{var}_"
+    grid_kws = {v: p.variables.get(v) for v in ["row", "col"]}
+
+    # Rename the columns of the plot_data structure appropriately
+    new_cols = plot_variables.copy()
+    new_cols.update(grid_kws)
+    full_data = p.plot_data.rename(columns=new_cols)
+
+    # Set up the FacetGrid object, sharing the order registry
+    facet_kws = {} if facet_kws is None else facet_kws.copy()
+    g = FacetGrid(
+        data=full_data.dropna(axis=1, how="all"),
+        **grid_kws,
+        col_wrap=col_wrap, row_order=row_order, col_order=col_order,
+        height=height, aspect=aspect, dropna=False,
+        order_registry=p._order_registry,
+        **facet_kws
     )
 
-    # --- Hook: prepare grid_data (relplot custom pipeline) ---
+    # Draw the plot
+    g.map_dataframe(func, **plot_kws)
 
-    def _before_grid_data(builder):
-        grid_variables = dict(
-            x=x, y=y, row=row, col=col, hue=hue, size=size, style=style,
+    # Label the axes, using the original variables
+    # Pass "" when the variable name is None to overwrite internal variables
+    g.set_axis_labels(variables.get("x") or "", variables.get("y") or "")
+
+    if legend:
+        # Replace the original plot data so the legend uses numeric data with
+        # the correct type, since we force a categorical mapping above.
+        p.plot_data = plot_data
+
+        # Handle the additional non-semantic keyword arguments out here.
+        # We're selective because some kwargs may be seaborn function specific
+        # and not relevant to the matplotlib artists going into the legend.
+        # Ideally, we will have a better solution where we don't need to re-make
+        # the legend out here and will have parity with the axes-level functions.
+        keys = ["c", "color", "alpha", "m", "marker"]
+        if kind == "scatter":
+            legend_artist = _scatter_legend_artist
+            keys += ["s", "facecolor", "fc", "edgecolor", "ec", "linewidth", "lw"]
+        else:
+            legend_artist = partial(mpl.lines.Line2D, xdata=[], ydata=[])
+            keys += [
+                "markersize", "ms",
+                "markeredgewidth", "mew",
+                "markeredgecolor", "mec",
+                "linestyle", "ls",
+                "linewidth", "lw",
+            ]
+
+        common_kws = {k: v for k, v in kwargs.items() if k in keys}
+        attrs = {"hue": "color", "style": None}
+        if kind == "scatter":
+            attrs["size"] = "s"
+        elif kind == "line":
+            attrs["size"] = "linewidth"
+        p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
+        if p.legend_data:
+            g.add_legend(legend_data=p.legend_data,
+                         label_order=p.legend_order,
+                         title=p.legend_title,
+                         adjust_subtitles=True)
+
+    # Rename the columns of the FacetGrid's `data` attribute
+    # to match the original column names
+    orig_cols = {
+        f"_{k}": f"_{k}_" if v is None else v for k, v in variables.items()
+    }
+    grid_data = g.data.rename(columns=orig_cols)
+    if data is not None and (x is not None or y is not None):
+        if not isinstance(data, pd.DataFrame):
+            data = pd.DataFrame(data)
+        g.data = pd.merge(
+            data,
+            grid_data[grid_data.columns.difference(data.columns)],
+            left_index=True,
+            right_index=True,
         )
-        if kind == "line":
-            grid_variables.update(units=units, weights=weights)
-        p.assign_variables(data, grid_variables)
+    else:
+        g.data = grid_data
 
-        if row is not None:
-            p._order_registry.register("row", order=row_order)
-        if col is not None:
-            p._order_registry.register("col", order=col_order)
-
-        for var in ["row", "col"]:
-            if var in p.variables and p.variables[var] is None:
-                p.variables[var] = f"_{var}_"
-
-        plot_variables = {v: f"_{v}" for v in single_variables}
-        if "weight" in plot_variables:
-            plot_variables["weights"] = plot_variables.pop("weight")
-        plot_kws.update(plot_variables)
-
-        grid_kws = {v: p.variables.get(v) for v in ["row", "col"]}
-        extra["grid_row"] = grid_kws["row"]
-        extra["grid_col"] = grid_kws["col"]
-
-        new_cols = plot_variables.copy()
-        new_cols.update(grid_kws)
-        full_data = p.plot_data.rename(columns=new_cols)
-
-        return full_data.dropna(axis=1, how="all")
-
-    # --- Hook: draw (map_dataframe + legend_data population) ---
-
-    def _draw(builder):
-        g = builder.g
-        g.map_dataframe(func, **plot_kws)
-
-        if legend:
-            # Replace the original plot data so the legend uses numeric
-            # data with the correct type.
-            p.plot_data = single_plot_data
-
-            keys = ["c", "color", "alpha", "m", "marker"]
-            if kind == "scatter":
-                legend_artist = _scatter_legend_artist
-                keys += [
-                    "s", "facecolor", "fc", "edgecolor", "ec",
-                    "linewidth", "lw",
-                ]
-            else:
-                legend_artist = partial(mpl.lines.Line2D, xdata=[], ydata=[])
-                keys += [
-                    "markersize", "ms",
-                    "markeredgewidth", "mew",
-                    "markeredgecolor", "mec",
-                    "linestyle", "ls",
-                    "linewidth", "lw",
-                ]
-
-            common_kws = {k: v for k, v in kwargs.items() if k in keys}
-            attrs = {"hue": "color", "style": None}
-            if kind == "scatter":
-                attrs["size"] = "s"
-            elif kind == "line":
-                attrs["size"] = "linewidth"
-            p.add_legend_data(g.axes.flat[0], legend_artist, common_kws, attrs)
-
-    # --- Assemble and run the pipeline ---
-
-    x_label = single_variables.get("x") or ""
-    y_label = single_variables.get("y") or ""
-
-    builder = _FacetGridBuilder("relplot", plotter=p)
-    builder.configure(
-        check_ax_opts=dict(axes_level_func=f"{kind}plot"),
-        facet_opts=dict(row=row, col=col, row_order=row_order, col_order=col_order),
-        grid_init_kwargs=dict(
-            col_wrap=col_wrap,
-            row_order=row_order,
-            col_order=col_order,
-            height=height,
-            aspect=aspect,
-            dropna=False,
-            facet_kws=facet_kws,
-        ),
-        axis_label_opts=dict(x_var=x_label, y_var=y_label),
-        legend_strategy="plotter" if legend else "none",
-        legend_opts=dict(adjust_subtitles=True),
-        data_opts=dict(original_data=data, x=x, y=y, variables=single_variables),
-        on_before_grid_data=_before_grid_data,
-        on_draw=_draw,
-    )
-    # _before_grid_data populates extra["grid_row"] / extra["grid_col"];
-    # patch them into the already-stored grid_init_kwargs.
-    builder._grid_init_kwargs["row"] = lambda: extra["grid_row"]
-    builder._grid_init_kwargs["col"] = lambda: extra["grid_col"]
-    return builder.build(kwargs)
+    return g
 
 
 relplot.__doc__ = """\
