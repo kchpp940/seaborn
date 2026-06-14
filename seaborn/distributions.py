@@ -2165,158 +2165,132 @@ def displot(
         variables=dict(x=x, y=y, hue=hue, weights=weights, row=row, col=col),
     )
 
-    builder = _FacetGridBuilder("displot", plotter=p)
-
     p.map_hue(palette=palette, order=hue_order, norm=hue_norm)
 
     _check_argument("kind", ["hist", "kde", "ecdf"], kind)
 
-    # --- Initialize the FacetGrid object
+    # --- Plot-specific drawing callback ---
 
-    builder.check_ax(kwargs, axes_level_func=f"{kind}plot")
+    def _draw(builder):
+        g = builder.g
 
-    builder.normalize_facet_vars(row=row, col=col, row_order=row_order, col_order=col_order)
+        if kind == "kde":
+            allowed_types = ["numeric", "datetime"]
+        else:
+            allowed_types = None
+        p._attach(g, allowed_types=allowed_types, log_scale=log_scale)
 
-    grid_data = builder.prepare_grid_data()
+        if not p.has_xy_data:
+            return False
+
+        color_local = "C0" if (color is None and hue is None) else color
+
+        plot_kwargs = kwargs.copy()
+        plot_kwargs["legend"] = legend
+
+        if kind == "hist":
+
+            hist_kws = plot_kwargs
+
+            estimate_defaults = {}
+            _assign_default_kwargs(estimate_defaults, Histogram.__init__, histplot)
+
+            estimate_kws = {}
+            for key, default_val in estimate_defaults.items():
+                estimate_kws[key] = hist_kws.pop(key, default_val)
+
+            if estimate_kws["discrete"] is None:
+                estimate_kws["discrete"] = p._default_discrete()
+
+            hist_kws["estimate_kws"] = estimate_kws
+            hist_kws.setdefault("color", color_local)
+
+            if p.univariate:
+                _assign_default_kwargs(hist_kws, p.plot_univariate_histogram, histplot)
+                p.plot_univariate_histogram(**hist_kws)
+            else:
+                _assign_default_kwargs(hist_kws, p.plot_bivariate_histogram, histplot)
+                p.plot_bivariate_histogram(**hist_kws)
+
+        elif kind == "kde":
+
+            kde_kws = plot_kwargs
+
+            estimate_defaults = {}
+            _assign_default_kwargs(estimate_defaults, KDE.__init__, kdeplot)
+
+            estimate_kws = {}
+            for key, default_val in estimate_defaults.items():
+                estimate_kws[key] = kde_kws.pop(key, default_val)
+
+            kde_kws["estimate_kws"] = estimate_kws
+            kde_kws["color"] = color_local
+
+            if p.univariate:
+                _assign_default_kwargs(kde_kws, p.plot_univariate_density, kdeplot)
+                p.plot_univariate_density(**kde_kws)
+            else:
+                _assign_default_kwargs(kde_kws, p.plot_bivariate_density, kdeplot)
+                p.plot_bivariate_density(**kde_kws)
+
+        elif kind == "ecdf":
+
+            ecdf_kws = plot_kwargs
+
+            estimate_kws = {}
+            estimate_defaults = {}
+            _assign_default_kwargs(estimate_defaults, ECDF.__init__, ecdfplot)
+            for key, default_val in estimate_defaults.items():
+                estimate_kws[key] = ecdf_kws.pop(key, default_val)
+
+            ecdf_kws["estimate_kws"] = estimate_kws
+            ecdf_kws["color"] = color_local
+
+            if p.univariate:
+                _assign_default_kwargs(ecdf_kws, p.plot_univariate_ecdf, ecdfplot)
+                p.plot_univariate_ecdf(**ecdf_kws)
+            else:
+                raise NotImplementedError("Bivariate ECDF plots are not implemented")
+
+        if rug:
+            if rug_kws is None:
+                rug_kws_local = {}
+            else:
+                rug_kws_local = rug_kws.copy()
+            _assign_default_kwargs(rug_kws_local, p.plot_rug, rugplot)
+            rug_kws_local["legend"] = False
+            if color_local is not None:
+                rug_kws_local["color"] = color_local
+            p.plot_rug(**rug_kws_local)
+
+    # --- Assemble and run the pipeline ---
 
     col_name = p.variables.get("col")
     row_name = p.variables.get("row")
 
-    builder.init_facet_grid(
-        data=grid_data,
-        row=row_name,
-        col=col_name,
-        col_wrap=col_wrap,
-        row_order=row_order,
-        col_order=col_order,
-        height=height,
-        aspect=aspect,
-        facet_kws=facet_kws,
+    x_label = p.variables.get("x") if p.variables.get("x") else None
+    y_label = p.variables.get("y") if p.variables.get("y") else None
+
+    builder = _FacetGridBuilder("displot", plotter=p)
+    builder.configure(
+        check_ax_opts=dict(axes_level_func=f"{kind}plot"),
+        facet_opts=dict(row=row, col=col, row_order=row_order, col_order=col_order),
+        grid_init_kwargs=dict(
+            row=row_name,
+            col=col_name,
+            col_wrap=col_wrap,
+            row_order=row_order,
+            col_order=col_order,
+            height=height,
+            aspect=aspect,
+            facet_kws=facet_kws,
+        ),
+        axis_label_opts=dict(x_var=x_label, y_var=y_label),
+        data_opts=dict(original_data=data, x=x, y=y, variables=p.variables),
+        attach_plotter_attrs=("diagnostics_", "_hist_estimator"),
+        on_draw=_draw,
     )
-    g = builder.g
-
-    # Now attach the axes object to the plotter object
-    if kind == "kde":
-        allowed_types = ["numeric", "datetime"]
-    else:
-        allowed_types = None
-    p._attach(g, allowed_types=allowed_types, log_scale=log_scale)
-
-    # Check for a specification that lacks x/y data and return early
-    if not p.has_xy_data:
-        return g
-
-    if color is None and hue is None:
-        color = "C0"
-    # XXX else warn if hue is not None?
-
-    kwargs["legend"] = legend
-
-    # --- Draw the plots
-
-    if kind == "hist":
-
-        hist_kws = kwargs.copy()
-
-        # Extract the parameters that will go directly to Histogram
-        estimate_defaults = {}
-        _assign_default_kwargs(estimate_defaults, Histogram.__init__, histplot)
-
-        estimate_kws = {}
-        for key, default_val in estimate_defaults.items():
-            estimate_kws[key] = hist_kws.pop(key, default_val)
-
-        # Handle derivative defaults
-        if estimate_kws["discrete"] is None:
-            estimate_kws["discrete"] = p._default_discrete()
-
-        hist_kws["estimate_kws"] = estimate_kws
-
-        hist_kws.setdefault("color", color)
-
-        if p.univariate:
-
-            _assign_default_kwargs(hist_kws, p.plot_univariate_histogram, histplot)
-            p.plot_univariate_histogram(**hist_kws)
-
-        else:
-
-            _assign_default_kwargs(hist_kws, p.plot_bivariate_histogram, histplot)
-            p.plot_bivariate_histogram(**hist_kws)
-
-    elif kind == "kde":
-
-        kde_kws = kwargs.copy()
-
-        # Extract the parameters that will go directly to KDE
-        estimate_defaults = {}
-        _assign_default_kwargs(estimate_defaults, KDE.__init__, kdeplot)
-
-        estimate_kws = {}
-        for key, default_val in estimate_defaults.items():
-            estimate_kws[key] = kde_kws.pop(key, default_val)
-
-        kde_kws["estimate_kws"] = estimate_kws
-        kde_kws["color"] = color
-
-        if p.univariate:
-
-            _assign_default_kwargs(kde_kws, p.plot_univariate_density, kdeplot)
-            p.plot_univariate_density(**kde_kws)
-
-        else:
-
-            _assign_default_kwargs(kde_kws, p.plot_bivariate_density, kdeplot)
-            p.plot_bivariate_density(**kde_kws)
-
-    elif kind == "ecdf":
-
-        ecdf_kws = kwargs.copy()
-
-        # Extract the parameters that will go directly to the estimator
-        estimate_kws = {}
-        estimate_defaults = {}
-        _assign_default_kwargs(estimate_defaults, ECDF.__init__, ecdfplot)
-        for key, default_val in estimate_defaults.items():
-            estimate_kws[key] = ecdf_kws.pop(key, default_val)
-
-        ecdf_kws["estimate_kws"] = estimate_kws
-        ecdf_kws["color"] = color
-
-        if p.univariate:
-
-            _assign_default_kwargs(ecdf_kws, p.plot_univariate_ecdf, ecdfplot)
-            p.plot_univariate_ecdf(**ecdf_kws)
-
-        else:
-
-            raise NotImplementedError("Bivariate ECDF plots are not implemented")
-
-    # All plot kinds can include a rug
-    if rug:
-        # TODO with expand_margins=True, each facet expands margins... annoying!
-        if rug_kws is None:
-            rug_kws = {}
-        _assign_default_kwargs(rug_kws, p.plot_rug, rugplot)
-        rug_kws["legend"] = False
-        if color is not None:
-            rug_kws["color"] = color
-        p.plot_rug(**rug_kws)
-
-    # Call FacetGrid annotation methods
-    # Note that the legend is currently set inside the plotting method
-    builder.set_axis_labels(
-        x_var=p.variables.get("x", g.axes.flat[0].get_xlabel()),
-        y_var=p.variables.get("y", g.axes.flat[0].get_ylabel()),
-    )
-    builder.finalize_layout()
-
-    builder.finalize_data(original_data=data, x=x, y=y, variables=p.variables)
-
-    # Attach diagnostic information to the returned FacetGrid
-    builder.attach_plotter_attrs("diagnostics_", "_hist_estimator")
-
-    return g
+    return builder.build(kwargs)
 
 
 displot.__doc__ = """\

@@ -591,8 +591,6 @@ def lmplot(
     line_kws=None, facet_kws=None,
 ):
 
-    builder = _FacetGridBuilder("lmplot")
-
     if facet_kws is None:
         facet_kws = {}
 
@@ -614,60 +612,80 @@ def lmplot(
 
     need_cols = [x, y, hue, col, row, units, x_partial, y_partial]
     cols = np.unique([a for a in need_cols if a is not None]).tolist()
-    data = data[cols]
+    grid_data = data[cols]
 
-    builder.init_facet_grid(
-        data=data,
-        row=row,
-        col=col,
-        col_wrap=col_wrap,
-        row_order=row_order,
-        col_order=col_order,
-        height=height,
-        aspect=aspect,
-        facet_kws=facet_kws,
-        hue=hue,
-        palette=palette,
-        hue_order=hue_order,
+    # --- Hook: draw (regplot-specific) ---
+
+    def _draw(builder):
+        facets = builder.g
+
+        if facets.hue_names is None:
+            n_markers = 1
+        else:
+            n_markers = len(facets.hue_names)
+        if not isinstance(markers, list):
+            markers_list = [markers] * n_markers
+        else:
+            markers_list = markers
+        if len(markers_list) != n_markers:
+            raise ValueError(
+                "markers must be a singleton or a list of markers "
+                "for each level of the hue variable"
+            )
+        facets.hue_kws = {"marker": markers_list}
+
+        def update_datalim(data, x, y, ax, **kws):
+            xys = data[[x, y]].to_numpy().astype(float)
+            ax.update_datalim(xys, updatey=False)
+            ax.autoscale_view(scaley=False)
+
+        facets.map_dataframe(update_datalim, x=x, y=y)
+
+        regplot_kws = dict(
+            x_estimator=x_estimator, x_bins=x_bins, x_ci=x_ci,
+            scatter=scatter, fit_reg=fit_reg, ci=ci, n_boot=n_boot, units=units,
+            seed=seed, order=order, logistic=logistic, lowess=lowess,
+            robust=robust, logx=logx, x_partial=x_partial, y_partial=y_partial,
+            truncate=truncate, x_jitter=x_jitter, y_jitter=y_jitter,
+            scatter_kws=scatter_kws, line_kws=line_kws,
+        )
+        facets.map_dataframe(regplot, x=x, y=y, **regplot_kws)
+
+    # --- Legend predicate ---
+
+    def _show_legend(builder):
+        return legend and (hue is not None) and (hue not in [col, row])
+
+    # --- Hook: bypass default plotter-based grid_data preparation ---
+
+    def _before_grid_data(builder):
+        return grid_data
+
+    # --- Assemble and run the pipeline ---
+
+    builder = _FacetGridBuilder("lmplot")
+    builder.configure(
+        grid_init_kwargs=dict(
+            row=row,
+            col=col,
+            col_wrap=col_wrap,
+            row_order=row_order,
+            col_order=col_order,
+            height=height,
+            aspect=aspect,
+            facet_kws=facet_kws,
+            hue=hue,
+            palette=palette,
+            hue_order=hue_order,
+        ),
+        axis_label_opts=dict(x_var=x, y_var=y),
+        legend_strategy="facetgrid",
+        legend_opts=dict(predicate=_show_legend),
+        data_opts=dict(original_data=grid_data),
+        on_before_grid_data=_before_grid_data,
+        on_draw=_draw,
     )
-    facets = builder.g
-
-    if facets.hue_names is None:
-        n_markers = 1
-    else:
-        n_markers = len(facets.hue_names)
-    if not isinstance(markers, list):
-        markers = [markers] * n_markers
-    if len(markers) != n_markers:
-        raise ValueError("markers must be a singleton or a list of markers "
-                         "for each level of the hue variable")
-    facets.hue_kws = {"marker": markers}
-
-    def update_datalim(data, x, y, ax, **kws):
-        xys = data[[x, y]].to_numpy().astype(float)
-        ax.update_datalim(xys, updatey=False)
-        ax.autoscale_view(scaley=False)
-
-    facets.map_dataframe(update_datalim, x=x, y=y)
-
-    regplot_kws = dict(
-        x_estimator=x_estimator, x_bins=x_bins, x_ci=x_ci,
-        scatter=scatter, fit_reg=fit_reg, ci=ci, n_boot=n_boot, units=units,
-        seed=seed, order=order, logistic=logistic, lowess=lowess,
-        robust=robust, logx=logx, x_partial=x_partial, y_partial=y_partial,
-        truncate=truncate, x_jitter=x_jitter, y_jitter=y_jitter,
-        scatter_kws=scatter_kws, line_kws=line_kws,
-    )
-    facets.map_dataframe(regplot, x=x, y=y, **regplot_kws)
-
-    builder.set_axis_labels(x_var=x, y_var=y)
-
-    if legend and (hue is not None) and (hue not in [col, row]):
-        facets.add_legend()
-
-    builder.finalize_data(original_data=data)
-
-    return facets
+    return builder.build()
 
 
 lmplot.__doc__ = dedent("""\

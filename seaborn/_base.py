@@ -1824,13 +1824,30 @@ def categorical_order(vector, order=None):
 
 
 class _FacetGridBuilder:
-    """Lightweight builder for figure-level functions using FacetGrid.
+    """Template-based builder for figure-level functions using FacetGrid.
 
     Encapsulates the common lifecycle across relplot, catplot, displot,
-    and lmplot: parameter validation, variable normalization, FacetGrid
-    initialization, axis labeling, legend collection, and return attribute
-    attachment. Each figure-level function only needs to implement its
-    specific plotting logic.
+    and lmplot. The ``build()`` method runs a fixed pipeline; each
+    figure-level function only provides its specific hooks and options.
+
+    Pipeline stages (in order):
+        1.  check_ax          – warn if `ax` kwarg is passed
+        2.  normalize_facet_vars – handle anonymous faceting variables
+        3.  prepare_grid_data – build the dataframe passed to FacetGrid
+        4.  init_facet_grid   – instantiate the FacetGrid
+        5.  on_draw (hook)    – function-specific plotting callback
+        6.  set_axis_labels
+        7.  finalize_layout
+        8.  handle_legend     – driven by ``legend_strategy``
+        9.  finalize_data     – merge grid data back with original input
+        10. attach_attributes – copy plotter / extra attributes onto FacetGrid
+
+    Hooks that a caller may set (all optional unless marked required):
+        ``on_draw``            (callable, required) – receives ``(builder,)`` and
+                               performs the actual drawing.
+        ``on_before_grid_data`` (callable) – called with ``(builder,)`` before
+                               ``prepare_grid_data``.  If it returns a dataframe,
+                               that is used as grid_data instead of the default.
     """
 
     def __init__(self, func_name, plotter=None):
@@ -1838,25 +1855,120 @@ class _FacetGridBuilder:
         self.plotter = plotter
         self.g = None
 
-    def check_ax(self, kwargs, axes_level_func=None, backtick_name=True):
-        """Check for attempt to plot onto specific axes and warn.
+        self._check_ax_opts = {}
+        self._facet_opts = {}
+        self._grid_data_opts = {}
+        self._grid_init_kwargs = {}
+        self._axis_label_opts = {}
+        self._legend_strategy = "none"
+        self._legend_opts = {}
+        self._data_opts = {}
+        self._attach_plotter_attrs = ()
+        self._attach_extra_attrs = {}
+        self._on_draw = None
+        self._on_before_grid_data = None
 
-        Parameters
-        ----------
-        kwargs : dict
-            Keyword arguments passed to the figure-level function.
-        axes_level_func : str, optional
-            Name of the recommended axes-level function to suggest.
-        backtick_name : bool, optional
-            Whether to wrap the function name in backticks in the warning
-            message, for backwards compatibility with inconsistent formatting.
+    # ------------------------------------------------------------------ setup
+
+    def configure(self, **kwargs):
+        """Set pipeline options in bulk.
+
+        Accepted keys mirror the explicit ``set_*`` helpers:
+        ``check_ax_opts, facet_opts, grid_data_opts, grid_init_kwargs,
+        axis_label_opts, legend_strategy, legend_opts, data_opts,
+        attach_plotter_attrs, attach_extra_attrs, on_draw, on_before_grid_data``.
         """
+        setters = {
+            "check_ax_opts": self.set_check_ax_opts,
+            "facet_opts": self.set_facet_opts,
+            "grid_data_opts": self.set_grid_data_opts,
+            "grid_init_kwargs": self.set_grid_init_kwargs,
+            "axis_label_opts": self.set_axis_label_opts,
+            "legend_strategy": self.set_legend_strategy,
+            "legend_opts": self.set_legend_opts,
+            "data_opts": self.set_data_opts,
+            "attach_plotter_attrs": self.set_attach_plotter_attrs,
+            "attach_extra_attrs": self.set_attach_extra_attrs,
+            "on_draw": self.set_on_draw,
+            "on_before_grid_data": self.set_on_before_grid_data,
+        }
+        for key, value in kwargs.items():
+            if key in setters:
+                setters[key](value)
+            else:
+                raise TypeError(
+                    f"_FacetGridBuilder.configure() got an unexpected option {key!r}"
+                )
+        return self
+
+    def set_check_ax_opts(self, opts):
+        self._check_ax_opts = dict(opts) if opts else {}
+        return self
+
+    def set_facet_opts(self, opts):
+        self._facet_opts = dict(opts) if opts else {}
+        return self
+
+    def set_grid_data_opts(self, opts):
+        self._grid_data_opts = dict(opts) if opts else {}
+        return self
+
+    def set_grid_init_kwargs(self, kwargs):
+        self._grid_init_kwargs = dict(kwargs) if kwargs else {}
+        return self
+
+    def set_axis_label_opts(self, opts):
+        self._axis_label_opts = dict(opts) if opts else {}
+        return self
+
+    def set_legend_strategy(self, strategy):
+        valid = {"none", "plotter", "axes", "facetgrid"}
+        if strategy not in valid:
+            raise ValueError(
+                f"legend_strategy must be one of {sorted(valid)}, got {strategy!r}"
+            )
+        self._legend_strategy = strategy
+        return self
+
+    def set_legend_opts(self, opts):
+        self._legend_opts = dict(opts) if opts else {}
+        return self
+
+    def set_data_opts(self, opts):
+        self._data_opts = dict(opts) if opts else {}
+        return self
+
+    def set_attach_plotter_attrs(self, names):
+        self._attach_plotter_attrs = tuple(names) if names else ()
+        return self
+
+    def set_attach_extra_attrs(self, attrs):
+        self._attach_extra_attrs = dict(attrs) if attrs else {}
+        return self
+
+    def set_on_draw(self, callback):
+        if not callable(callback):
+            raise TypeError("on_draw must be callable")
+        self._on_draw = callback
+        return self
+
+    def set_on_before_grid_data(self, callback):
+        if callback is not None and not callable(callback):
+            raise TypeError("on_before_grid_data must be callable or None")
+        self._on_before_grid_data = callback
+        return self
+
+    # -------------------------------------------------------------- primitives
+
+    def _check_ax(self, kwargs):
         if "ax" in kwargs:
-            name = f"`{self.func_name}`" if backtick_name else self.func_name
-            if axes_level_func:
+            backtick = self._check_ax_opts.get("backtick_name", True)
+            axes_func = self._check_ax_opts.get("axes_level_func")
+            name = f"`{self.func_name}`" if backtick else self.func_name
+            if axes_func:
                 msg = (
                     f"{name} is a figure-level function and does not accept "
-                    f"the `ax` parameter. You may wish to try {axes_level_func}."
+                    f"the `ax` parameter. You may wish to try {axes_func}."
                 )
             else:
                 msg = (
@@ -1867,10 +1979,13 @@ class _FacetGridBuilder:
             kwargs.pop("ax")
         return kwargs
 
-    def normalize_facet_vars(self, row=None, col=None, row_order=None, col_order=None):
-        """Handle anonymous faceting variables and register their orders."""
+    def _normalize_facet_vars(self):
         if self.plotter is None:
-            raise ValueError("Plotter must be set before normalizing facet variables.")
+            return
+        row = self._facet_opts.get("row")
+        col = self._facet_opts.get("col")
+        row_order = self._facet_opts.get("row_order")
+        col_order = self._facet_opts.get("col_order")
 
         p = self.plotter
         for var in ["row", "col"]:
@@ -1882,25 +1997,22 @@ class _FacetGridBuilder:
         if col is not None:
             p._order_registry.register("col", order=col_order)
 
-    def prepare_grid_data(self, rename_map=None, dropna_how=None):
-        """Adapt plot_data dataframe for use with FacetGrid.
+    def _prepare_grid_data(self):
+        if self._on_before_grid_data is not None:
+            result = self._on_before_grid_data(self)
+            if result is not None:
+                return result
 
-        Parameters
-        ----------
-        rename_map : dict, optional
-            Mapping from internal column names to FacetGrid-friendly names.
-            Defaults to plotter.variables.
-        dropna_how : str or None, optional
-            How to drop NA columns. "all", "any", or None (no dropping).
-        """
         if self.plotter is None:
-            raise ValueError("Plotter must be set before preparing grid data.")
+            raise ValueError(
+                "Plotter is required for default grid_data preparation, "
+                "or provide an on_before_grid_data hook."
+            )
 
-        p = self.plotter
-        if rename_map is None:
-            rename_map = p.variables
+        rename_map = self._grid_data_opts.get("rename_map", self.plotter.variables)
+        dropna_how = self._grid_data_opts.get("dropna_how")
 
-        grid_data = p.plot_data.rename(columns=rename_map)
+        grid_data = self.plotter.plot_data.rename(columns=rename_map)
         grid_data = grid_data.loc[:, ~grid_data.columns.duplicated()]
 
         if dropna_how:
@@ -1908,106 +2020,34 @@ class _FacetGridBuilder:
 
         return grid_data
 
-    def init_facet_grid(
-        self, data, row=None, col=None, col_wrap=None,
-        row_order=None, col_order=None, height=5, aspect=1,
-        facet_kws=None, **extra_kws
-    ):
-        """Initialize the FacetGrid object."""
+    def _init_facet_grid(self, grid_data):
         from seaborn.axisgrid import FacetGrid
 
-        facet_kws = {} if facet_kws is None else facet_kws.copy()
+        def _resolve(value):
+            return value() if callable(value) else value
 
-        grid_kws = dict(
-            data=data,
-            row=row,
-            col=col,
-            col_wrap=col_wrap,
-            row_order=row_order,
-            col_order=col_order,
-            height=height,
-            aspect=aspect,
-        )
+        kws = {k: _resolve(v) for k, v in self._grid_init_kwargs.items()}
+        facet_kws = kws.pop("facet_kws", None) or {}
+        facet_kws = {k: _resolve(v) for k, v in dict(facet_kws).items()}
+
+        kws.setdefault("data", grid_data)
 
         if self.plotter is not None:
-            grid_kws["order_registry"] = self.plotter._order_registry
+            if "order_registry" not in kws:
+                kws["order_registry"] = self.plotter._order_registry
+            if kws.get("row") is None and "row" in self.plotter.variables:
+                kws["row"] = self.plotter.variables["row"]
+            if kws.get("col") is None and "col" in self.plotter.variables:
+                kws["col"] = self.plotter.variables["col"]
 
-        grid_kws.update(extra_kws)
-        grid_kws.update(facet_kws)
+        kws.update(facet_kws)
 
-        self.g = FacetGrid(**grid_kws)
+        self.g = FacetGrid(**kws)
         return self.g
 
-    def setup_plot_variables_for_map(self, variables, variable_renames=None):
-        """Prepare variable renaming for use with FacetGrid.map_dataframe.
-
-        Creates a mapping from internal variable names (x, y, hue, etc.) to
-        underscore-prefixed names to avoid collisions with faceting variables.
-
-        Parameters
-        ----------
-        variables : dict
-            Internal variables dictionary from the plotter.
-        variable_renames : dict, optional
-            Additional renames to apply (e.g. "weight" -> "weights").
-        """
-        plot_variables = {v: f"_{v}" for v in variables}
-        if variable_renames:
-            for old, new in variable_renames.items():
-                if old in plot_variables:
-                    plot_variables[new] = plot_variables.pop(old)
-        return plot_variables
-
-    def extract_semantic_mappings(self):
-        """Extract hue/size/style mappings from plotter for re-pass to axes-level.
-
-        Returns a dict with keys: palette, hue_order, hue_norm, sizes, size_order,
-        size_norm, markers, dashes, style_order. Values are None if not applicable.
-        """
-        if self.plotter is None:
-            raise ValueError("Plotter must be set before extracting semantic mappings.")
-
-        p = self.plotter
-        result = dict(
-            palette=None, hue_order=None, hue_norm=None,
-            sizes=None, size_order=None, size_norm=None,
-            markers=None, dashes=None, style_order=None,
-        )
-
-        if "hue" in p.variables:
-            result["palette"] = p._hue_map.lookup_table
-            result["hue_order"] = p._hue_map.levels
-            result["hue_norm"] = p._hue_map.norm
-
-        if hasattr(p, "_size_map") and "size" in p.variables:
-            result["sizes"] = p._size_map.lookup_table
-            result["size_order"] = p._size_map.levels
-            result["size_norm"] = p._size_map.norm
-
-        if hasattr(p, "_style_map") and "style" in p.variables:
-            result["style_order"] = p._style_map.levels
-            if result["style_order"] is not None:
-                if hasattr(p, "markers"):
-                    markers_flag = getattr(p, "markers", None)
-                    if markers_flag:
-                        result["markers"] = {
-                            k: p._style_map(k, "marker")
-                            for k in result["style_order"]
-                        }
-                if hasattr(p, "dashes"):
-                    dashes_flag = getattr(p, "dashes", None)
-                    if dashes_flag:
-                        result["dashes"] = {
-                            k: p._style_map(k, "dashes")
-                            for k in result["style_order"]
-                        }
-
-        return result
-
-    def set_axis_labels(self, x_var=None, y_var=None):
-        """Set axes labels using original variable names."""
-        if self.g is None:
-            raise ValueError("FacetGrid must be initialized before setting axis labels.")
+    def _set_axis_labels(self):
+        x_var = self._axis_label_opts.get("x_var")
+        y_var = self._axis_label_opts.get("y_var")
 
         if self.plotter is not None:
             if x_var is None:
@@ -2016,56 +2056,60 @@ class _FacetGridBuilder:
                 y_var = self.plotter.variables.get("y", "")
 
         self.g.set_axis_labels(x_var or "", y_var or "")
-        return self.g
 
-    def finalize_layout(self):
-        """Apply default layout: set titles and tight_layout."""
-        if self.g is None:
-            raise ValueError("FacetGrid must be initialized before finalizing layout.")
-
+    def _finalize_layout(self):
         self.g.set_titles()
         self.g.tight_layout()
-        return self.g
 
-    def collect_legend_from_axes(self, legend_title=None, label_order=None):
-        """Collect legend data from individual axes and add to FacetGrid.
+    def _handle_legend(self):
+        strategy = self._legend_strategy
+        opts = self._legend_opts
 
-        This is used by plot kinds that draw legends on each axes internally
-        (e.g. catplot). Call this after plotting to consolidate into a single
-        figure legend.
-        """
-        if self.g is None:
-            raise ValueError("FacetGrid must be initialized before collecting legend.")
+        if strategy == "none":
+            return
 
-        for ax in self.g.axes.flat:
-            self.g._update_legend_data(ax)
-            ax.legend_ = None
+        def _resolve(value):
+            return value() if callable(value) else value
 
-        if self.g._legend_data:
-            self.g.add_legend(title=legend_title, label_order=label_order)
-        return self.g
+        if strategy == "plotter":
+            if self.plotter is None:
+                raise ValueError(
+                    "legend_strategy='plotter' requires a plotter"
+                )
+            adjust_subtitles = _resolve(opts.get("adjust_subtitles", True))
+            if self.plotter.legend_data:
+                self.g.add_legend(
+                    legend_data=self.plotter.legend_data,
+                    label_order=self.plotter.legend_order,
+                    title=self.plotter.legend_title,
+                    adjust_subtitles=adjust_subtitles,
+                )
 
-    def add_legend_from_plotter(self, adjust_subtitles=True):
-        """Add legend using data stored on the plotter (e.g. after add_legend_data)."""
-        if self.g is None:
-            raise ValueError("FacetGrid must be initialized before adding legend.")
-        if self.plotter is None:
-            raise ValueError("Plotter must be set to add legend from plotter.")
+        elif strategy == "axes":
+            predicate = opts.get("predicate")
+            if predicate is not None and not predicate(self):
+                return
+            for ax in self.g.axes.flat:
+                self.g._update_legend_data(ax)
+                ax.legend_ = None
+            if self.g._legend_data:
+                self.g.add_legend(
+                    title=_resolve(opts.get("legend_title")),
+                    label_order=_resolve(opts.get("label_order")),
+                )
 
-        p = self.plotter
-        if p.legend_data:
-            self.g.add_legend(
-                legend_data=p.legend_data,
-                label_order=p.legend_order,
-                title=p.legend_title,
-                adjust_subtitles=adjust_subtitles,
-            )
-        return self.g
+        elif strategy == "facetgrid":
+            predicate = opts.get("predicate")
+            if predicate is not None and not predicate(self):
+                return
+            self.g.add_legend()
 
-    def finalize_data(self, original_data=None, x=None, y=None, variables=None):
-        """Rename columns and merge FacetGrid data with the original input."""
-        if self.g is None:
-            raise ValueError("FacetGrid must be initialized before finalizing data.")
+    def _finalize_data(self):
+        data_opts = self._data_opts
+        original_data = data_opts.get("original_data")
+        x = data_opts.get("x")
+        y = data_opts.get("y")
+        variables = data_opts.get("variables")
 
         g = self.g
 
@@ -2097,30 +2141,55 @@ class _FacetGridBuilder:
         elif original_data is not None:
             g.data = original_data
 
-        return self.g
-
-    def attach_plotter_attrs(self, *attr_names):
-        """Copy named attributes from the plotter onto the FacetGrid.
-
-        Only copies attributes that exist on the plotter.
-        """
-        if self.g is None:
-            raise ValueError("FacetGrid must be initialized before attaching attributes.")
-        if self.plotter is None:
-            raise ValueError("Plotter must be set to attach plotter attributes.")
-
-        for name in attr_names:
-            if hasattr(self.plotter, name):
+    def _attach_attributes(self):
+        for name in self._attach_plotter_attrs:
+            if self.plotter is not None and hasattr(self.plotter, name):
                 setattr(self.g, name, getattr(self.plotter, name))
 
-        return self.g
-
-    def attach_attrs(self, **attrs):
-        """Attach additional diagnostic or state attributes to FacetGrid."""
-        if self.g is None:
-            raise ValueError("FacetGrid must be initialized before attaching attributes.")
-
-        for key, value in attrs.items():
+        for key, value in self._attach_extra_attrs.items():
             setattr(self.g, key, value)
+
+    # -------------------------------------------------------------- pipeline
+
+    def build(self, kwargs=None):
+        """Run the full pipeline and return the populated FacetGrid.
+
+        Parameters
+        ----------
+        kwargs : dict, optional
+            Keyword arguments passed to the figure-level function. The
+            ``ax`` entry, if present, will be popped with a warning.
+
+        Notes
+        -----
+        If the ``on_draw`` callback returns ``False`` (explicitly, not any
+        other falsy value), the remaining pipeline stages after drawing
+        (axis labels, layout, legend, data finalization, attribute
+        attachment) are skipped.  This lets functions short-circuit when
+        the plotting callback discovers there is nothing to render.
+        """
+        if self._on_draw is None:
+            raise ValueError(
+                "An `on_draw` callback must be set before calling build()"
+            )
+
+        if kwargs is None:
+            kwargs = {}
+
+        self._check_ax(kwargs)
+        self._normalize_facet_vars()
+
+        grid_data = self._prepare_grid_data()
+        self._init_facet_grid(grid_data)
+
+        draw_result = self._on_draw(self)
+        if draw_result is False:
+            return self.g
+
+        self._set_axis_labels()
+        self._finalize_layout()
+        self._handle_legend()
+        self._finalize_data()
+        self._attach_attributes()
 
         return self.g

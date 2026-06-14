@@ -2795,357 +2795,351 @@ def catplot(
         ),
         order=order,
         orient=orient,
-        # Handle special backwards compatibility where pointplot originally
-        # did *not* default to multi-colored unless a palette was specified.
         color="C0" if kind == "point" and palette is None and color is None else color,
         legend=legend,
     )
 
-    builder = _FacetGridBuilder("catplot", plotter=p)
-
-    # Check for attempt to plot onto specific axes and warn
-    builder.check_ax(kwargs, axes_level_func=f"{kind}plot", backtick_name=False)
-
-    builder.normalize_facet_vars(row=row, col=col, row_order=row_order, col_order=col_order)
-
-    facet_data = builder.prepare_grid_data()
-
     col_name = p.variables.get("col", None)
     row_name = p.variables.get("row", None)
 
-    builder.init_facet_grid(
-        data=facet_data,
-        row=row_name,
-        col=col_name,
-        col_wrap=col_wrap,
-        row_order=row_order,
-        col_order=col_order,
-        height=height,
-        aspect=aspect,
-        facet_kws=facet_kws,
-        sharex=sharex,
-        sharey=sharey,
-        legend_out=legend_out,
-        margin_titles=margin_titles,
-    )
-    g = builder.g
+    # These will be mutated by the drawing callback so the legend predicate
+    # and options can close over the final values.
+    state = dict(hue_order=hue_order)
 
-    # Capture this here because scale_categorical is going to insert a (null)
-    # x variable even if it is empty. It's not clear whether that needs to
-    # happen or if disabling that is the cleaner solution.
-    has_xy_data = p.has_xy_data
+    # --- Plot-specific drawing callback ---
 
-    if not native_scale or p.var_types[p.orient] == "categorical":
-        p.scale_categorical(p.orient, order=order, formatter=formatter)
+    def _draw(builder):
+        g = builder.g
 
-    p._attach(g, log_scale=log_scale)
+        has_xy_data = p.has_xy_data
 
-    if not has_xy_data:
-        return g
+        if not native_scale or p.var_types[p.orient] == "categorical":
+            p.scale_categorical(p.orient, order=order, formatter=formatter)
 
-    # Deprecations to remove in v0.14.0.
-    hue_order = p._palette_without_hue_backcompat(palette, hue_order)
-    palette, hue_order = p._hue_backcompat(color, palette, hue_order)
+        p._attach(g, log_scale=log_scale)
 
-    # Othe deprecations
-    errorbar = utils._deprecate_ci(errorbar, ci)
+        if not has_xy_data:
+            return False
 
-    saturation = kwargs.pop(
-        "saturation",
-        0.75 if kind in desaturated_kinds and kwargs.get("fill", True) else 1
-    )
-    p.map_hue(palette=palette, order=hue_order, norm=hue_norm, saturation=saturation)
+        # Deprecations to remove in v0.14.0.
+        state["hue_order"] = p._palette_without_hue_backcompat(palette, state["hue_order"])
+        local_palette, state["hue_order"] = p._hue_backcompat(color, palette, state["hue_order"])
 
-    # Set a default color
-    # Otherwise each artist will be plotted separately and trip the color cycle
-    if hue is None:
-        color = "C0" if color is None else color
-        if saturation < 1:
-            color = desaturate(color, saturation)
+        # Other deprecations
+        local_errorbar = utils._deprecate_ci(errorbar, ci)
 
-    if kind in ["strip", "swarm"]:
-        kwargs = normalize_kwargs(kwargs, mpl.collections.PathCollection)
-        kwargs["edgecolor"] = p._complement_color(
-            kwargs.pop("edgecolor", default), color, p._hue_map
+        saturation = kwargs.pop(
+            "saturation",
+            0.75 if kind in desaturated_kinds and kwargs.get("fill", True) else 1
+        )
+        p.map_hue(
+            palette=local_palette, order=state["hue_order"],
+            norm=hue_norm, saturation=saturation,
         )
 
-    width = kwargs.pop("width", 0.8)
-    dodge = kwargs.pop("dodge", False if kind in undodged_kinds else "auto")
-    if dodge == "auto":
-        dodge = p._dodge_needed()
+        local_color = color
+        if hue is None:
+            local_color = "C0" if local_color is None else local_color
+            if saturation < 1:
+                local_color = desaturate(local_color, saturation)
 
-    if "weight" in p.plot_data:
-        if kind not in ["bar", "point"]:
-            msg = f"The `weights` parameter has no effect with kind={kind!r}."
-            warnings.warn(msg, stacklevel=2)
-        agg_cls = WeightedAggregator
-    else:
-        agg_cls = EstimateAggregator
-
-    if kind == "strip":
-
-        jitter = kwargs.pop("jitter", True)
-        plot_kws = kwargs.copy()
-        plot_kws.setdefault("zorder", 3)
-        plot_kws.setdefault("linewidth", 0)
-        if "s" not in plot_kws:
-            plot_kws["s"] = plot_kws.pop("size", 5) ** 2
-
-        p.plot_strips(
-            jitter=jitter,
-            dodge=dodge,
-            color=color,
-            plot_kws=plot_kws,
-        )
-
-    elif kind == "swarm":
-
-        warn_thresh = kwargs.pop("warn_thresh", .05)
-        plot_kws = kwargs.copy()
-        plot_kws.setdefault("zorder", 3)
-        if "s" not in plot_kws:
-            plot_kws["s"] = plot_kws.pop("size", 5) ** 2
-
-        if plot_kws.setdefault("linewidth", 0) is None:
-            plot_kws["linewidth"] = np.sqrt(plot_kws["s"]) / 10
-
-        p.plot_swarms(
-            dodge=dodge,
-            color=color,
-            warn_thresh=warn_thresh,
-            plot_kws=plot_kws,
-        )
-
-    elif kind == "box":
-
-        plot_kws = kwargs.copy()
-        gap = plot_kws.pop("gap", 0)
-        fill = plot_kws.pop("fill", True)
-        whis = plot_kws.pop("whis", 1.5)
-        linewidth = plot_kws.pop("linewidth", None)
-        fliersize = plot_kws.pop("fliersize", 5)
-        linecolor = p._complement_color(
-            plot_kws.pop("linecolor", "auto"), color, p._hue_map
-        )
-
-        p.plot_boxes(
-            width=width,
-            dodge=dodge,
-            gap=gap,
-            fill=fill,
-            whis=whis,
-            color=color,
-            linecolor=linecolor,
-            linewidth=linewidth,
-            fliersize=fliersize,
-            plot_kws=plot_kws,
-        )
-
-    elif kind == "violin":
-
-        plot_kws = kwargs.copy()
-        gap = plot_kws.pop("gap", 0)
-        fill = plot_kws.pop("fill", True)
-        split = plot_kws.pop("split", False)
-        inner = plot_kws.pop("inner", "box")
-        density_norm = plot_kws.pop("density_norm", "area")
-        common_norm = plot_kws.pop("common_norm", False)
-
-        scale = plot_kws.pop("scale", deprecated)
-        scale_hue = plot_kws.pop("scale_hue", deprecated)
-        density_norm, common_norm = p._violin_scale_backcompat(
-            scale, scale_hue, density_norm, common_norm,
-        )
-
-        bw_method = p._violin_bw_backcompat(
-            plot_kws.pop("bw", deprecated), plot_kws.pop("bw_method", "scott")
-        )
-        kde_kws = dict(
-            cut=plot_kws.pop("cut", 2),
-            gridsize=plot_kws.pop("gridsize", 100),
-            bw_adjust=plot_kws.pop("bw_adjust", 1),
-            bw_method=bw_method,
-        )
-
-        inner_kws = plot_kws.pop("inner_kws", {}).copy()
-        linewidth = plot_kws.pop("linewidth", None)
-        linecolor = plot_kws.pop("linecolor", "auto")
-        linecolor = p._complement_color(linecolor, color, p._hue_map)
-
-        p.plot_violins(
-            width=width,
-            dodge=dodge,
-            gap=gap,
-            split=split,
-            color=color,
-            fill=fill,
-            linecolor=linecolor,
-            linewidth=linewidth,
-            inner=inner,
-            density_norm=density_norm,
-            common_norm=common_norm,
-            kde_kws=kde_kws,
-            inner_kws=inner_kws,
-            plot_kws=plot_kws,
-        )
-
-    elif kind == "boxen":
-
-        plot_kws = kwargs.copy()
-        gap = plot_kws.pop("gap", 0)
-        fill = plot_kws.pop("fill", True)
-        linecolor = plot_kws.pop("linecolor", "auto")
-        linewidth = plot_kws.pop("linewidth", None)
-        k_depth = plot_kws.pop("k_depth", "tukey")
-        width_method = plot_kws.pop("width_method", "exponential")
-        outlier_prop = plot_kws.pop("outlier_prop", 0.007)
-        trust_alpha = plot_kws.pop("trust_alpha", 0.05)
-        showfliers = plot_kws.pop("showfliers", True)
-        box_kws = plot_kws.pop("box_kws", {})
-        flier_kws = plot_kws.pop("flier_kws", {})
-        line_kws = plot_kws.pop("line_kws", {})
-        if "scale" in plot_kws:
-            width_method = p._boxen_scale_backcompat(
-                plot_kws["scale"], width_method
+        if kind in ["strip", "swarm"]:
+            kwargs.update(normalize_kwargs(kwargs, mpl.collections.PathCollection))
+            kwargs["edgecolor"] = p._complement_color(
+                kwargs.pop("edgecolor", default), local_color, p._hue_map
             )
-        linecolor = p._complement_color(linecolor, color, p._hue_map)
 
-        p.plot_boxens(
-            width=width,
-            dodge=dodge,
-            gap=gap,
-            fill=fill,
-            color=color,
-            linecolor=linecolor,
-            linewidth=linewidth,
-            width_method=width_method,
-            k_depth=k_depth,
-            outlier_prop=outlier_prop,
-            trust_alpha=trust_alpha,
-            showfliers=showfliers,
-            box_kws=box_kws,
-            flier_kws=flier_kws,
-            line_kws=line_kws,
-            plot_kws=plot_kws,
-        )
+        width = kwargs.pop("width", 0.8)
+        dodge = kwargs.pop("dodge", False if kind in undodged_kinds else "auto")
+        if dodge == "auto":
+            dodge = p._dodge_needed()
 
-    elif kind == "point":
+        if "weight" in p.plot_data:
+            if kind not in ["bar", "point"]:
+                msg = f"The `weights` parameter has no effect with kind={kind!r}."
+                warnings.warn(msg, stacklevel=2)
+            agg_cls = WeightedAggregator
+        else:
+            agg_cls = EstimateAggregator
 
-        aggregator = agg_cls(estimator, errorbar, n_boot=n_boot, seed=seed)
+        if kind == "strip":
 
-        markers = kwargs.pop("markers", default)
-        linestyles = kwargs.pop("linestyles", default)
+            jitter = kwargs.pop("jitter", True)
+            plot_kws = kwargs.copy()
+            plot_kws.setdefault("zorder", 3)
+            plot_kws.setdefault("linewidth", 0)
+            if "s" not in plot_kws:
+                plot_kws["s"] = plot_kws.pop("size", 5) ** 2
 
-        # Deprecations to remove in v0.15.0.
-        # TODO Uncomment when removing deprecation backcompat
-        # capsize = kwargs.pop("capsize", 0)
-        # err_kws = normalize_kwargs(kwargs.pop("err_kws", {}), mpl.lines.Line2D)
-        p._point_kwargs_backcompat(
-            kwargs.pop("scale", deprecated),
-            kwargs.pop("join", deprecated),
-            kwargs
-        )
-        err_kws, capsize = p._err_kws_backcompat(
-            normalize_kwargs(kwargs.pop("err_kws", {}), mpl.lines.Line2D),
-            None,
-            errwidth=kwargs.pop("errwidth", deprecated),
-            capsize=kwargs.pop("capsize", 0),
-        )
+            p.plot_strips(
+                jitter=jitter,
+                dodge=dodge,
+                color=local_color,
+                plot_kws=plot_kws,
+            )
 
-        p.plot_points(
-            aggregator=aggregator,
-            markers=markers,
-            linestyles=linestyles,
-            dodge=dodge,
-            color=color,
-            capsize=capsize,
-            err_kws=err_kws,
-            plot_kws=kwargs,
-        )
+        elif kind == "swarm":
 
-    elif kind == "bar":
+            warn_thresh = kwargs.pop("warn_thresh", .05)
+            plot_kws = kwargs.copy()
+            plot_kws.setdefault("zorder", 3)
+            if "s" not in plot_kws:
+                plot_kws["s"] = plot_kws.pop("size", 5) ** 2
 
-        aggregator = agg_cls(estimator, errorbar, n_boot=n_boot, seed=seed)
+            if plot_kws.setdefault("linewidth", 0) is None:
+                plot_kws["linewidth"] = np.sqrt(plot_kws["s"]) / 10
 
-        err_kws, capsize = p._err_kws_backcompat(
-            normalize_kwargs(kwargs.pop("err_kws", {}), mpl.lines.Line2D),
-            errcolor=kwargs.pop("errcolor", deprecated),
-            errwidth=kwargs.pop("errwidth", deprecated),
-            capsize=kwargs.pop("capsize", 0),
-        )
-        gap = kwargs.pop("gap", 0)
-        fill = kwargs.pop("fill", True)
+            p.plot_swarms(
+                dodge=dodge,
+                color=local_color,
+                warn_thresh=warn_thresh,
+                plot_kws=plot_kws,
+            )
 
-        p.plot_bars(
-            aggregator=aggregator,
-            dodge=dodge,
-            width=width,
-            gap=gap,
-            color=color,
-            fill=fill,
-            capsize=capsize,
-            err_kws=err_kws,
-            plot_kws=kwargs,
-        )
+        elif kind == "box":
 
-    elif kind == "count":
+            plot_kws = kwargs.copy()
+            gap = plot_kws.pop("gap", 0)
+            fill = plot_kws.pop("fill", True)
+            whis = plot_kws.pop("whis", 1.5)
+            linewidth = plot_kws.pop("linewidth", None)
+            fliersize = plot_kws.pop("fliersize", 5)
+            linecolor = p._complement_color(
+                plot_kws.pop("linecolor", "auto"), local_color, p._hue_map
+            )
 
-        aggregator = EstimateAggregator("sum", errorbar=None)
+            p.plot_boxes(
+                width=width,
+                dodge=dodge,
+                gap=gap,
+                fill=fill,
+                whis=whis,
+                color=local_color,
+                linecolor=linecolor,
+                linewidth=linewidth,
+                fliersize=fliersize,
+                plot_kws=plot_kws,
+            )
 
-        count_axis = {"x": "y", "y": "x"}[p.orient]
-        p.plot_data[count_axis] = 1
+        elif kind == "violin":
 
-        stat_options = ["count", "percent", "probability", "proportion"]
-        stat = _check_argument("stat", stat_options, kwargs.pop("stat", "count"))
-        p.variables[count_axis] = stat
-        if stat != "count":
-            denom = 100 if stat == "percent" else 1
-            p.plot_data[count_axis] /= len(p.plot_data) / denom
+            plot_kws = kwargs.copy()
+            gap = plot_kws.pop("gap", 0)
+            fill = plot_kws.pop("fill", True)
+            split = plot_kws.pop("split", False)
+            inner = plot_kws.pop("inner", "box")
+            density_norm = plot_kws.pop("density_norm", "area")
+            common_norm = plot_kws.pop("common_norm", False)
 
-        gap = kwargs.pop("gap", 0)
-        fill = kwargs.pop("fill", True)
+            scale = plot_kws.pop("scale", deprecated)
+            scale_hue = plot_kws.pop("scale_hue", deprecated)
+            density_norm, common_norm = p._violin_scale_backcompat(
+                scale, scale_hue, density_norm, common_norm,
+            )
 
-        p.plot_bars(
-            aggregator=aggregator,
-            dodge=dodge,
-            width=width,
-            gap=gap,
-            color=color,
-            fill=fill,
-            capsize=0,
-            err_kws={},
-            plot_kws=kwargs,
-        )
+            bw_method = p._violin_bw_backcompat(
+                plot_kws.pop("bw", deprecated), plot_kws.pop("bw_method", "scott")
+            )
+            kde_kws = dict(
+                cut=plot_kws.pop("cut", 2),
+                gridsize=plot_kws.pop("gridsize", 100),
+                bw_adjust=plot_kws.pop("bw_adjust", 1),
+                bw_method=bw_method,
+            )
 
-    else:
-        msg = (
-            f"Invalid `kind`: {kind!r}. Options are 'strip', 'swarm', "
-            "'box', 'boxen', 'violin', 'bar', 'count', and 'point'."
-        )
-        raise ValueError(msg)
+            inner_kws = plot_kws.pop("inner_kws", {}).copy()
+            linewidth = plot_kws.pop("linewidth", None)
+            linecolor = plot_kws.pop("linecolor", "auto")
+            linecolor = p._complement_color(linecolor, local_color, p._hue_map)
 
-    for ax in g.axes.flat:
-        p._adjust_cat_axis(ax, axis=p.orient)
+            p.plot_violins(
+                width=width,
+                dodge=dodge,
+                gap=gap,
+                split=split,
+                color=local_color,
+                fill=fill,
+                linecolor=linecolor,
+                linewidth=linewidth,
+                inner=inner,
+                density_norm=density_norm,
+                common_norm=common_norm,
+                kde_kws=kde_kws,
+                inner_kws=inner_kws,
+                plot_kws=plot_kws,
+            )
 
-    builder.set_axis_labels()
+        elif kind == "boxen":
 
-    builder.finalize_layout()
+            plot_kws = kwargs.copy()
+            gap = plot_kws.pop("gap", 0)
+            fill = plot_kws.pop("fill", True)
+            linecolor = plot_kws.pop("linecolor", "auto")
+            linewidth = plot_kws.pop("linewidth", None)
+            k_depth = plot_kws.pop("k_depth", "tukey")
+            width_method = plot_kws.pop("width_method", "exponential")
+            outlier_prop = plot_kws.pop("outlier_prop", 0.007)
+            trust_alpha = plot_kws.pop("trust_alpha", 0.05)
+            showfliers = plot_kws.pop("showfliers", True)
+            box_kws = plot_kws.pop("box_kws", {})
+            flier_kws = plot_kws.pop("flier_kws", {})
+            line_kws = plot_kws.pop("line_kws", {})
+            if "scale" in plot_kws:
+                width_method = p._boxen_scale_backcompat(
+                    plot_kws["scale"], width_method
+                )
+            linecolor = p._complement_color(linecolor, local_color, p._hue_map)
 
-    # Collect legend from individual axes
-    legend_title = p.variables.get("hue")
-    if legend == "auto":
-        show_legend = not p._redundant_hue and p.input_format != "wide"
-    else:
-        show_legend = bool(legend)
-    if show_legend:
-        builder.collect_legend_from_axes(
-            legend_title=legend_title,
-            label_order=hue_order,
-        )
+            p.plot_boxens(
+                width=width,
+                dodge=dodge,
+                gap=gap,
+                fill=fill,
+                color=local_color,
+                linecolor=linecolor,
+                linewidth=linewidth,
+                width_method=width_method,
+                k_depth=k_depth,
+                outlier_prop=outlier_prop,
+                trust_alpha=trust_alpha,
+                showfliers=showfliers,
+                box_kws=box_kws,
+                flier_kws=flier_kws,
+                line_kws=line_kws,
+                plot_kws=plot_kws,
+            )
 
-    builder.finalize_data(original_data=data)
+        elif kind == "point":
 
-    return g
+            aggregator = agg_cls(estimator, local_errorbar, n_boot=n_boot, seed=seed)
+
+            markers = kwargs.pop("markers", default)
+            linestyles = kwargs.pop("linestyles", default)
+
+            p._point_kwargs_backcompat(
+                kwargs.pop("scale", deprecated),
+                kwargs.pop("join", deprecated),
+                kwargs
+            )
+            err_kws, capsize = p._err_kws_backcompat(
+                normalize_kwargs(kwargs.pop("err_kws", {}), mpl.lines.Line2D),
+                None,
+                errwidth=kwargs.pop("errwidth", deprecated),
+                capsize=kwargs.pop("capsize", 0),
+            )
+
+            p.plot_points(
+                aggregator=aggregator,
+                markers=markers,
+                linestyles=linestyles,
+                dodge=dodge,
+                color=local_color,
+                capsize=capsize,
+                err_kws=err_kws,
+                plot_kws=kwargs,
+            )
+
+        elif kind == "bar":
+
+            aggregator = agg_cls(estimator, local_errorbar, n_boot=n_boot, seed=seed)
+
+            err_kws, capsize = p._err_kws_backcompat(
+                normalize_kwargs(kwargs.pop("err_kws", {}), mpl.lines.Line2D),
+                errcolor=kwargs.pop("errcolor", deprecated),
+                errwidth=kwargs.pop("errwidth", deprecated),
+                capsize=kwargs.pop("capsize", 0),
+            )
+            gap = kwargs.pop("gap", 0)
+            fill = kwargs.pop("fill", True)
+
+            p.plot_bars(
+                aggregator=aggregator,
+                dodge=dodge,
+                width=width,
+                gap=gap,
+                color=local_color,
+                fill=fill,
+                capsize=capsize,
+                err_kws=err_kws,
+                plot_kws=kwargs,
+            )
+
+        elif kind == "count":
+
+            aggregator = EstimateAggregator("sum", errorbar=None)
+
+            count_axis = {"x": "y", "y": "x"}[p.orient]
+            p.plot_data[count_axis] = 1
+
+            stat_options = ["count", "percent", "probability", "proportion"]
+            stat = _check_argument("stat", stat_options, kwargs.pop("stat", "count"))
+            p.variables[count_axis] = stat
+            if stat != "count":
+                denom = 100 if stat == "percent" else 1
+                p.plot_data[count_axis] /= len(p.plot_data) / denom
+
+            gap = kwargs.pop("gap", 0)
+            fill = kwargs.pop("fill", True)
+
+            p.plot_bars(
+                aggregator=aggregator,
+                dodge=dodge,
+                width=width,
+                gap=gap,
+                color=local_color,
+                fill=fill,
+                capsize=0,
+                err_kws={},
+                plot_kws=kwargs,
+            )
+
+        else:
+            msg = (
+                f"Invalid `kind`: {kind!r}. Options are 'strip', 'swarm', "
+                "'box', 'boxen', 'violin', 'bar', 'count', and 'point'."
+            )
+            raise ValueError(msg)
+
+        for ax in g.axes.flat:
+            p._adjust_cat_axis(ax, axis=p.orient)
+
+    # --- Legend predicate (closes over ``p`` and ``state``) ---
+
+    def _show_legend(builder):
+        if legend == "auto":
+            return not p._redundant_hue and p.input_format != "wide"
+        return bool(legend)
+
+    # --- Assemble and run the pipeline ---
+
+    builder = _FacetGridBuilder("catplot", plotter=p)
+    builder.configure(
+        check_ax_opts=dict(axes_level_func=f"{kind}plot", backtick_name=False),
+        facet_opts=dict(row=row, col=col, row_order=row_order, col_order=col_order),
+        grid_init_kwargs=dict(
+            row=row_name,
+            col=col_name,
+            col_wrap=col_wrap,
+            row_order=row_order,
+            col_order=col_order,
+            height=height,
+            aspect=aspect,
+            facet_kws=facet_kws,
+            sharex=sharex,
+            sharey=sharey,
+            legend_out=legend_out,
+            margin_titles=margin_titles,
+        ),
+        legend_strategy="axes",
+        legend_opts=dict(
+            predicate=_show_legend,
+            legend_title=p.variables.get("hue"),
+            label_order=lambda: state["hue_order"],
+        ),
+        data_opts=dict(original_data=data),
+        on_draw=_draw,
+    )
+    return builder.build(kwargs)
 
 
 catplot.__doc__ = dedent("""\
