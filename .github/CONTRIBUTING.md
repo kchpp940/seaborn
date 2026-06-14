@@ -46,6 +46,12 @@ If you only need a subset, pick a finer-grained combination, e.g.::
     # Build the docs locally
     pip install -e .[stats,docs]
 
+The top-level ``Makefile`` also provides convenience targets that wrap these
+commands, so you can run ``make install-test``, ``make install-dev``,
+``make install-docs``, or ``make install-all`` instead of typing the full
+``pip install`` lines. After installation, run ``make check-deps`` at any time
+to verify that the composition extras are still internally consistent.
+
 Reporting bugs
 --------------
 

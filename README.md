@@ -77,11 +77,18 @@ Code style is enforced with ``flake8`` using the settings in the
 [`setup.cfg`](./setup.cfg) file. Run ``make lint`` to check. Type checking is
 performed with ``mypy``; run ``make typecheck`` to verify. Alternately, you can
 use ``pre-commit`` to automatically run lint checks on any files you are
-committing: just run ``pre-commit install`` to set it up, and then commit as
-usual going forward.
+committing: first make sure the ``dev`` (or ``build``) extra is installed
+(``pip install -e .[dev]``), then run ``pre-commit install`` to set it up, and
+then commit as usual going forward. The pre-commit hooks use your local extras
+installation rather than fetching pinned tool versions, so lint output always
+matches the CI environment.
 
 Lint and type-check dependencies are included in both the ``dev`` and ``build``
 extras; to install only the lint tools, use ``pip install .[lint]``.
+
+As a shortcut, the top-level ``Makefile`` exposes the targets ``make install-test``,
+``make install-dev``, ``make install-docs``, and ``make install-all`` that wrap
+the corresponding ``pip install`` commands above.
 
 Development
 -----------
