@@ -26,11 +26,7 @@ See the documentation for other :class:`Plot` methods to learn about the many
 ways that a plot can be enhanced and customized.
 
 """
-from seaborn._core import (  # noqa: F401
-    Plot,
-    Move, Dodge, Jitter, Norm, Shift, Stack,
-    Scale, Boolean, Continuous, Nominal, Temporal,
-)
+from seaborn._core.plot import Plot  # noqa: F401
 
 from seaborn._marks.base import Mark  # noqa: F401
 from seaborn._marks.area import Area, Band  # noqa: F401
@@ -45,3 +41,9 @@ from seaborn._stats.counting import Count, Hist  # noqa: F401
 from seaborn._stats.density import KDE  # noqa: F401
 from seaborn._stats.order import Perc  # noqa: F401
 from seaborn._stats.regression import PolyFit  # noqa: F401
+
+from seaborn._core.moves import Dodge, Jitter, Norm, Shift, Stack, Move  # noqa: F401
+
+from seaborn._core.scales import (  # noqa: F401
+    Boolean, Continuous, Nominal, Temporal, Scale
+)

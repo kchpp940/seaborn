@@ -8,8 +8,6 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-__all__ = ["VarType", "variable_type", "categorical_order"]
-
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Literal
@@ -38,7 +36,7 @@ class VarType(UserString):
 
 
 def variable_type(
-    vector,
+    vector: Series,
     boolean_type: Literal["numeric", "categorical", "boolean"] = "numeric",
     strict_boolean: bool = False,
 ) -> VarType:
@@ -67,9 +65,6 @@ def variable_type(
     var_type : 'numeric', 'categorical', or 'datetime'
         Name identifying the type of data in the vector.
     """
-
-    if not isinstance(vector, pd.Series):
-        vector = pd.Series(vector)
 
     # If a categorical dtype is set, infer categorical
     if isinstance(getattr(vector, 'dtype', None), pd.CategoricalDtype):
@@ -147,15 +142,15 @@ def variable_type(
     return VarType("categorical")
 
 
-def categorical_order(vector, order=None):
+def categorical_order(vector: Series, order: list | None = None) -> list:
     """
     Return a list of unique data values using seaborn's ordering rules.
 
     Parameters
     ----------
-    vector : Series, Index, or array-like
-        Vector of "categorical" values.
-    order : list, optional
+    vector : Series
+        Vector of "categorical" values
+    order : list
         Desired order of category levels to override the order determined
         from the `data` object.
 
@@ -166,17 +161,13 @@ def categorical_order(vector, order=None):
 
     """
     if order is not None:
-        return list(order)
+        return order
 
-    if hasattr(vector, "categories"):
-        order = vector.categories
+    if vector.dtype.name == "category":
+        order = list(vector.cat.categories)
     else:
-        try:
-            order = vector.cat.categories
-        except (TypeError, AttributeError):
-            order = pd.Series(vector).unique()
-            if variable_type(pd.Series(vector)) == "numeric":
-                order = np.sort(order)
-            order = filter(pd.notnull, order)
+        order = list(filter(pd.notnull, vector.unique()))
+        if variable_type(pd.Series(order)) == "numeric":
+            order.sort()
 
-    return list(order)
+    return order

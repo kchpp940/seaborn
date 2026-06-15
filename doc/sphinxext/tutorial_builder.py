@@ -8,6 +8,15 @@ import numpy as np
 import matplotlib as mpl
 import seaborn as sns
 import seaborn.objects as so
+from seaborn._doc_config import (
+    apply_mpl_backend,
+    apply_random_seed,
+    RANDOM_SEED,
+    doc_example_context,
+    get_data_cache_path,
+)
+apply_mpl_backend()
+apply_random_seed()
 
 
 TEMPLATE = """
@@ -83,13 +92,14 @@ def write_thumbnail(svg_path, page):
         sns.plotting_context("notebook"),
         sns.color_palette("deep")
     ):
-        fig = globals()[page]()
-        for ax in fig.axes:
-            ax.set(xticklabels=[], yticklabels=[], xlabel="", ylabel="", title="")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            fig.tight_layout()
-        fig.savefig(svg_path, format="svg")
+        with doc_example_context(f"tutorial:{page}"):
+            fig = globals()[page]()
+            for ax in fig.axes:
+                ax.set(xticklabels=[], yticklabels=[], xlabel="", ylabel="", title="")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fig.tight_layout()
+            fig.savefig(svg_path, format="svg")
 
 
 def introduction():

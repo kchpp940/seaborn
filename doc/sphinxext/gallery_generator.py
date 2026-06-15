@@ -14,7 +14,17 @@ import shutil
 import warnings
 
 import matplotlib
-matplotlib.use('Agg')
+from seaborn._doc_config import (
+    MPL_BACKEND,
+    IMAGE_DPI,
+    IMAGE_FORMAT,
+    apply_mpl_backend,
+    apply_random_seed,
+    doc_example_context,
+    extract_dataset_names,
+)
+apply_mpl_backend()
+apply_random_seed()
 import matplotlib.pyplot as plt  # noqa: E402
 
 
@@ -295,20 +305,22 @@ class ExampleGenerator:
     def exec_file(self):
         print(f"running {self.filename}")
 
-        plt.close('all')
-        my_globals = {'pl': plt,
-                      'plt': plt}
-        execfile(self.filename, my_globals)
+        datasets = extract_dataset_names(self.filetext)
+        with doc_example_context(self.filename, dataset_names=datasets):
+            plt.close('all')
+            my_globals = {'pl': plt,
+                          'plt': plt}
+            execfile(self.filename, my_globals)
 
-        fig = plt.gcf()
-        fig.canvas.draw()
-        pngfile = op.join(self.target_dir, self.pngfilename)
-        thumbfile = op.join("example_thumbs", self.thumbfilename)
-        self.html = f"<img src=../{self.pngfilename}>"
-        fig.savefig(pngfile, dpi=75, bbox_inches="tight")
+            fig = plt.gcf()
+            fig.canvas.draw()
+            pngfile = op.join(self.target_dir, self.pngfilename)
+            thumbfile = op.join("example_thumbs", self.thumbfilename)
+            self.html = f"<img src=../{self.pngfilename}>"
+            fig.savefig(pngfile, dpi=75, bbox_inches="tight")
 
-        cx, cy = self.thumbloc
-        create_thumbnail(pngfile, thumbfile, cx=cx, cy=cy)
+            cx, cy = self.thumbloc
+            create_thumbnail(pngfile, thumbfile, cx=cx, cy=cy)
 
     def toctree_entry(self):
         return f"   ./{op.splitext(self.htmlfilename)[0]}\n\n"

@@ -9,13 +9,9 @@ import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-from ._base import VectorPlotter
-from ._core import (
-    variable_type,
-    handle_data_source,
-    OrderRegistry,
-    categorical_order,
-)
+from ._base import VectorPlotter, variable_type
+from ._core.data import handle_data_source
+from ._core.order import OrderRegistry, categorical_order
 from ._compat import share_axis, get_legend_handles
 from . import utils
 from .utils import (

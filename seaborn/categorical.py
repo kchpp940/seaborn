@@ -14,7 +14,7 @@ from matplotlib.markers import MarkerStyle
 from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
 
-from seaborn._core import default, deprecated
+from seaborn._core.typing import default, deprecated
 from seaborn._base import VectorPlotter, infer_orient
 from seaborn._stats.density import KDE
 from seaborn import utils

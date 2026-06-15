@@ -10,7 +10,8 @@ except ImportError:
 import numpy as np
 from pandas import DataFrame
 
-from seaborn._core import Scale, GroupBy
+from seaborn._core.scales import Scale
+from seaborn._core.groupby import GroupBy
 from seaborn._stats.base import Stat
 from seaborn.utils import _version_predates
 

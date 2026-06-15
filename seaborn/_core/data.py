@@ -9,9 +9,7 @@ from typing import cast
 import pandas as pd
 from pandas import DataFrame
 
-from .typing import DataSource, VariableSpec, ColumnName
-
-__all__ = ["PlotData", "handle_data_source"]
+from seaborn._core.typing import DataSource, VariableSpec, ColumnName
 
 
 class PlotData:

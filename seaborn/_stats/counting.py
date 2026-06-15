@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
-from seaborn._core import GroupBy, Scale
+from seaborn._core.groupby import GroupBy
+from seaborn._core.scales import Scale
 from seaborn._stats.base import Stat
 from seaborn._statistics import BinDiagnostics, BinDiagnosticsCollector
 

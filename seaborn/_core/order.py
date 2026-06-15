@@ -7,9 +7,7 @@ import numpy as np
 import pandas as pd
 from pandas import Series
 
-from .rules import variable_type, categorical_order as _categorical_order
-
-__all__ = ["OrderRegistry", "categorical_order"]
+from seaborn._core.rules import variable_type
 
 
 @dataclass
@@ -352,7 +350,8 @@ def categorical_order(vector, order=None):
     """
     Return a list of unique data values using seaborn's ordering rules.
 
-    This is a convenience re-export of :func:`seaborn._core.rules.categorical_order`.
+    This is a convenience wrapper that creates a temporary OrderRegistry
+    and resolves the order for a single variable.
 
     Parameters
     ----------
@@ -367,4 +366,20 @@ def categorical_order(vector, order=None):
     order : list
         Ordered list of category levels not including null values.
     """
-    return _categorical_order(vector, order)
+    if order is not None:
+        return list(order)
+
+    if hasattr(vector, "categories"):
+        order = vector.categories
+    else:
+        try:
+            order = vector.cat.categories
+        except (TypeError, AttributeError):
+
+            order = pd.Series(vector).unique()
+
+            if variable_type(pd.Series(vector)) == "numeric":
+                order = np.sort(order)
+
+        order = filter(pd.notnull, order)
+    return list(order)

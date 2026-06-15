@@ -36,6 +36,14 @@ from nbconvert.preprocessors import (
     ExtractOutputPreprocessor
 )
 from traitlets.config import Config
+from seaborn._doc_config import (
+    NB_EXEC_TIMEOUT,
+    NB_KERNEL as DOC_NB_KERNEL,
+    IMAGE_DPI,
+    apply_mpl_backend,
+    apply_random_seed,
+    get_data_cache_path,
+)
 
 
 class MetadataError(Exception):
@@ -105,25 +113,38 @@ def strip_output(nb):
 
 if __name__ == "__main__":
 
-    # Get the desired ipynb file path and parse into components
+    apply_mpl_backend()
+    apply_random_seed()
+
     _, fpath, outdir = sys.argv
     basedir, fname = os.path.split(fpath)
     fstem = fname[:-6]
 
-    # Read the notebook
-    with open(fpath) as f:
-        nb = nbformat.read(f, as_version=4)
+    try:
+        with open(fpath) as f:
+            nb = nbformat.read(f, as_version=4)
 
-    # Run the notebook
-    kernel = os.environ.get("NB_KERNEL", None)
-    if kernel is None:
-        kernel = nb["metadata"]["kernelspec"]["name"]
-    ep = ExecutePreprocessor(
-        timeout=600,
-        kernel_name=kernel,
-        extra_arguments=["--InlineBackend.rc=figure.dpi=88"]
-    )
-    ep.preprocess(nb, {"metadata": {"path": basedir}})
+        kernel = os.environ.get("NB_KERNEL", None)
+        if kernel is None:
+            kernel = nb["metadata"]["kernelspec"]["name"]
+        ep = ExecutePreprocessor(
+            timeout=NB_EXEC_TIMEOUT,
+            kernel_name=kernel,
+            extra_arguments=[f"--InlineBackend.rc=figure.dpi={IMAGE_DPI}"]
+        )
+        ep.preprocess(nb, {"metadata": {"path": basedir}})
+    except Exception:
+        print(
+            f"\n{'='*60}\n"
+            f"NOTEBOOK EXECUTION FAILURE: {fpath}\n"
+            f"  Data cache: {get_data_cache_path()}\n"
+            f"  NB kernel:  {kernel}\n"
+            f"  Timeout:    {NB_EXEC_TIMEOUT}s\n"
+            f"  Image DPI:  {IMAGE_DPI}\n"
+            f"{'='*60}",
+            file=sys.stderr,
+        )
+        raise
 
     # Remove plain text execution result outputs
     for cell in nb.get("cells", {}):

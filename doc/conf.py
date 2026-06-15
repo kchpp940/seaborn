@@ -15,6 +15,20 @@ import sys
 import time
 import seaborn
 from seaborn._core.properties import PROPERTIES
+from seaborn._doc_config import (
+    MPL_BACKEND,
+    RANDOM_SEED,
+    IMAGE_FORMAT,
+    IMAGE_DPI,
+    apply_mpl_backend,
+    apply_mpl_rc,
+    apply_random_seed,
+)
+
+os.environ["SEABORN_DOC_BUILD"] = "1"
+apply_mpl_backend()
+apply_random_seed()
+apply_mpl_rc()
 
 sys.path.insert(0, os.path.abspath('sphinxext'))
 
@@ -71,7 +85,7 @@ issues_github_path = 'mwaskom/seaborn'
 
 # Include the example source for plots in API docs
 plot_include_source = True
-plot_formats = [('png', 90)]
+plot_formats = [(IMAGE_FORMAT, IMAGE_DPI)]
 plot_html_show_formats = False
 plot_html_show_source_link = False
 

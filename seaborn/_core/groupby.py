@@ -5,9 +5,7 @@ from typing import cast, Iterable
 
 import pandas as pd
 
-from .rules import categorical_order
-
-__all__ = ["GroupBy"]
+from seaborn._core.rules import categorical_order
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:

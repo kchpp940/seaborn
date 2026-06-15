@@ -14,7 +14,7 @@ from matplotlib.colors import to_rgb
 import matplotlib.pyplot as plt
 from matplotlib.cbook import normalize_kwargs
 
-from seaborn._core import deprecated
+from seaborn._core.typing import deprecated
 from seaborn.external.version import Version
 from seaborn.external.appdirs import user_cache_dir
 

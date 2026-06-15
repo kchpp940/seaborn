@@ -2,10 +2,9 @@
 Custom exceptions for the seaborn.objects interface.
 
 This is very lightweight, but it's a separate module to avoid circular imports.
+
 """
 from __future__ import annotations
-
-__all__ = ["PlotSpecError"]
 
 
 class PlotSpecError(RuntimeError):

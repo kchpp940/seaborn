@@ -14,8 +14,14 @@ permissions:
 
 env:
   NB_KERNEL: python
+  SEABORN_DOC_MPL_BACKEND: Agg
   MPLBACKEND: Agg
   SEABORN_DATA: ${{ github.workspace }}/seaborn-data
+  SEABORN_DOC_BUILD: "1"
+  SEABORN_DOC_RANDOM_SEED: "0"
+  SEABORN_DOC_IMAGE_FORMAT: png
+  SEABORN_DOC_IMAGE_DPI: "90"
+  SEABORN_DOC_SAVEFIG_BBOX: tight
   PYDEVD_DISABLE_FILE_VALIDATION: 1
 
 jobs:
@@ -40,8 +46,18 @@ jobs:
           sudo dpkg -i pandoc-3.1.11-1-amd64.deb
 
       - name: Cache datasets
+        uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9 # v4.0.2
+        with:
+          path: ${{ github.workspace }}/seaborn-data
+          key: seaborn-data-${{ hashFiles('ci/cache_datasets.py') }}
+          restore-keys: |
+            seaborn-data-
+
+      - name: Populate dataset cache
         run: |
-          git clone https://github.com/mwaskom/seaborn-data.git
+          if [ ! -d "$SEABORN_DATA" ] || [ -z "$(ls -A $SEABORN_DATA)" ]; then
+            git clone https://github.com/mwaskom/seaborn-data.git "$SEABORN_DATA"
+          fi
           ls $SEABORN_DATA
 
       - name: Build docs
@@ -51,6 +67,28 @@ jobs:
           cd doc
           make -j `nproc` notebooks
           make html
+
+      - name: Diagnose doc build failure
+        if: ${{ failure() }}
+        run: |
+          echo "===== DOC BUILD FAILURE DIAGNOSTICS ====="
+          echo "Example images generated (if any):"
+          find doc/_build -name "*.png" -o -name "*.svg" 2>/dev/null | head -50 || true
+          echo ""
+          echo "Dataset cache contents:"
+          ls -la "$SEABORN_DATA" 2>/dev/null || echo "  <cache dir missing>"
+          echo ""
+          echo "Doc config environment:"
+          echo "  SEABORN_DATA=$SEABORN_DATA"
+          echo "  SEABORN_DOC_MPL_BACKEND=$SEABORN_DOC_MPL_BACKEND"
+          echo "  SEABORN_DOC_RANDOM_SEED=$SEABORN_DOC_RANDOM_SEED"
+          echo "  SEABORN_DOC_IMAGE_FORMAT=$SEABORN_DOC_IMAGE_FORMAT"
+          echo "  SEABORN_DOC_IMAGE_DPI=$SEABORN_DOC_IMAGE_DPI"
+          echo "  SEABORN_DOC_BUILD=$SEABORN_DOC_BUILD"
+          echo ""
+          echo "Sphinx build log tail:"
+          cat doc/_build/html/.buildinfo 2>/dev/null || echo "  <no buildinfo>"
+          echo "===== END DIAGNOSTICS ====="
 
 
   run-tests:
