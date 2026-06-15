@@ -1,19 +1,7 @@
 Building the seaborn docs
 =========================
 
-Building the docs requires additional dependencies. They are managed through
-`pyproject.toml` extras, just like all other development dependencies. From a
-clone of the repository, install one of::
-
-    # Just what's needed to build the docs
-    pip install -e .[stats,docs]
-
-    # The full build extra (includes dev/test tools as well)
-    pip install -e .[build]
-
-> **Note:** All dependency specifications live in `pyproject.toml`. Do not
-> install doc build tools manually; always use the extras above to ensure the
-> same versions are used in local builds and CI.
+Building the docs requires additional dependencies; they can be installed with `pip install seaborn[stats,docs]`.
 
 The build process involves conversion of Jupyter notebooks to `rst` files. To facilitate this, you may need to set `NB_KERNEL` environment variable to the name of a kernel on your machine (e.g. `export NB_KERNEL="python3"`). To get a list of available Python kernels, run `jupyter kernelspec list`.
 

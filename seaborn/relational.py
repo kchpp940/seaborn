@@ -21,6 +21,10 @@ from ._compat import groupby_apply_include_groups
 from ._statistics import EstimateAggregator, WeightedAggregator
 from .axisgrid import FacetGrid, _facet_docs
 from ._docstrings import DocstringComponents, _core_docs
+from ._param_validation import (
+    _check_figure_level_ax,
+    _handle_ignored_param,
+)
 
 
 __all__ = ["relplot", "scatterplot", "lineplot"]
@@ -725,13 +729,15 @@ def relplot(
         raise ValueError(err)
 
     # Check for attempt to plot onto specific axes and warn
-    if "ax" in kwargs:
-        msg = (
+    _check_figure_level_ax(
+        "relplot",
+        kwargs,
+        message=(
             "relplot is a figure-level function and does not accept "
-            "the `ax` parameter. You may wish to try {}".format(kind + "plot")
-        )
-        warnings.warn(msg, UserWarning)
-        kwargs.pop("ax")
+            f"the `ax` parameter. You may wish to try {kind}plot"
+        ),
+        stacklevel=2,
+    )
 
     # Use the full dataset to map the semantics
     variables = dict(x=x, y=y, hue=hue, size=size, style=style)
@@ -739,12 +745,12 @@ def relplot(
         variables["units"] = units
         variables["weight"] = weights
     else:
-        if units is not None:
-            msg = "The `units` parameter has no effect with kind='scatter'."
-            warnings.warn(msg, stacklevel=2)
-        if weights is not None:
-            msg = "The `weights` parameter has no effect with kind='scatter'."
-            warnings.warn(msg, stacklevel=2)
+        _handle_ignored_param(
+            "units", units, reason="has no effect with kind='scatter'", stacklevel=2
+        )
+        _handle_ignored_param(
+            "weights", weights, reason="has no effect with kind='scatter'", stacklevel=2
+        )
     p = Plotter(
         data=data,
         variables=variables,

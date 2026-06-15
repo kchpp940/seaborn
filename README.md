@@ -26,7 +26,7 @@ To build the documentation locally, please refer to [`doc/README.md`](doc/README
 Dependencies
 ------------
 
-Seaborn supports Python 3.10+.
+Seaborn supports Python 3.8+.
 
 Installation requires [numpy](https://numpy.org/), [pandas](https://pandas.pydata.org/), and [matplotlib](https://matplotlib.org/). Some advanced statistical functionality requires [scipy](https://www.scipy.org/) and/or [statsmodels](https://www.statsmodels.org/).
 
@@ -56,72 +56,15 @@ A paper describing seaborn has been published in the [Journal of Open Source Sof
 Testing
 -------
 
-Testing seaborn requires installing additional dependencies. The recommended
-way to set up a development environment is to clone the repository and then
-install with the relevant extras::
+Testing seaborn requires installing additional dependencies; they can be installed with the `dev` extra (e.g., `pip install .[dev]`).
 
-    # Install only test dependencies (for running the test suite)
-    pip install .[test]
+To test the code, run `make test` in the source directory. This will exercise the unit tests (using [pytest](https://docs.pytest.org/)) and generate a coverage report.
 
-    # Install full development environment (tests + lint + build tools)
-    pip install .[dev]
-
-    # Install everything including optional stats and docs dependencies
-    pip install .[build]
-
-To test the code, run ``make test`` in the source directory. This will exercise
-the unit tests (using [pytest](https://docs.pytest.org/)) and generate a
-coverage report.
-
-Code style is enforced with ``flake8`` using the settings in the
-[`setup.cfg`](./setup.cfg) file. Run ``make lint`` to check. Type checking is
-performed with ``mypy``; run ``make typecheck`` to verify. Alternately, you can
-use ``pre-commit`` to automatically run lint checks on any files you are
-committing: first make sure the ``dev`` (or ``build``) extra is installed
-(``pip install -e .[dev]``), then run ``pre-commit install`` to set it up, and
-then commit as usual going forward. The pre-commit hooks use your local extras
-installation rather than fetching pinned tool versions, so lint output always
-matches the CI environment.
-
-Lint and type-check dependencies are included in both the ``dev`` and ``build``
-extras; to install only the lint tools, use ``pip install .[lint]``.
-
-As a shortcut, the top-level ``Makefile`` exposes the targets ``make install-test``,
-``make install-dev``, ``make install-docs``, and ``make install-all`` that wrap
-the corresponding ``pip install`` commands above.
+Code style is enforced with `flake8` using the settings in the [`setup.cfg`](./setup.cfg) file. Run `make lint` to check. Alternately, you can use `pre-commit` to automatically run lint checks on any files you are committing: just run `pre-commit install` to set it up, and then commit as usual going forward.
 
 Development
 -----------
 
 Seaborn development takes place on Github: https://github.com/mwaskom/seaborn
 
-Before contributing code, please set up a local development environment. The
-following extras are available to choose the right set of dependencies for your
-task:
-
-- ``stats`` — Optional statistical libraries (``scipy``, ``statsmodels``) for
-  advanced regression plots, clustering matrices, etc.
-- ``test`` — Tools for running the test suite (``pytest`` + coverage plugins)
-- ``lint`` — Code style and type checking (``flake8``, ``mypy``, ``pandas-stubs``)
-- ``devtools`` — Auxiliary development utilities (``pre-commit``, ``flit``)
-- ``dev`` — Convenience combination of ``test`` + ``lint`` + ``devtools``
-- ``docs`` — Everything required to build the documentation locally
-- ``build`` — All-in-one combination of ``stats`` + ``dev`` + ``docs``
-
-> **Note for maintainers:** ``dev`` and ``build`` are *generated* composition
-> extras. Always edit the atomic extras (``stats`` / ``test`` / ``lint`` /
-> ``devtools`` / ``docs``) and then run ``make fix-deps`` (or
-> ``python3 ci/check_extras_consistency.py --fix``) to regenerate the
-> composition lists. CI runs both a text-level consistency check and a
-> wheel-metadata check to ensure no self-references or drift slip through.
-
-For most contributors, ``pip install -e .[build]`` (editable install with the
-``build`` extra) gives you everything needed to run tests, lint code, and build
-documentation. See [`CONTRIBUTING.md`](.github/CONTRIBUTING.md) for more
-details.
-
-Please submit bugs that you encounter to the
-[issue tracker](https://github.com/mwaskom/seaborn/issues) with a reproducible
-example demonstrating the problem. Questions about usage are more at home on
-StackOverflow, where there is a
-[seaborn tag](https://stackoverflow.com/questions/tagged/seaborn).
+Please submit bugs that you encounter to the [issue tracker](https://github.com/mwaskom/seaborn/issues) with a reproducible example demonstrating the problem. Questions about usage are more at home on StackOverflow, where there is a [seaborn tag](https://stackoverflow.com/questions/tagged/seaborn).

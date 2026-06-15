@@ -36,6 +36,11 @@ from seaborn._statistics import (
 )
 from seaborn.palettes import light_palette
 from seaborn.axisgrid import FacetGrid, _facet_docs
+from seaborn._param_validation import (
+    _check_figure_level_ax,
+    _check_mutually_exclusive,
+    _deprecate_ci,
+)
 
 
 __all__ = [
@@ -2344,7 +2349,7 @@ def barplot(
     ci=deprecated, errcolor=deprecated, errwidth=deprecated, ax=None, **kwargs,
 ):
 
-    errorbar = utils._deprecate_ci(errorbar, ci)
+    errorbar = _deprecate_ci(errorbar, ci)
 
     # Be backwards compatible with len passed directly, which
     # does not work in Series.agg (maybe a pandas bug?)
@@ -2487,7 +2492,7 @@ def pointplot(
     ax=None, **kwargs,
 ):
 
-    errorbar = utils._deprecate_ci(errorbar, ci)
+    errorbar = _deprecate_ci(errorbar, ci)
 
     p = _CategoricalAggPlotter(
         data=data,
@@ -2771,11 +2776,16 @@ def catplot(
 ):
 
     # Check for attempt to plot onto specific axes and warn
-    if "ax" in kwargs:
-        msg = ("catplot is a figure-level function and does not accept "
-               f"target axes. You may wish to try {kind}plot")
-        warnings.warn(msg, UserWarning)
-        kwargs.pop("ax")
+    _check_figure_level_ax(
+        "catplot",
+        kwargs,
+        kind=kind,
+        message=(
+            "catplot is a figure-level function and does not accept "
+            f"target axes. You may wish to try {kind}plot"
+        ),
+        stacklevel=2,
+    )
 
     desaturated_kinds = ["bar", "count", "box", "violin", "boxen"]
     undodged_kinds = ["strip", "swarm", "point"]
@@ -2793,7 +2803,10 @@ def catplot(
             orient = "x"
             y = 1
         elif x is not None and y is not None:
-            raise ValueError("Cannot pass values for both `x` and `y`.")
+            _check_mutually_exclusive(
+                [("x", True), ("y", True)],
+                message="Cannot pass values for both `x` and `y`.",
+            )
 
     p = Plotter(
         data=data,
@@ -2856,7 +2869,7 @@ def catplot(
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
     # Othe deprecations
-    errorbar = utils._deprecate_ci(errorbar, ci)
+    errorbar = _deprecate_ci(errorbar, ci)
 
     saturation = kwargs.pop(
         "saturation",

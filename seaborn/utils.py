@@ -17,9 +17,14 @@ from matplotlib.cbook import normalize_kwargs
 from seaborn._core.typing import deprecated
 from seaborn.external.version import Version
 from seaborn.external.appdirs import user_cache_dir
+from seaborn._param_validation import (
+    _check_argument as _pv_check_argument,
+    _deprecate_ci as _pv_deprecate_ci,
+)
 
 __all__ = ["desaturate", "saturate", "set_hls_values", "move_legend",
-           "despine", "get_dataset_names", "get_data_home", "load_dataset"]
+           "despine", "get_dataset_names", "get_data_home", "load_dataset",
+           "_check_argument", "_deprecate_ci"]
 
 DATASET_SOURCE = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master"
 DATASET_NAMES_URL = f"{DATASET_SOURCE}/dataset_names.txt"
@@ -749,16 +754,7 @@ def to_utf8(obj):
 
 def _check_argument(param, options, value, prefix=False):
     """Raise if value for param is not in options."""
-    if prefix and value is not None:
-        failure = not any(value.startswith(p) for p in options if isinstance(p, str))
-    else:
-        failure = value not in options
-    if failure:
-        raise ValueError(
-            f"The value for `{param}` must be one of {options}, "
-            f"but {repr(value)} was passed."
-        )
-    return value
+    return _pv_check_argument(param, options, value, prefix=prefix)
 
 
 def _assign_default_kwargs(kws, call_func, source_func):
@@ -809,20 +805,7 @@ def _deprecate_ci(errorbar, ci):
     (and extracted from kwargs) after one cycle.
 
     """
-    if ci is not deprecated and ci != "deprecated":
-        if ci is None:
-            errorbar = None
-        elif ci == "sd":
-            errorbar = "sd"
-        else:
-            errorbar = ("ci", ci)
-        msg = (
-            "\n\nThe `ci` parameter is deprecated. "
-            f"Use `errorbar={repr(errorbar)}` for the same effect.\n"
-        )
-        warnings.warn(msg, FutureWarning, stacklevel=3)
-
-    return errorbar
+    return _pv_deprecate_ci(errorbar, ci, stacklevel=2)
 
 
 def _get_transform_functions(ax, axis):

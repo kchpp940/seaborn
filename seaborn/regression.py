@@ -18,6 +18,11 @@ from . import utils
 from . import algorithms as algo
 from .axisgrid import FacetGrid, _facet_docs
 from ._base import _FacetGridBuilder
+from ._param_validation import (
+    _check_figure_level_ax,
+    _check_mutually_exclusive,
+    _handle_deprecated_param,
+)
 
 
 __all__ = ["lmplot", "regplot", "residplot"]
@@ -101,8 +106,16 @@ class _RegressionPlotter(_LinearPlotter):
         self.label = label
 
         # Validate the regression options:
-        if sum((order > 1, logistic, robust, lowess, logx)) > 1:
-            raise ValueError("Mutually exclusive regression options.")
+        _check_mutually_exclusive(
+            [
+                ("order", order > 1),
+                ("logistic", logistic),
+                ("robust", robust),
+                ("lowess", lowess),
+                ("logx", logx),
+            ],
+            message="Mutually exclusive regression options.",
+        )
 
         # Extract the data vals from the arguments or passed dataframe
         self.establish_variables(data, x=x, y=y, units=units,
@@ -596,18 +609,15 @@ def lmplot(
     if facet_kws is None:
         facet_kws = {}
 
-    def facet_kw_deprecation(key, val):
-        msg = (
-            f"{key} is deprecated from the `lmplot` function signature. "
-            "Please update your code to pass it using `facet_kws`."
-        )
-        if val is not None:
-            warnings.warn(msg, UserWarning)
-            facet_kws[key] = val
-
-    facet_kw_deprecation("sharex", sharex)
-    facet_kw_deprecation("sharey", sharey)
-    facet_kw_deprecation("legend_out", legend_out)
+    _handle_deprecated_param(
+        "sharex", sharex, target=facet_kws, stacklevel=2
+    )
+    _handle_deprecated_param(
+        "sharey", sharey, target=facet_kws, stacklevel=2
+    )
+    _handle_deprecated_param(
+        "legend_out", legend_out, target=facet_kws, stacklevel=2
+    )
 
     if data is None:
         raise TypeError("Missing required keyword argument `data`.")

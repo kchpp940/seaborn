@@ -40,6 +40,10 @@ from ._docstrings import (
     DocstringComponents,
     _core_docs,
 )
+from ._param_validation import (
+    _check_figure_level_ax,
+    _handle_deprecated_param,
+)
 
 
 __all__ = ["displot", "histplot", "kdeplot", "ecdfplot", "rugplot", "distplot"]
@@ -1650,7 +1654,7 @@ def kdeplot(
         msg = "`data2` has been removed (replaced by `y`); please update your code."
         raise TypeError(msg)
 
-    # Handle deprecation of `vertical`
+    # Handle deprecation of `vertical` - needs custom variable swapping
     vertical = kwargs.pop("vertical", None)
     if vertical is not None:
         if vertical:
@@ -1670,32 +1674,41 @@ def kdeplot(
     # Handle deprecation of `bw`
     bw = kwargs.pop("bw", None)
     if bw is not None:
-        msg = textwrap.dedent(f"""\n
-        The `bw` parameter is deprecated in favor of `bw_method` and `bw_adjust`.
-        Setting `bw_method={bw}`, but please see the docs for the new parameters
-        and update your code. This will become an error in seaborn v0.14.0.
-        """)
-        warnings.warn(msg, UserWarning, stacklevel=2)
-        bw_method = bw
+        bw_method = _handle_deprecated_param(
+            "bw", bw,
+            new_param="bw_method",
+            message=textwrap.dedent(f"""\n
+            The `bw` parameter is deprecated in favor of `bw_method` and `bw_adjust`.
+            Setting `bw_method={bw}`, but please see the docs for the new parameters
+            and update your code. This will become an error in seaborn v0.14.0.
+            """),
+            stacklevel=2,
+        )
 
     # Handle deprecation of `kernel`
-    if kwargs.pop("kernel", None) is not None:
-        msg = textwrap.dedent("""\n
+    _handle_deprecated_param(
+        "kernel", kwargs.pop("kernel", None),
+        message=textwrap.dedent("""\n
         Support for alternate kernels has been removed; using Gaussian kernel.
         This will become an error in seaborn v0.14.0; please update your code.
-        """)
-        warnings.warn(msg, UserWarning, stacklevel=2)
+        """),
+        stacklevel=2,
+    )
 
     # Handle deprecation of shade_lowest
     shade_lowest = kwargs.pop("shade_lowest", None)
     if shade_lowest is not None:
         if shade_lowest:
             thresh = 0
-        msg = textwrap.dedent(f"""\n
-        `shade_lowest` has been replaced by `thresh`; setting `thresh={thresh}.
-        This will become an error in seaborn v0.14.0; please update your code.
-        """)
-        warnings.warn(msg, UserWarning, stacklevel=2)
+        _handle_deprecated_param(
+            "shade_lowest", shade_lowest,
+            new_param="thresh",
+            message=textwrap.dedent(f"""\n
+            `shade_lowest` has been replaced by `thresh`; setting `thresh={thresh}.
+            This will become an error in seaborn v0.14.0; please update your code.
+            """),
+            stacklevel=2,
+        )
 
     # Handle "soft" deprecation of shade `shade` is not really the right
     # terminology here, but unlike some of the other deprecated parameters it
@@ -1707,12 +1720,16 @@ def kdeplot(
     # can actually fire a FutureWarning, and eventually remove.
     shade = kwargs.pop("shade", None)
     if shade is not None:
-        fill = shade
-        msg = textwrap.dedent(f"""\n
-        `shade` is now deprecated in favor of `fill`; setting `fill={shade}`.
-        This will become an error in seaborn v0.14.0; please update your code.
-        """)
-        warnings.warn(msg, FutureWarning, stacklevel=2)
+        fill = _handle_deprecated_param(
+            "shade", shade,
+            new_param="fill",
+            warning_type=FutureWarning,
+            message=textwrap.dedent(f"""\n
+            `shade` is now deprecated in favor of `fill`; setting `fill={shade}`.
+            This will become an error in seaborn v0.14.0; please update your code.
+            """),
+            stacklevel=2,
+        )
 
     # Handle `n_levels`
     # This was never in the formal API but it was processed, and appeared in an
@@ -2047,11 +2064,14 @@ def rugplot(
 
     if a is not None:
         data = a
-        msg = textwrap.dedent("""\n
-        The `a` parameter has been replaced; use `x`, `y`, and/or `data` instead.
-        Please update your code; This will become an error in seaborn v0.14.0.
-        """)
-        warnings.warn(msg, UserWarning, stacklevel=2)
+        _handle_deprecated_param(
+            "a", a,
+            message=textwrap.dedent("""\n
+            The `a` parameter has been replaced; use `x`, `y`, and/or `data` instead.
+            Please update your code; This will become an error in seaborn v0.14.0.
+            """),
+            stacklevel=2,
+        )
 
     if axis is not None:
         if axis == "x":
@@ -2059,12 +2079,17 @@ def rugplot(
         elif axis == "y":
             y = data
         data = None
-        msg = textwrap.dedent(f"""\n
-        The `axis` parameter has been deprecated; use the `{axis}` parameter instead.
-        Please update your code; this will become an error in seaborn v0.14.0.
-        """)
-        warnings.warn(msg, UserWarning, stacklevel=2)
+        _handle_deprecated_param(
+            "axis", axis,
+            new_param=axis,
+            message=textwrap.dedent(f"""\n
+            The `axis` parameter has been deprecated; use the `{axis}` parameter instead.
+            Please update your code; this will become an error in seaborn v0.14.0.
+            """),
+            stacklevel=2,
+        )
 
+    # Handle deprecation of `vertical` - needs custom variable swapping
     vertical = kwargs.pop("vertical", None)
     if vertical is not None:
         if vertical:
@@ -2172,13 +2197,16 @@ def displot(
     # --- Initialize the FacetGrid object
 
     # Check for attempt to plot onto specific axes and warn
-    if "ax" in kwargs:
-        msg = (
+    _check_figure_level_ax(
+        "displot",
+        kwargs,
+        kind=kind,
+        message=(
             "`displot` is a figure-level function and does not accept "
-            "the ax= parameter. You may wish to try {}plot.".format(kind)
-        )
-        warnings.warn(msg, UserWarning)
-        kwargs.pop("ax")
+            f"the ax= parameter. You may wish to try {kind}plot."
+        ),
+        stacklevel=2,
+    )
 
     for var in ["row", "col"]:
         # Handle faceting variables that lack name information
