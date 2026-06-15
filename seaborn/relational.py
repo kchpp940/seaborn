@@ -255,7 +255,10 @@ class _LinePlotter(_RelationalPlotter):
         elif self.err_style == "bars":
             pass
         elif self.err_style is not None:
-            _check_argument("err_style", ["band", "bars"], self.err_style)
+            _check_argument(
+                "err_style", ["band", "bars"], self.err_style,
+                style="must_be",
+            )
 
         # Initialize the aggregation object
         weighted = "weight" in self.plot_data
@@ -265,7 +268,7 @@ class _LinePlotter(_RelationalPlotter):
 
         # TODO abstract variable to aggregate over here-ish. Better name?
         orient = self.orient
-        _check_argument("orient", ["x", "y"], orient)
+        _check_argument("orient", ["x", "y"], orient, style="must_be_either")
         other = {"x": "y", "y": "x"}[orient]
 
         # TODO How to handle NA? We don't want NA to propagate through to the
@@ -725,10 +728,18 @@ def relplot(
         dashes = True if dashes is None else dashes
 
     else:
-        _check_argument("kind", ["scatter", "line"], kind)
+        _check_argument(
+            "kind", ["scatter", "line"], kind,
+            style="kind_not_recognized",
+        )
 
     # Check for attempt to plot onto specific axes and warn
-    _check_figure_level_ax("relplot", kwargs, kind=kind, stacklevel=2)
+    _check_figure_level_ax(
+        "relplot", kwargs,
+        kind=kind,
+        style="default",
+        stacklevel=2,
+    )
 
     # Use the full dataset to map the semantics
     variables = dict(x=x, y=y, hue=hue, size=size, style=style)
@@ -737,10 +748,16 @@ def relplot(
         variables["weight"] = weights
     else:
         _handle_ignored_param(
-            "units", units, reason="has no effect with kind='scatter'", stacklevel=2
+            "units", units,
+            style="has_no_effect",
+            context="kind='scatter'",
+            stacklevel=2,
         )
         _handle_ignored_param(
-            "weights", weights, reason="has no effect with kind='scatter'", stacklevel=2
+            "weights", weights,
+            style="has_no_effect",
+            context="kind='scatter'",
+            stacklevel=2,
         )
     p = Plotter(
         data=data,

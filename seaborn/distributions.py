@@ -419,10 +419,8 @@ class _DistributionPlotter(VectorPlotter):
         if auto_bins_with_weights:
             _handle_ignored_param(
                 "bins", "auto",
-                reason=(
-                    "cannot be 'auto' when using weights; "
-                    "setting `bins=10`, but you will likely want to adjust"
-                ),
+                style="bins_auto_weights",
+                reason="Setting `bins=10`, but you will likely want to adjust.",
                 stacklevel=2,
             )
             estimate_kws["bins"] = 10
@@ -1179,7 +1177,8 @@ class _DistributionPlotter(VectorPlotter):
                 if param in contour_kws:
                     _handle_ignored_param(
                         param, contour_kws[param],
-                        reason="is ignored when using hue mapping",
+                        style="ignored_when",
+                        context="hue mapping",
                         stacklevel=2,
                     )
                     contour_kws.pop(param)
@@ -1656,8 +1655,8 @@ def kdeplot(
     if "data2" in kwargs:
         _deprecate_param(
             "data2", True,
+            style="removed",
             new_param="y",
-            error_type=TypeError,
         )
 
     # Handle deprecation of `vertical` - needs custom variable swapping
@@ -1673,8 +1672,9 @@ def kdeplot(
             action_taken = "assigning data to `x`."
         _deprecate_param(
             "vertical", vertical,
-            remove_version="0.14.0",
-            suggest=action_taken.strip(),
+            style="dedented_vertical",
+            suggestion=action_taken.strip(),
+            version="0.14.0",
             stacklevel=2,
         )
 
@@ -1683,20 +1683,20 @@ def kdeplot(
     if bw is not None:
         bw_method = _deprecate_param(
             "bw", bw,
-            new_param="bw_method",
-            remove_version="0.14.0",
-            suggest=(
-                f"Setting `bw_method={bw}`, but please see the docs for the "
-                "new parameters and update your code."
-            ),
+            style="dedented_bw_kde",
+            new_param="`bw_method` and `bw_adjust`",
+            set_param="bw_method",
+            new_value=bw,
+            version="0.14.0",
             stacklevel=2,
         )
 
     # Handle deprecation of `kernel`
     _deprecate_param(
         "kernel", kwargs.pop("kernel", None),
-        remove_version="0.14.0",
-        suggest="Support for alternate kernels has been removed; using Gaussian kernel.",
+        style="dedented_kernel_kde",
+        suggestion="Support for alternate kernels has been removed; using Gaussian kernel.",
+        version="0.14.0",
         stacklevel=2,
     )
 
@@ -1707,10 +1707,10 @@ def kdeplot(
             thresh = 0
         _deprecate_param(
             "shade_lowest", shade_lowest,
+            style="dedented_replaced",
             new_param="thresh",
             new_value=thresh,
-            remove_version="0.14.0",
-            suggest=f"`shade_lowest` has been replaced by `thresh`; setting `thresh={thresh}`.",
+            version="0.14.0",
             stacklevel=2,
         )
 
@@ -1726,10 +1726,10 @@ def kdeplot(
     if shade is not None:
         fill = _deprecate_param(
             "shade", shade,
+            style="dedented_shade",
             new_param="fill",
             new_value=shade,
-            remove_version="0.14.0",
-            warning_type=FutureWarning,
+            version="0.14.0",
             stacklevel=2,
         )
 
@@ -2068,8 +2068,9 @@ def rugplot(
         data = a
         _deprecate_param(
             "a", a,
-            remove_version="0.14.0",
-            suggest="use `x`, `y`, and/or `data` instead.",
+            style="dedented_generic",
+            suggestion="use `x`, `y`, and/or `data` instead.",
+            version="0.14.0",
             stacklevel=2,
         )
 
@@ -2081,9 +2082,9 @@ def rugplot(
         data = None
         _deprecate_param(
             "axis", axis,
-            new_param=axis,
-            remove_version="0.14.0",
-            suggest=f"use the `{axis}` parameter instead.",
+            style="dedented_generic_deprecated",
+            suggestion=f"use the `{axis}` parameter instead.",
+            version="0.14.0",
             stacklevel=2,
         )
 
@@ -2100,8 +2101,9 @@ def rugplot(
             action_taken = "assigning data to `x`."
         _deprecate_param(
             "vertical", vertical,
-            remove_version="0.14.0",
-            suggest=action_taken.strip(),
+            style="dedented_vertical",
+            suggestion=action_taken.strip(),
+            version="0.14.0",
             stacklevel=2,
         )
 
@@ -2196,7 +2198,7 @@ def displot(
     # --- Initialize the FacetGrid object
 
     # Check for attempt to plot onto specific axes and warn
-    _check_figure_level_ax("displot", kwargs, kind=kind, stacklevel=2)
+    _check_figure_level_ax("displot", kwargs, kind=kind, style="displot", stacklevel=2)
 
     for var in ["row", "col"]:
         # Handle faceting variables that lack name information
@@ -2499,15 +2501,17 @@ def distplot(a=None, bins=None, hist=True, kde=True, rug=False, fit=None,
             "`histplot` (an axes-level function for histograms)"
         )
 
+    deprecation_msg = (
+        f"Please adapt your code to use either `displot` (a figure-level "
+        f"function with similar flexibility) or {axes_level_suggestion}.\n\n"
+        "For a guide to updating your code to use the new functions, "
+        "please see https://gist.github.com/mwaskom/de44147ed2974457ad6372750bbe5751"
+    )
     _warn_deprecated_function(
         "distplot",
-        removal_version="0.14.0",
-        extra_guidance=(
-            f"Please adapt your code to use either `displot` (a figure-level "
-            f"function with similar flexibility) or {axes_level_suggestion}. "
-            "For a guide to updating your code to use the new functions, "
-            "please see https://gist.github.com/mwaskom/de44147ed2974457ad6372750bbe5751"
-        ),
+        style="default",
+        version="0.14.0",
+        suggestion=deprecation_msg,
         stacklevel=2,
     )
 

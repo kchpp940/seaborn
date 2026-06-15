@@ -752,9 +752,9 @@ def to_utf8(obj):
         return str(obj)
 
 
-def _check_argument(param, options, value, prefix=False):
+def _check_argument(param, options, value, prefix=False, **kwargs):
     """Raise if value for param is not in options."""
-    return _pv_check_argument(param, options, value, prefix=prefix)
+    return _pv_check_argument(param, options, value, prefix=prefix, **kwargs)
 
 
 def _assign_default_kwargs(kws, call_func, source_func):
@@ -796,7 +796,7 @@ def adjust_legend_subtitles(legend):
                     text.set_size(font_size)
 
 
-def _deprecate_ci(errorbar, ci):
+def _deprecate_ci(errorbar, ci, **kwargs):
     """
     Warn on usage of ci= and convert to appropriate errorbar= arg.
 
@@ -805,7 +805,7 @@ def _deprecate_ci(errorbar, ci):
     (and extracted from kwargs) after one cycle.
 
     """
-    return _pv_deprecate_ci(errorbar, ci, stacklevel=2)
+    return _pv_deprecate_ci(errorbar, ci, stacklevel=2, **kwargs)
 
 
 def _get_transform_functions(ax, axis):

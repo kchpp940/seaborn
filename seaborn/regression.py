@@ -42,7 +42,11 @@ class _LinearPlotter:
 
         any_strings = any([isinstance(v, str) for v in kws.values()])
         if any_strings and data is None:
-            _check_required_param("data", data, condition="using named variables")
+            _check_required_param(
+                "data", data,
+                style="when_condition",
+                condition="using named variables",
+            )
 
         for var, val in kws.items():
             if isinstance(val, str):
@@ -54,7 +58,11 @@ class _LinearPlotter:
             if vector is not None and vector.shape != (1,):
                 vector = np.squeeze(vector)
             if np.ndim(vector) > 1:
-                _check_param_constraint("regplot inputs must be 1d", param=var)
+                _check_param_constraint(
+                    "regplot inputs must be 1d",
+                    style="plain",
+                    param=var,
+                )
             setattr(self, var, vector)
 
     def dropna(self, *vars):
@@ -112,7 +120,7 @@ class _RegressionPlotter(_LinearPlotter):
                 ("lowess", lowess),
                 ("logx", logx),
             ],
-            func_name="regplot",
+            style="regression_options",
         )
 
         # Extract the data vals from the arguments or passed dataframe
@@ -203,10 +211,9 @@ class _RegressionPlotter(_LinearPlotter):
         for option in options:
             if getattr(self, option) and not _has_statsmodels:
                 _check_param_constraint(
-                    f"`{option}=True` requires statsmodels, an optional dependency, "
-                    "to be installed",
+                    "",
+                    style="statsmodels",
                     param=option,
-                    error_type=RuntimeError,
                 )
 
     def fit_regression(self, ax=None, x_range=None, grid=None):
@@ -612,16 +619,25 @@ def lmplot(
         facet_kws = {}
 
     _deprecate_param(
-        "sharex", sharex, target=facet_kws, stacklevel=2
+        "sharex", sharex,
+        style="migrate_dict",
+        target=facet_kws,
+        stacklevel=2,
     )
     _deprecate_param(
-        "sharey", sharey, target=facet_kws, stacklevel=2
+        "sharey", sharey,
+        style="migrate_dict",
+        target=facet_kws,
+        stacklevel=2,
     )
     _deprecate_param(
-        "legend_out", legend_out, target=facet_kws, stacklevel=2
+        "legend_out", legend_out,
+        style="migrate_dict",
+        target=facet_kws,
+        stacklevel=2,
     )
 
-    _check_required_param("data", data, func_name="lmplot")
+    _check_required_param("data", data, style="missing_kwarg")
 
     need_cols = [x, y, hue, col, row, units, x_partial, y_partial]
     cols = np.unique([a for a in need_cols if a is not None]).tolist()
@@ -653,7 +669,7 @@ def lmplot(
         _check_param_constraint(
             "markers must be a singleton or a list of markers "
             "for each level of the hue variable",
-            param="markers",
+            style="plain",
         )
     facets.hue_kws = {"marker": markers}
 
