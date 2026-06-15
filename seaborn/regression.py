@@ -19,9 +19,10 @@ from . import algorithms as algo
 from .axisgrid import FacetGrid, _facet_docs
 from ._base import _FacetGridBuilder
 from ._param_validation import (
-    _check_figure_level_ax,
     _check_mutually_exclusive,
-    _handle_deprecated_param,
+    _check_param_constraint,
+    _check_required_param,
+    _deprecate_param,
 )
 
 
@@ -39,12 +40,10 @@ class _LinearPlotter:
         """Extract variables from data or use directly."""
         self.data = data
 
-        # Validate the inputs
         any_strings = any([isinstance(v, str) for v in kws.values()])
         if any_strings and data is None:
-            raise ValueError("Must pass `data` if using named variables.")
+            _check_required_param("data", data, condition="using named variables")
 
-        # Set the variables
         for var, val in kws.items():
             if isinstance(val, str):
                 vector = data[val]
@@ -55,8 +54,7 @@ class _LinearPlotter:
             if vector is not None and vector.shape != (1,):
                 vector = np.squeeze(vector)
             if np.ndim(vector) > 1:
-                err = "regplot inputs must be 1d"
-                raise ValueError(err)
+                _check_param_constraint("regplot inputs must be 1d", param=var)
             setattr(self, var, vector)
 
     def dropna(self, *vars):
@@ -114,7 +112,7 @@ class _RegressionPlotter(_LinearPlotter):
                 ("lowess", lowess),
                 ("logx", logx),
             ],
-            message="Mutually exclusive regression options.",
+            func_name="regplot",
         )
 
         # Extract the data vals from the arguments or passed dataframe
@@ -202,10 +200,14 @@ class _RegressionPlotter(_LinearPlotter):
     def _check_statsmodels(self):
         """Check whether statsmodels is installed if any boolean options require it."""
         options = "logistic", "robust", "lowess"
-        err = "`{}=True` requires statsmodels, an optional dependency, to be installed."
         for option in options:
             if getattr(self, option) and not _has_statsmodels:
-                raise RuntimeError(err.format(option))
+                _check_param_constraint(
+                    f"`{option}=True` requires statsmodels, an optional dependency, "
+                    "to be installed",
+                    param=option,
+                    error_type=RuntimeError,
+                )
 
     def fit_regression(self, ax=None, x_range=None, grid=None):
         """Fit the regression model."""
@@ -609,18 +611,17 @@ def lmplot(
     if facet_kws is None:
         facet_kws = {}
 
-    _handle_deprecated_param(
+    _deprecate_param(
         "sharex", sharex, target=facet_kws, stacklevel=2
     )
-    _handle_deprecated_param(
+    _deprecate_param(
         "sharey", sharey, target=facet_kws, stacklevel=2
     )
-    _handle_deprecated_param(
+    _deprecate_param(
         "legend_out", legend_out, target=facet_kws, stacklevel=2
     )
 
-    if data is None:
-        raise TypeError("Missing required keyword argument `data`.")
+    _check_required_param("data", data, func_name="lmplot")
 
     need_cols = [x, y, hue, col, row, units, x_partial, y_partial]
     cols = np.unique([a for a in need_cols if a is not None]).tolist()
@@ -649,8 +650,11 @@ def lmplot(
     if not isinstance(markers, list):
         markers = [markers] * n_markers
     if len(markers) != n_markers:
-        raise ValueError("markers must be a singleton or a list of markers "
-                         "for each level of the hue variable")
+        _check_param_constraint(
+            "markers must be a singleton or a list of markers "
+            "for each level of the hue variable",
+            param="markers",
+        )
     facets.hue_kws = {"marker": markers}
 
     def update_datalim(data, x, y, ax, **kws):

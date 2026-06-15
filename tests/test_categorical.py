@@ -640,7 +640,7 @@ class SharedScatterTests(SharedAxesLevelTests):
         n_hue = long_df[hue_var].nunique()
         palette = color_palette(f"dark:{hex_color}", n_hue)
 
-        with pytest.warns(FutureWarning, match="Setting a gradient palette"):
+        with pytest.warns(FutureWarning, match="`color` parameter is deprecated"):
             ax = self.func(data=long_df, x="z", hue=hue_var, color=color)
 
         points = ax.collections[0]
@@ -649,7 +649,7 @@ class SharedScatterTests(SharedAxesLevelTests):
 
     def test_palette_with_hue_deprecation(self, long_df):
         palette = "Blues"
-        with pytest.warns(FutureWarning, match="Passing `palette` without"):
+        with pytest.warns(FutureWarning, match="`palette` parameter is deprecated"):
             ax = self.func(data=long_df, x="a", y=long_df["y"], palette=palette)
         strips = ax.collections
         colors = color_palette(palette, len(strips))
@@ -1061,7 +1061,7 @@ class TestBoxPlot(SharedAxesLevelTests, SharedPatchArtistTests):
 
     def test_linecolor_gray_warning(self, long_df):
 
-        with pytest.warns(FutureWarning, match="Use \"auto\" to set automatic"):
+        with pytest.warns(FutureWarning, match="`color` parameter is deprecated"):
             boxplot(long_df, x="y", linecolor="gray")
 
     def test_saturation(self, long_df):
@@ -1426,10 +1426,10 @@ class TestBoxenPlot(SharedAxesLevelTests, SharedPatchArtistTests):
 
     def test_scale_deprecation(self, long_df):
 
-        with pytest.warns(FutureWarning, match="The `scale` parameter has been"):
+        with pytest.warns(FutureWarning, match="`scale` parameter is deprecated"):
             boxenplot(x=long_df["y"], scale="linear")
 
-        with pytest.warns(FutureWarning, match=".+result for 'area' will appear"):
+        with pytest.warns(FutureWarning, match="result for 'area' will appear"):
             boxenplot(x=long_df["y"], scale="area")
 
     @pytest.mark.parametrize(
@@ -1762,12 +1762,12 @@ class TestViolinPlot(SharedAxesLevelTests, SharedPatchArtistTests):
 
     def test_scale_deprecation(self, long_df):
 
-        with pytest.warns(FutureWarning, match=r".+Pass `density_norm='count'`"):
+        with pytest.warns(FutureWarning, match="`scale` parameter is deprecated"):
             violinplot(long_df, x="a", y="y", hue="b", scale="count")
 
     def test_scale_hue_deprecation(self, long_df):
 
-        with pytest.warns(FutureWarning, match=r".+Pass `common_norm=True`"):
+        with pytest.warns(FutureWarning, match="`scale_hue` parameter is deprecated"):
             violinplot(long_df, x="a", y="y", hue="b", scale_hue=False)
 
     def test_bw_adjust(self, long_df):
@@ -1780,7 +1780,7 @@ class TestViolinPlot(SharedAxesLevelTests, SharedPatchArtistTests):
 
     def test_bw_deprecation(self, long_df):
 
-        with pytest.warns(FutureWarning, match=r".*Setting `bw_method='silverman'`"):
+        with pytest.warns(FutureWarning, match="`bw` parameter is deprecated"):
             violinplot(long_df["y"], bw="silverman")
 
     def test_gap(self, long_df):
@@ -2355,7 +2355,7 @@ class TestBarPlot(SharedAggTests):
 
         x, y = ["a", "b", "c"], [1, 2, 3]
         val = 5
-        with pytest.warns(FutureWarning, match="\n\nThe `errwidth` parameter"):
+        with pytest.warns(FutureWarning, match="The `errwidth` parameter"):
             ax = barplot(x=x, y=y, errwidth=val)
         for line in ax.lines:
             assert line.get_linewidth() == val
@@ -2364,7 +2364,7 @@ class TestBarPlot(SharedAggTests):
 
         x, y = ["a", "b", "c"], [1, 2, 3]
         val = (1, .7, .4, .8)
-        with pytest.warns(FutureWarning, match="\n\nThe `errcolor` parameter"):
+        with pytest.warns(FutureWarning, match="The `errcolor` parameter"):
             ax = barplot(x=x, y=y, errcolor=val)
         for line in ax.lines:
             assert line.get_color() == val
@@ -2372,7 +2372,7 @@ class TestBarPlot(SharedAggTests):
     def test_capsize_as_none_deprecation(self):
 
         x, y = ["a", "b", "c"], [1, 2, 3]
-        with pytest.warns(FutureWarning, match="\n\nPassing `capsize=None`"):
+        with pytest.warns(FutureWarning, match="The `capsize` parameter"):
             ax = barplot(x=x, y=y, capsize=None)
         for line in ax.lines:
             assert len(line.get_xdata()) == 2
@@ -2383,8 +2383,7 @@ class TestBarPlot(SharedAggTests):
         y = [1, 2, 3]
         palette = "Set1"
         colors = color_palette(palette, len(x))
-        msg = "Passing `palette` without assigning `hue` is deprecated."
-        with pytest.warns(FutureWarning, match=msg):
+        with pytest.warns(FutureWarning, match="`palette` parameter is deprecated"):
             ax = barplot(x=x, y=y, saturation=1, palette=palette)
         for i, bar in enumerate(ax.patches):
             assert same_color(bar.get_facecolor(), colors[i])
@@ -2728,7 +2727,7 @@ class TestPointPlot(SharedAggTests):
 
         x, y = ["a", "b", "c"], [1, 2, 3]
         ax = pointplot(x=x, y=y, errorbar=None)
-        with pytest.warns(UserWarning, match="The `scale` parameter"):
+        with pytest.warns(UserWarning, match="`scale` parameter is deprecated"):
             pointplot(x=x, y=y, errorbar=None, scale=2)
         l1, l2 = ax.lines
         assert l2.get_linewidth() == 2 * l1.get_linewidth()
@@ -3076,7 +3075,7 @@ class TestCatPlot(CategoricalFixture):
     def test_ax_kwarg_removal(self):
 
         f, ax = plt.subplots()
-        with pytest.warns(UserWarning, match="catplot is a figure-level"):
+        with pytest.warns(UserWarning, match="`catplot` is a figure-level"):
             g = cat.catplot(x="g", y="y", data=self.df, ax=ax)
         assert len(ax.collections) == 0
         assert len(g.ax.collections) > 0
@@ -3146,7 +3145,7 @@ class TestCatPlot(CategoricalFixture):
 
     def test_invalid_kind(self, long_df):
 
-        with pytest.raises(ValueError, match="Invalid `kind`: 'wrong'"):
+        with pytest.raises(ValueError, match="`kind` must be one of"):
             catplot(long_df, kind="wrong")
 
     def test_legend_with_auto(self):

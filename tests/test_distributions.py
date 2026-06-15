@@ -927,7 +927,7 @@ class TestKDEPlotUnivariate(SharedAxesLevelTests):
         assert ax.legend_ is None
 
     def test_replaced_kws(self, long_df):
-        with pytest.raises(TypeError, match=r"`data2` has been removed"):
+        with pytest.raises(TypeError, match=r"`data2` parameter has been removed"):
             kdeplot(data=long_df, x="x", data2="y")
 
 
@@ -1061,7 +1061,7 @@ class TestKDEPlotBivariate:
 
     def test_hue_ignores_cmap(self, long_df):
 
-        with pytest.warns(UserWarning, match="cmap parameter ignored"):
+        with pytest.warns(UserWarning, match="`cmap` parameter is ignored"):
             ax = kdeplot(data=long_df, x="x", y="y", hue="c", cmap="viridis")
 
         assert_colors_equal(get_contour_color(ax.collections[0]), "C0")

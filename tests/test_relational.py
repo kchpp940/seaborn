@@ -1108,7 +1108,7 @@ class TestLinePlotter(SharedAxesLevelTests, Helpers):
         for i, val in enumerate(sorted(long_df["y"].unique())):
             assert (segments[i][:, 1] == val).all()
 
-        with pytest.raises(ValueError, match="`orient` must be either 'x' or 'y'"):
+        with pytest.raises(ValueError, match="`orient` must be one of"):
             lineplot(long_df, x="y", y="x", orient="bad")
 
     def test_log_scale(self):

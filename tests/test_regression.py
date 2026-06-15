@@ -79,7 +79,7 @@ class TestLinearPlotter:
     def test_establish_variables_from_bad(self):
 
         p = lm._LinearPlotter()
-        with pytest.raises(ValueError):
+        with pytest.raises(TypeError):
             p.establish_variables(None, x="x", y=self.df.y)
 
     def test_dropna(self):
