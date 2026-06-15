@@ -473,6 +473,22 @@ class _CategoricalPlotter(VectorPlotter):
         plot_kws,
     ):
 
+        # Record diagnostics
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.stat = None
+            layer.stat_params = {}
+            layer.orient = self.orient
+            layer.draw_function = "ax.scatter"
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_configure_legend"
+
+            iter_vars = [self.orient]
+            if dodge:
+                iter_vars.append("hue")
+            grouping_vars = [v for v in iter_vars + ["row", "col"] if v in self.variables]
+            layer.grouping_vars = grouping_vars
+
         width = .8 * self._native_width
         offsets = self._nested_offsets(width, dodge)
 
@@ -495,9 +511,13 @@ class _CategoricalPlotter(VectorPlotter):
         if "marker" in plot_kws and not MarkerStyle(plot_kws["marker"]).is_filled():
             plot_kws.pop("edgecolor", None)
 
+        group_keys = []
         for sub_vars, sub_data in self.iter_data(iter_vars,
                                                  from_comp_data=True,
                                                  allow_empty=True):
+
+            key = tuple(sub_vars.items())
+            group_keys.append(key)
 
             ax = self._get_axes(sub_vars)
 
@@ -514,6 +534,9 @@ class _CategoricalPlotter(VectorPlotter):
             if "hue" in self.variables:
                 points.set_facecolors(self._hue_map(sub_data["hue"]))
 
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            self._diagnostics.layers[-1].group_keys = group_keys
+
         self._configure_legend(ax, _scatter_legend_artist, common_kws=plot_kws)
 
     def plot_swarms(
@@ -523,6 +546,22 @@ class _CategoricalPlotter(VectorPlotter):
         warn_thresh,
         plot_kws,
     ):
+
+        # Record diagnostics
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.stat = None
+            layer.stat_params = {}
+            layer.orient = self.orient
+            layer.draw_function = "ax.scatter"
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_configure_legend"
+
+            iter_vars = [self.orient]
+            if dodge:
+                iter_vars.append("hue")
+            grouping_vars = [v for v in iter_vars + ["row", "col"] if v in self.variables]
+            layer.grouping_vars = grouping_vars
 
         width = .8 * self._native_width
         offsets = self._nested_offsets(width, dodge)
@@ -538,9 +577,13 @@ class _CategoricalPlotter(VectorPlotter):
         if "marker" in plot_kws and not MarkerStyle(plot_kws["marker"]).is_filled():
             plot_kws.pop("edgecolor", None)
 
+        group_keys = []
         for sub_vars, sub_data in self.iter_data(iter_vars,
                                                  from_comp_data=True,
                                                  allow_empty=True):
+
+            key = tuple(sub_vars.items())
+            group_keys.append(key)
 
             ax = self._get_axes(sub_vars)
 
@@ -588,6 +631,10 @@ class _CategoricalPlotter(VectorPlotter):
                 points.draw = draw.__get__(points)
 
         _draw_figure(ax.figure)
+
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            self._diagnostics.layers[-1].group_keys = group_keys
+
         self._configure_legend(ax, _scatter_legend_artist, plot_kws)
 
     def plot_boxes(
@@ -603,6 +650,20 @@ class _CategoricalPlotter(VectorPlotter):
         fliersize,
         plot_kws,  # TODO rename user_kws?
     ):
+
+        # Record diagnostics
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.stat = None
+            layer.stat_params = {}
+            layer.orient = self.orient
+            layer.draw_function = "ax.bxp"
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_configure_legend"
+
+            iter_vars = ["hue"]
+            grouping_vars = [v for v in iter_vars + [self.orient, "row", "col"] if v in self.variables]
+            layer.grouping_vars = grouping_vars
 
         iter_vars = ["hue"]
         value_var = {"x": "y", "y": "x"}[self.orient]
@@ -632,9 +693,13 @@ class _CategoricalPlotter(VectorPlotter):
 
         ax = self.ax
 
+        group_keys = []
         for sub_vars, sub_data in self.iter_data(iter_vars,
                                                  from_comp_data=True,
                                                  allow_empty=False):
+
+            key = tuple(sub_vars.items())
+            group_keys.append(key)
 
             ax = self._get_axes(sub_vars)
 
@@ -750,6 +815,9 @@ class _CategoricalPlotter(VectorPlotter):
                             line.set_data(verts)
 
             ax.add_container(BoxPlotContainer(artists))
+
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            self._diagnostics.layers[-1].group_keys = group_keys
 
         legend_artist = _get_patch_legend_artist(fill)
         self._configure_legend(ax, legend_artist, boxprops)
@@ -913,6 +981,20 @@ class _CategoricalPlotter(VectorPlotter):
         plot_kws,
     ):
 
+        # Record diagnostics
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.stat = "KDE"
+            layer.stat_params = dict(kde_kws)
+            layer.orient = self.orient
+            layer.draw_function = "ax.fill" if fill else "ax.plot"
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_configure_legend"
+
+            iter_vars = [self.orient, "hue"]
+            grouping_vars = [v for v in iter_vars + ["row", "col"] if v in self.variables]
+            layer.grouping_vars = grouping_vars
+
         iter_vars = [self.orient, "hue"]
         value_var = {"x": "y", "y": "x"}[self.orient]
 
@@ -936,9 +1018,13 @@ class _CategoricalPlotter(VectorPlotter):
         violin_data = []
 
         # Iterate through all the data splits once to compute the KDEs
+        group_keys = []
         for sub_vars, sub_data in self.iter_data(iter_vars,
                                                  from_comp_data=True,
                                                  allow_empty=False):
+
+            key = tuple(sub_vars.items())
+            group_keys.append(key)
 
             sub_data["weight"] = sub_data.get("weights", 1)
             stat_data = kde._transform(sub_data, value_var, [])
@@ -1167,6 +1253,9 @@ class _CategoricalPlotter(VectorPlotter):
                 }
                 ax.plot(invx(x2), invy(y2), **dot_kws)
 
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            self._diagnostics.layers[-1].group_keys = group_keys
+
         legend_artist = _get_patch_legend_artist(fill)
         common_kws = {**plot_kws, "linewidth": linewidth, "edgecolor": linecolor}
         self._configure_legend(ax, legend_artist, common_kws)
@@ -1182,6 +1271,20 @@ class _CategoricalPlotter(VectorPlotter):
         err_kws,
         plot_kws,
     ):
+
+        # Record diagnostics
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.stat = "EstimateAggregator"
+            layer.stat_params = {}
+            layer.orient = self.orient
+            layer.draw_function = "ax.plot"
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_configure_legend"
+
+            iter_vars = ["hue"]
+            grouping_vars = [v for v in iter_vars + [self.orient, "row", "col"] if v in self.variables]
+            layer.grouping_vars = grouping_vars
 
         agg_var = {"x": "y", "y": "x"}[self.orient]
         iter_vars = ["hue"]
@@ -1206,9 +1309,13 @@ class _CategoricalPlotter(VectorPlotter):
 
         ax = self.ax
 
+        group_keys = []
         for sub_vars, sub_data in self.iter_data(iter_vars,
                                                  from_comp_data=True,
                                                  allow_empty=True):
+
+            key = tuple(sub_vars.items())
+            group_keys.append(key)
 
             ax = self._get_axes(sub_vars)
 
@@ -1246,6 +1353,9 @@ class _CategoricalPlotter(VectorPlotter):
                 sub_err_kws.setdefault(prop, line_props[prop])
             if aggregator.error_method is not None:
                 self.plot_errorbars(ax, agg_data, capsize, sub_err_kws)
+
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            self._diagnostics.layers[-1].group_keys = group_keys
 
         legend_artist = partial(mpl.lines.Line2D, [], [])
         semantic_kws = {"hue": {"marker": markers, "linestyle": linestyles}}
@@ -1647,6 +1757,7 @@ def boxplot(
         p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("box")
 
     # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
@@ -1775,6 +1886,7 @@ def violinplot(
         p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("violin")
 
     # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
@@ -2128,6 +2240,7 @@ def stripplot(
         p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("strip")
 
     # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
@@ -2253,6 +2366,7 @@ def swarmplot(
         p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("swarm")
 
     if not p.has_xy_data:
         return ax
@@ -2394,6 +2508,7 @@ def barplot(
         p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("bar")
 
     # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
@@ -2530,6 +2645,7 @@ def pointplot(
         p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("point")
 
     # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)
@@ -2685,6 +2801,7 @@ def countplot(
         p.scale_categorical(p.orient, order=order, formatter=formatter)
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("count")
 
     # Deprecations to remove in v0.14.0.
     hue_order = p._palette_without_hue_backcompat(palette, hue_order)

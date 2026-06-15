@@ -11,14 +11,15 @@ def get_diagnostics(obj):
 
     This is a test helper that retrieves the :class:`PlotDiagnostics`
     object from various seaborn objects (FacetGrid, Plotter,
-    VectorPlotter, etc.) and returns the diagnostic data as a plain
-    dictionary.
+    VectorPlotter, matplotlib Axes, etc.) and returns the diagnostic
+    data as a plain dictionary.
 
     Parameters
     ----------
     obj : object
-        A seaborn plot object (FacetGrid, Plotter, VectorPlotter, etc.)
-        that has an attached ``_diagnostics`` attribute.
+        A seaborn plot object (FacetGrid, Plotter, VectorPlotter)
+        or a matplotlib Axes with attached diagnostics, that has an
+        attached ``_diagnostics`` attribute.
 
     Returns
     -------
@@ -40,6 +41,8 @@ def get_diagnostics(obj):
 
     """
     diag = getattr(obj, "_diagnostics", None)
+    if diag is None:
+        diag = getattr(obj, "_seaborn_diagnostics", None)
     if diag is None:
         return {}
     if isinstance(diag, PlotDiagnostics):

@@ -978,6 +978,19 @@ class _DistributionPlotter(VectorPlotter):
         **plot_kws,
     ):
 
+        # Record diagnostics
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.stat = "KDE"
+            layer.stat_params = dict(estimate_kws)
+            layer.orient = self.data_variable
+            layer.draw_function = "ax.fill_between" if fill else "ax.plot"
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_add_legend"
+
+            grouping_vars = [v for v in ["hue", "row", "col"] if v in self.variables]
+            layer.grouping_vars = grouping_vars
+
         # Handle conditional defaults
         if fill is None:
             fill = multiple in ("stack", "fill")
@@ -1030,10 +1043,12 @@ class _DistributionPlotter(VectorPlotter):
 
         # Now iterate through the subsets and draw the densities
         # We go backwards so stacked densities read from top-to-bottom
+        group_keys = []
         for sub_vars, _ in self.iter_data("hue", reverse=True):
 
             # Extract the support grid and density curve for this level
             key = tuple(sub_vars.items())
+            group_keys.append(key)
             try:
                 density = densities[key]
             except KeyError:
@@ -1075,6 +1090,9 @@ class _DistributionPlotter(VectorPlotter):
                 artist.sticky_edges.y[:] = sticky_support
 
         # --- Finalize the plot ----
+
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            self._diagnostics.layers[-1].group_keys = group_keys
 
         ax = self.ax if self.ax is not None else self.facets.axes.flat[0]
         default_x = default_y = ""
@@ -1280,6 +1298,19 @@ class _DistributionPlotter(VectorPlotter):
 
     def plot_univariate_ecdf(self, estimate_kws, legend, **plot_kws):
 
+        # Record diagnostics
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.stat = "ECDF"
+            layer.stat_params = dict(estimate_kws)
+            layer.orient = self.data_variable
+            layer.draw_function = "ax.plot"
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_add_legend"
+
+            grouping_vars = [v for v in ["hue", "row", "col"] if v in self.variables]
+            layer.grouping_vars = grouping_vars
+
         estimator = ECDF(**estimate_kws)
 
         # Set the draw style to step the right way for the data variable
@@ -1287,11 +1318,14 @@ class _DistributionPlotter(VectorPlotter):
         plot_kws["drawstyle"] = drawstyles[self.data_variable]
 
         # Loop through the subsets, transform and plot the data
+        group_keys = []
         for sub_vars, sub_data in self.iter_data(
             "hue", reverse=True, from_comp_data=True,
         ):
 
             # Compute the ECDF
+            key = tuple(sub_vars.items())
+            group_keys.append(key)
             if sub_data.empty:
                 continue
 
@@ -1332,6 +1366,10 @@ class _DistributionPlotter(VectorPlotter):
             sticky_edges[:] = 0, top_edge
 
         # --- Finalize the plot ----
+
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            self._diagnostics.layers[-1].group_keys = group_keys
+
         ax = self.ax if self.ax is not None else self.facets.axes.flat[0]
         stat = estimator.stat.capitalize()
         default_x = default_y = ""
@@ -1351,7 +1389,24 @@ class _DistributionPlotter(VectorPlotter):
 
     def plot_rug(self, height, expand_margins, legend, **kws):
 
+        # Record diagnostics
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.stat = None
+            layer.stat_params = {}
+            layer.orient = None
+            layer.draw_function = "ax.plot"
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_add_legend"
+
+            grouping_vars = [v for v in ["hue", "row", "col"] if v in self.variables]
+            layer.grouping_vars = grouping_vars
+
+        group_keys = []
         for sub_vars, sub_data, in self.iter_data(from_comp_data=True):
+
+            key = tuple(sub_vars.items())
+            group_keys.append(key)
 
             ax = self._get_axes(sub_vars)
 
@@ -1382,6 +1437,9 @@ class _DistributionPlotter(VectorPlotter):
                 self._add_legend(
                     ax, legend_artist, False, False, None, 1, {}, {},
                 )
+
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            self._diagnostics.layers[-1].group_keys = group_keys
 
     def _plot_single_rug(self, sub_data, var, height, ax, kws):
         """Draw a rugplot along one axis of the plot."""
@@ -1458,6 +1516,7 @@ def histplot(
         ax = plt.gca()
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("hist")
 
     if p.univariate:  # Note, bivariate plots won't cycle
         if fill:
@@ -1754,6 +1813,7 @@ def kdeplot(
         ax = plt.gca()
 
     p._attach(ax, allowed_types=["numeric", "datetime"], log_scale=log_scale)
+    p._record_plot_kind("kde")
 
     method = ax.fill_between if fill else ax.plot
     color = _default_color(method, hue, color, kwargs)
@@ -1966,6 +2026,7 @@ def ecdfplot(
         ax = plt.gca()
 
     p._attach(ax, log_scale=log_scale)
+    p._record_plot_kind("ecdf")
 
     color = kwargs.pop("color", kwargs.pop("c", None))
     kwargs["color"] = _default_color(ax.plot, hue, color, kwargs)
@@ -2115,6 +2176,7 @@ def rugplot(
         ax = plt.gca()
 
     p._attach(ax)
+    p._record_plot_kind("rug")
 
     color = kwargs.pop("color", kwargs.pop("c", None))
     kwargs["color"] = _default_color(ax.plot, hue, color, kwargs)

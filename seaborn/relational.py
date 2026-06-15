@@ -295,6 +295,13 @@ class _LinePlotter(_RelationalPlotter):
         grouping_vars = "hue", "size", "style"
         for sub_vars, sub_data in self.iter_data(grouping_vars, from_comp_data=True):
 
+            # Record group keys for diagnostics
+            if self._diagnostics.enabled and self._diagnostics.layers:
+                layer = self._diagnostics.layers[-1]
+                if layer.group_keys is None:
+                    layer.group_keys = []
+                layer.group_keys.append(list(sub_vars.items()))
+
             if self.sort:
                 sort_vars = ["units", orient, other]
                 sort_cols = [var for var in sort_vars if var in self.variables]
@@ -540,6 +547,7 @@ def lineplot(
         return ax
 
     p._attach(ax)
+    p._record_plot_kind("line")
 
     # Other functions have color as an explicit param,
     # and we should probably do that here too
@@ -663,6 +671,7 @@ def scatterplot(
         return ax
 
     p._attach(ax)
+    p._record_plot_kind("scatter")
 
     color = kwargs.pop("color", None)
     kwargs["color"] = _default_color(ax.scatter, hue, color, kwargs)

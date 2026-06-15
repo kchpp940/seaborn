@@ -1277,6 +1277,10 @@ class VectorPlotter:
 
         self._sync_order_diagnostics()
 
+        # Attach diagnostics to the Axes object for axes-level functions
+        if not isinstance(obj, FacetGrid) and hasattr(self, "_diagnostics"):
+            obj._seaborn_diagnostics = self._diagnostics
+
     def _get_scale_transforms(self, axis):
         """Return a function implementing the scale transform (or its inverse)."""
         if self.ax is None:
