@@ -119,20 +119,27 @@ class BuildManifest:
     def add_example(self, example_name, source_file=None, datasets=None,
                     images=None, status="success", error=None):
         self.load()
+        deduped_images = []
+        seen = set()
+        for img in (images or []):
+            norm = str(img)
+            if norm not in seen:
+                seen.add(norm)
+                deduped_images.append(norm)
+        deduped_datasets = list(dict.fromkeys(datasets or []))
         entry = {
             "name": example_name,
             "source_file": str(source_file) if source_file else None,
-            "datasets": list(datasets or []),
-            "images": list(images or []),
+            "datasets": deduped_datasets,
+            "images": deduped_images,
             "status": status,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
         if error:
             entry["error"] = str(error)
         self.data["examples"].append(entry)
-        if images:
-            for img in images:
-                self.add_image(img, example_name)
+        for img in deduped_images:
+            self.add_image(img, example_name)
         self.save()
 
     def add_dataset(self, name, cache_hit=None, source_url=None):
@@ -235,6 +242,7 @@ def init_doc_env():
     os.environ.setdefault("SEABORN_DOC_SAVEFIG_BBOX", SAVEFIG_BBOX)
     os.environ.setdefault("SEABORN_DOC_NB_TIMEOUT", str(NB_EXEC_TIMEOUT))
     os.environ.setdefault("NB_KERNEL", NB_KERNEL)
+    install_dataset_tracking()
 
 
 _CURRENT_CONTEXT = {}
@@ -242,16 +250,27 @@ _CURRENT_CONTEXT = {}
 
 @contextmanager
 def doc_example_context(example_name, dataset_names=None, source_file=None):
+    """Context manager wrapping a single doc example execution.
+
+    Image recording single write point: producers call record_image() which
+    populates this context's images list; when the context exits (success or
+    failure) those images are flushed ONCE to the manifest via add_example().
+
+    Dataset recording single write point: the monkey-patched load_dataset()
+    is the source of truth — `dataset_names` here is a best-effort hint from
+    regex pre-scans and gets merged with what the patched function actually
+    observes during execution.
+    """
     global _CURRENT_CONTEXT
     m = get_manifest()
-    datasets = list(dataset_names or [])
-    for ds in datasets:
+    hinted_datasets = list(dict.fromkeys(dataset_names or []))
+    for ds in hinted_datasets:
         m.add_dataset(ds)
 
     _CURRENT_CONTEXT = {
         "example": example_name,
         "source_file": source_file,
-        "datasets": datasets,
+        "datasets": list(hinted_datasets),
         "backend": MPL_BACKEND,
         "seed": RANDOM_SEED,
         "image_format": IMAGE_FORMAT,
@@ -260,20 +279,24 @@ def doc_example_context(example_name, dataset_names=None, source_file=None):
     }
     try:
         yield _CURRENT_CONTEXT
+        final_datasets = list(dict.fromkeys(_CURRENT_CONTEXT.get("datasets", [])))
+        final_images = list(dict.fromkeys(_CURRENT_CONTEXT.get("images", [])))
         m.add_example(
             example_name,
             source_file=source_file,
-            datasets=datasets,
-            images=_CURRENT_CONTEXT.get("images", []),
+            datasets=final_datasets,
+            images=final_images,
             status="success",
         )
     except Exception as e:
         tb_str = traceback.format_exc()
+        final_datasets = list(dict.fromkeys(_CURRENT_CONTEXT.get("datasets", [])))
+        final_images = list(dict.fromkeys(_CURRENT_CONTEXT.get("images", [])))
         m.add_example(
             example_name,
             source_file=source_file,
-            datasets=datasets,
-            images=_CURRENT_CONTEXT.get("images", []),
+            datasets=final_datasets,
+            images=final_images,
             status="failure",
             error=str(e),
         )
@@ -283,8 +306,8 @@ def doc_example_context(example_name, dataset_names=None, source_file=None):
             error_message=str(e),
             traceback_str=tb_str,
             source_file=source_file,
-            datasets=datasets,
-            images=_CURRENT_CONTEXT.get("images", []),
+            datasets=final_datasets,
+            images=final_images,
         )
         _report_failure()
         raise
@@ -293,21 +316,94 @@ def doc_example_context(example_name, dataset_names=None, source_file=None):
 
 
 def record_image(image_path):
-    if _CURRENT_CONTEXT:
-        _CURRENT_CONTEXT.setdefault("images", []).append(str(image_path))
-    try:
-        m = get_manifest()
-        m.add_image(image_path, produced_by=_CURRENT_CONTEXT.get("example") if _CURRENT_CONTEXT else None)
-    except Exception:
-        pass
+    """Register an image produced by the currently executing example.
+
+    Images are only recorded ONCE per example — they are stored in the
+    active doc_example_context and flushed to the manifest ONLY when the
+    context exits (success or failure). This is the single write point for
+    image recording.
+    """
+    if not _CURRENT_CONTEXT:
+        return
+    img_str = str(image_path)
+    imgs = _CURRENT_CONTEXT.setdefault("images", [])
+    if img_str not in imgs:
+        imgs.append(img_str)
 
 
 def record_dataset(name, cache_hit=None):
+    """Record a dataset access against the manifest.
+
+    NOTE: In doc builds, prefer the monkey-patched load_dataset() hook
+    which binds to REAL calls — use this only for pre-declaration (e.g. from
+    regex scans when the actual code path might not be executed).
+    """
     try:
         m = get_manifest()
         m.add_dataset(name, cache_hit=cache_hit)
     except Exception:
         pass
+
+
+def _patched_load_dataset(original):
+    """Wrap seaborn.load_dataset so we record the REAL dataset access.
+
+    This is the single source of truth for dataset tracking. Regex pre-scans
+    are best-effort — the patched function binds to actual load_dataset() calls,
+    which actually happened and records cache_hit status based on whether the
+    CSV is ALREADY present before the original call resolves it.
+    """
+    def wrapper(name, **kwargs):
+        cache_path = os.path.join(get_data_cache_path(), f"{name}.csv")
+        cache_hit_before = os.path.isfile(cache_path)
+        try:
+            result = original(name, **kwargs)
+        except Exception:
+            try:
+                get_manifest().add_dataset(name, cache_hit=False)
+            except Exception:
+                pass
+            raise
+        try:
+            get_manifest().add_dataset(
+                name,
+                cache_hit=cache_hit_before or os.path.isfile(cache_path),
+            )
+        except Exception:
+            pass
+        if _CURRENT_CONTEXT:
+            ds_list = _CURRENT_CONTEXT.setdefault("datasets", [])
+            if name not in ds_list:
+                ds_list.append(name)
+        return result
+    wrapper.__name__ = original.__name__
+    wrapper.__wrapped__ = original
+    return wrapper
+
+
+_DATASET_PATCH_INSTALLED = False
+
+
+def install_dataset_tracking():
+    """Monkey-patch seaborn.load_dataset to track real access.
+
+    Safe to call multiple times — idempotent. No-op when not in doc build mode.
+    """
+    global _DATASET_PATCH_INSTALLED
+    if _DATASET_PATCH_INSTALLED:
+        return
+    if not _DOC_BUILDING:
+        return
+    try:
+        import seaborn
+        original = seaborn.load_dataset
+        seaborn.load_dataset = _patched_load_dataset(original)
+        _DATASET_PATCH_INSTALLED = True
+        return True
+    except Exception as e:
+        print(f"[doc_config] WARNING: could not patch load_dataset: {e}",
+              file=sys.stderr)
+        return False
 
 
 def _report_failure():
