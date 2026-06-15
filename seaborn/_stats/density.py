@@ -13,8 +13,7 @@ except ImportError:
     from seaborn.external.kde import gaussian_kde
     _no_scipy = True
 
-from seaborn._core.groupby import GroupBy
-from seaborn._core.scales import Scale
+from seaborn._core import GroupBy, Scale
 from seaborn._stats.base import Stat
 
 

@@ -7,9 +7,9 @@ from pandas import DataFrame
 
 __all__: list[str] = []
 
-from seaborn._core.groupby import GroupBy
-from seaborn._core.scales import Scale
-from seaborn._core.typing import Default
+from .groupby import GroupBy
+from .scales import Scale
+from .typing import Default
 
 default = Default()
 

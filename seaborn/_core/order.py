@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from pandas import Series
 
-from seaborn._core.rules import variable_type, categorical_order as _categorical_order
+from .rules import variable_type, categorical_order as _categorical_order
 
 __all__ = ["OrderRegistry", "categorical_order"]
 

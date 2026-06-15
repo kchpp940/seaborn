@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Any
     from matplotlib.artist import Artist
-    from seaborn._core.scales import Scale
+    from seaborn._core import Scale
 
 
 class BarBase(Mark):

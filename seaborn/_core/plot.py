@@ -29,21 +29,21 @@ from PIL import Image
 
 from seaborn._marks.base import Mark
 from seaborn._stats.base import Stat
-from seaborn._core.data import PlotData
-from seaborn._core.moves import Move
-from seaborn._core.scales import Scale
-from seaborn._core.subplots import Subplots
-from seaborn._core.groupby import GroupBy
-from seaborn._core.properties import PROPERTIES, Property
-from seaborn._core.typing import (
+from .data import PlotData
+from .moves import Move
+from .scales import Scale
+from .subplots import Subplots
+from .groupby import GroupBy
+from .properties import PROPERTIES, Property
+from .typing import (
     DataSource,
     VariableSpec,
     VariableSpecList,
     OrderSpec,
     Default,
 )
-from seaborn._core.exceptions import PlotSpecError
-from seaborn._core.rules import categorical_order
+from .exceptions import PlotSpecError
+from .rules import categorical_order
 from seaborn._compat import get_layout_engine, set_layout_engine
 from seaborn.utils import _version_predates
 from seaborn.rcmod import axes_style, plotting_context

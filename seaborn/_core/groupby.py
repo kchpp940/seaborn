@@ -5,7 +5,7 @@ from typing import cast, Iterable
 
 import pandas as pd
 
-from seaborn._core.rules import categorical_order
+from .rules import categorical_order
 
 __all__ = ["GroupBy"]
 
