@@ -36,19 +36,6 @@ from nbconvert.preprocessors import (
     ExtractOutputPreprocessor
 )
 from traitlets.config import Config
-from seaborn._doc_config import (
-    NB_EXEC_TIMEOUT,
-    NB_KERNEL as DOC_NB_KERNEL,
-    IMAGE_DPI,
-    apply_mpl_backend,
-    apply_random_seed,
-    get_data_cache_path,
-    get_manifest,
-    doc_example_context,
-    record_image,
-    record_dataset,
-    extract_dataset_names,
-)
 
 
 class MetadataError(Exception):
@@ -118,103 +105,72 @@ def strip_output(nb):
 
 if __name__ == "__main__":
 
-    apply_mpl_backend()
-    apply_random_seed()
-
+    # Get the desired ipynb file path and parse into components
     _, fpath, outdir = sys.argv
     basedir, fname = os.path.split(fpath)
     fstem = fname[:-6]
 
-    m = get_manifest()
-    m.add_stage("nb_to_doc", "started", notebook=fpath)
-
+    # Read the notebook
     with open(fpath) as f:
-        nb_text = f.read()
-    datasets = extract_dataset_names(nb_text)
-    for ds in datasets:
-        record_dataset(ds)
+        nb = nbformat.read(f, as_version=4)
 
-    try:
-        with doc_example_context(
-            f"notebook:{fstem}",
-            dataset_names=datasets,
-            source_file=fpath,
-        ) as ctx:
-            with open(fpath) as f:
-                nb = nbformat.read(f, as_version=4)
+    # Run the notebook
+    kernel = os.environ.get("NB_KERNEL", None)
+    if kernel is None:
+        kernel = nb["metadata"]["kernelspec"]["name"]
+    ep = ExecutePreprocessor(
+        timeout=600,
+        kernel_name=kernel,
+        extra_arguments=["--InlineBackend.rc=figure.dpi=88"]
+    )
+    ep.preprocess(nb, {"metadata": {"path": basedir}})
 
-            kernel = os.environ.get("NB_KERNEL", None)
-            if kernel is None:
-                kernel = nb["metadata"]["kernelspec"]["name"]
-            ep = ExecutePreprocessor(
-                timeout=NB_EXEC_TIMEOUT,
-                kernel_name=kernel,
-                extra_arguments=[f"--InlineBackend.rc=figure.dpi={IMAGE_DPI}"]
-            )
-            ep.preprocess(nb, {"metadata": {"path": basedir}})
+    # Remove plain text execution result outputs
+    for cell in nb.get("cells", {}):
+        if "show-output" in cell["metadata"].get("tags", []):
+            continue
+        fields = cell.get("outputs", [])
+        for field in fields:
+            if field["output_type"] == "execute_result":
+                data_keys = field["data"].keys()
+                for key in list(data_keys):
+                    if key == "text/plain":
+                        field["data"].pop(key)
+                if not field["data"]:
+                    fields.remove(field)
 
-            # Remove plain text execution result outputs
-            for cell in nb.get("cells", {}):
-                if "show-output" in cell["metadata"].get("tags", []):
-                    continue
-                fields = cell.get("outputs", [])
-                for field in fields:
-                    if field["output_type"] == "execute_result":
-                        data_keys = field["data"].keys()
-                        for key in list(data_keys):
-                            if key == "text/plain":
-                                field["data"].pop(key)
-                        if not field["data"]:
-                            fields.remove(field)
+    # Convert to .rst formats
+    exp = RSTExporter()
 
-            # Convert to .rst formats
-            exp = RSTExporter()
+    c = Config()
+    c.TagRemovePreprocessor.remove_cell_tags = {"hide"}
+    c.TagRemovePreprocessor.remove_input_tags = {"hide-input"}
+    c.TagRemovePreprocessor.remove_all_outputs_tags = {"hide-output"}
+    c.ExtractOutputPreprocessor.output_filename_template = \
+        f"{fstem}_files/{fstem}_" + "{cell_index}_{index}{extension}"
 
-            c = Config()
-            c.TagRemovePreprocessor.remove_cell_tags = {"hide"}
-            c.TagRemovePreprocessor.remove_input_tags = {"hide-input"}
-            c.TagRemovePreprocessor.remove_all_outputs_tags = {"hide-output"}
-            c.ExtractOutputPreprocessor.output_filename_template = \
-                f"{fstem}_files/{fstem}_" + "{cell_index}_{index}{extension}"
+    exp.register_preprocessor(TagRemovePreprocessor(config=c), True)
+    exp.register_preprocessor(ExtractOutputPreprocessor(config=c), True)
 
-            exp.register_preprocessor(TagRemovePreprocessor(config=c), True)
-            exp.register_preprocessor(ExtractOutputPreprocessor(config=c), True)
+    body, resources = exp.from_notebook_node(nb)
 
-            body, resources = exp.from_notebook_node(nb)
+    # Clean the output on the notebook and save a .ipynb back to disk
+    nb = strip_output(nb)
+    with open(fpath, "wt") as f:
+        nbformat.write(nb, f)
 
-            # Clean the output on the notebook and save a .ipynb back to disk
-            nb = strip_output(nb)
-            with open(fpath, "wt") as f:
-                nbformat.write(nb, f)
+    # Write the .rst file
+    rst_path = os.path.join(outdir, f"{fstem}.rst")
+    with open(rst_path, "w") as f:
+        f.write(body)
 
-            # Write the .rst file
-            rst_path = os.path.join(outdir, f"{fstem}.rst")
-            with open(rst_path, "w") as f:
-                f.write(body)
+    # Write the individual image outputs
+    imdir = os.path.join(outdir, f"{fstem}_files")
+    if not os.path.exists(imdir):
+        os.mkdir(imdir)
 
-            # Write the individual image outputs
-            imdir = os.path.join(outdir, f"{fstem}_files")
-            if not os.path.exists(imdir):
-                os.mkdir(imdir)
-
-            for imname, imdata in resources["outputs"].items():
-                if imname.startswith(fstem):
-                    impath = os.path.join(outdir, f"{imname}")
-                    with open(impath, "wb") as f:
-                        f.write(imdata)
-                    record_image(impath)
-    except Exception:
-        print(
-            f"\n{'='*60}\n"
-            f"NOTEBOOK EXECUTION FAILURE: {fpath}\n"
-            f"  Data cache: {get_data_cache_path()}\n"
-            f"  NB kernel:  {kernel if 'kernel' in dir() else '<unknown>'}\n"
-            f"  Timeout:    {NB_EXEC_TIMEOUT}s\n"
-            f"  Image DPI:  {IMAGE_DPI}\n"
-            f"  Manifest:   {m.path}\n"
-            f"{'='*60}",
-            file=sys.stderr,
-        )
-        raise
-
-    m.add_stage("nb_to_doc", "completed", notebook=fpath, stem=fstem)
+    for imname, imdata in resources["outputs"].items():
+        if imname.startswith(fstem):
+            impath = os.path.join(outdir, f"{imname}")
+            with open(impath, "wb") as f:
+                f.write(imdata)

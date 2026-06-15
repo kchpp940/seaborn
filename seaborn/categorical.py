@@ -2835,6 +2835,7 @@ def catplot(
         legend_out=legend_out, margin_titles=margin_titles,
         height=height, aspect=aspect,
         order_registry=p._order_registry,
+        diagnostics=p._diagnostics,
         **facet_kws,
     )
 
@@ -2889,6 +2890,8 @@ def catplot(
         agg_cls = WeightedAggregator
     else:
         agg_cls = EstimateAggregator
+
+    p._record_plot_kind(kind)
 
     if kind == "strip":
 

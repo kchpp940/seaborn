@@ -12,6 +12,7 @@ import pandas as pd
 import matplotlib as mpl
 
 from seaborn._core.data import PlotData
+from seaborn._core.diagnostics import PlotDiagnostics
 from seaborn._core.order import (
     OrderRegistry,
     categorical_order as _categorical_order_impl,
@@ -653,6 +654,7 @@ class VectorPlotter:
         # such information and is set up by the scale_* methods. The analogous
         # information for numeric axes would be information about log scales.
         self._var_ordered = {"x": False, "y": False}  # alt., used DefaultDict
+        self._diagnostics = PlotDiagnostics()
         self.assign_variables(data, variables)
 
         self._order_registry = OrderRegistry(
@@ -695,6 +697,32 @@ class VectorPlotter:
                     self._var_levels[var] = self._order_registry.get(var)
         return self._var_levels
 
+    def _sync_order_diagnostics(self) -> None:
+        """Sync order registry state into diagnostics collection."""
+        if not self._diagnostics.enabled:
+            return
+        for var in self._order_registry._orders:
+            entry = self._order_registry._orders[var]
+            self._diagnostics.order.record(
+                var,
+                resolved_order=entry.resolved_order,
+                user_order=entry.user_order,
+                is_explicit=entry.is_explicit,
+                source=entry.source,
+            )
+
+    def _record_plot_kind(self, kind: str) -> None:
+        """Record the plot kind/function name as a layer diagnostic."""
+        if not self._diagnostics.enabled:
+            return
+        layer = self._diagnostics.add_layer()
+        layer.kind = kind
+        layer.mark = kind
+        layer.grouping_vars = [
+            v for v in ["hue", "size", "style", "row", "col"]
+            if v in self.variables
+        ]
+
     def assign_variables(self, data=None, variables={}):
         """Define plot variables, optionally using lookup from `data`."""
         x = variables.get("x", None)
@@ -721,6 +749,15 @@ class VectorPlotter:
             )
             for v in names
         }
+
+        if hasattr(self, '_diagnostics') and self._diagnostics.enabled:
+            for var, name in names.items():
+                self._diagnostics.variables.record(
+                    var,
+                    source=self.input_format,
+                    name=str(name) if name is not None else None,
+                    var_type=self.var_types.get(var),
+                )
 
         if hasattr(self, '_order_registry'):
             self._order_registry.update_data(frame)
@@ -1212,6 +1249,8 @@ class VectorPlotter:
                 ax.yaxis.set_inverted(True)
 
         # TODO -- Add axes labels
+
+        self._sync_order_diagnostics()
 
     def _get_scale_transforms(self, axis):
         """Return a function implementing the scale transform (or its inverse)."""
@@ -1904,6 +1943,7 @@ class _FacetGridBuilder:
 
         if self.plotter is not None:
             grid_kws["order_registry"] = self.plotter._order_registry
+            grid_kws["diagnostics"] = self.plotter._diagnostics
 
         grid_kws.update(extra_kws)
         grid_kws.update(facet_kws)

@@ -14,19 +14,7 @@ import shutil
 import warnings
 
 import matplotlib
-from seaborn._doc_config import (
-    MPL_BACKEND,
-    IMAGE_DPI,
-    IMAGE_FORMAT,
-    apply_mpl_backend,
-    apply_random_seed,
-    doc_example_context,
-    extract_dataset_names,
-    record_image,
-    get_manifest,
-)
-apply_mpl_backend()
-apply_random_seed()
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
 
 
@@ -307,29 +295,20 @@ class ExampleGenerator:
     def exec_file(self):
         print(f"running {self.filename}")
 
-        datasets = extract_dataset_names(self.filetext)
         plt.close('all')
         my_globals = {'pl': plt,
                       'plt': plt}
-        with doc_example_context(
-            f"gallery:{self.modulename}",
-            dataset_names=datasets,
-            source_file=self.filename,
-            exec_globals=my_globals,
-        ):
-            execfile(self.filename, my_globals)
+        execfile(self.filename, my_globals)
 
-            fig = plt.gcf()
-            fig.canvas.draw()
-            pngfile = op.join(self.target_dir, self.pngfilename)
-            thumbfile = op.join("example_thumbs", self.thumbfilename)
-            self.html = f"<img src=../{self.pngfilename}>"
-            fig.savefig(pngfile, dpi=75, bbox_inches="tight")
-            record_image(pngfile)
+        fig = plt.gcf()
+        fig.canvas.draw()
+        pngfile = op.join(self.target_dir, self.pngfilename)
+        thumbfile = op.join("example_thumbs", self.thumbfilename)
+        self.html = f"<img src=../{self.pngfilename}>"
+        fig.savefig(pngfile, dpi=75, bbox_inches="tight")
 
-            cx, cy = self.thumbloc
-            create_thumbnail(pngfile, thumbfile, cx=cx, cy=cy)
-            record_image(thumbfile)
+        cx, cy = self.thumbloc
+        create_thumbnail(pngfile, thumbfile, cx=cx, cy=cy)
 
     def toctree_entry(self):
         return f"   ./{op.splitext(self.htmlfilename)[0]}\n\n"
@@ -351,9 +330,6 @@ class ExampleGenerator:
 
 
 def main(app):
-    m = get_manifest()
-    m.add_stage("gallery_generator", "started")
-
     static_dir = op.join(app.builder.srcdir, '_static')
     target_dir = op.join(app.builder.srcdir, 'examples')
     image_dir = op.join(app.builder.srcdir, 'examples/_images')
@@ -411,8 +387,6 @@ def main(app):
         index.write(INDEX_TEMPLATE.format(sphinx_tag="example_gallery",
                                           toctree=toctree,
                                           contents=contents))
-
-    m.add_stage("gallery_generator", "completed", examples=len(banner_data))
 
 
 def setup(app):

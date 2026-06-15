@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 
 from ._base import VectorPlotter, variable_type
 from ._core.data import handle_data_source
+from ._core.diagnostics import PlotDiagnostics
 from ._core.order import OrderRegistry, categorical_order
 from ._compat import share_axis, get_legend_handles
 from . import utils
@@ -174,6 +175,13 @@ class Grid(_BaseGrid):
             else:
                 label = entry
             labels.append(label)
+
+        if hasattr(self, '_diagnostics') and self._diagnostics.enabled:
+            self._diagnostics.legend.record_entry(
+                title=str(title) if title else "",
+                labels=list(labels),
+                source="hue",
+            )
 
         # Set default legend kwargs
         kwargs.setdefault("scatterpoints", 1)
@@ -378,6 +386,7 @@ class FacetGrid(Grid):
         margin_titles=False, xlim=None, ylim=None, subplot_kws=None,
         gridspec_kws=None,
         order_registry: OrderRegistry | None = None,
+        diagnostics: PlotDiagnostics | None = None,
     ):
 
         super().__init__()
@@ -417,6 +426,10 @@ class FacetGrid(Grid):
                 self._order_registry.register(
                     "col", order=col_order, data=data[col]
                 )
+
+        if diagnostics is None:
+            diagnostics = PlotDiagnostics()
+        self._diagnostics = diagnostics
 
         # Determine the hue facet layer information
         hue_var = hue
@@ -542,6 +555,18 @@ class FacetGrid(Grid):
         self.col_names = col_names
         self.hue_names = hue_names
         self.hue_kws = hue_kws
+
+        if self._diagnostics.enabled:
+            diag = self._diagnostics
+            diag.layout.kind = "facetgrid"
+            diag.layout.nrows = nrow
+            diag.layout.ncols = ncol
+            diag.layout.n_subplots = ncol * nrow
+            diag.layout.col_names = list(col_names)
+            diag.layout.row_names = list(row_names)
+            diag.layout.col_wrap = col_wrap
+            diag.layout.sharex = sharex
+            diag.layout.sharey = sharey
 
         # Next the private variables
         self._nrow = nrow

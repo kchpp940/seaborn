@@ -1,32 +1,10 @@
-# Tutorial notebooks -> .rst builder
-#
-# This delegates to doc/build.py, which is the unified entry point for all
-# doc builds. It ensures SEABORN_DATA, random seed, matplotlib backend, and
-# image params are the same everywhere (local and CI).
+rst_files := $(patsubst %.ipynb,../tutorial/%.rst,$(wildcard *.ipynb))
+export MPLBACKEND := module://matplotlib_inline.backend_inline
 
-PYTHON     ?= python
-DOC_ROOT   := $(abspath $(CURDIR)/..)
-BUILD_WRAP  = $(DOC_ROOT)/build.py
+tutorial: ${rst_files}
 
-JOBS       ?=
-SPHINXOPTS ?=
-
-WRAP_ARGS :=
-ifneq ($(JOBS),)
-    WRAP_ARGS += --jobs $(JOBS)
-endif
-ifneq ($(SPHINXOPTS),)
-    WRAP_ARGS += --sphinx-opts "$(SPHINXOPTS)"
-endif
-
-rst_files := $(patsubst %.ipynb,$(DOC_ROOT)/tutorial/%.rst,$(wildcard *.ipynb))
-
-.PHONY: tutorial clean
-
-tutorial: $(rst_files)
-
-$(DOC_ROOT)/tutorial/%.rst: %.ipynb
-	$(PYTHON) $(BUILD_WRAP) tutorials $(WRAP_ARGS)
+../tutorial/%.rst: %.ipynb
+	../tools/nb_to_doc.py $*.ipynb ../tutorial
 
 clean:
-	$(PYTHON) $(BUILD_WRAP) clean
+	rm -rf ../tutorial

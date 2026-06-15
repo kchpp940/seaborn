@@ -838,10 +838,12 @@ def relplot(
         col_wrap=col_wrap, row_order=row_order, col_order=col_order,
         height=height, aspect=aspect, dropna=False,
         order_registry=p._order_registry,
+        diagnostics=p._diagnostics,
         **facet_kws
     )
 
     # Draw the plot
+    p._record_plot_kind(kind)
     g.map_dataframe(func, **plot_kws)
 
     # Label the axes, using the original variables

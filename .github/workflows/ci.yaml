@@ -14,14 +14,8 @@ permissions:
 
 env:
   NB_KERNEL: python
-  SEABORN_DOC_MPL_BACKEND: Agg
   MPLBACKEND: Agg
   SEABORN_DATA: ${{ github.workspace }}/seaborn-data
-  SEABORN_DOC_BUILD: "1"
-  SEABORN_DOC_RANDOM_SEED: "0"
-  SEABORN_DOC_IMAGE_FORMAT: png
-  SEABORN_DOC_IMAGE_DPI: "90"
-  SEABORN_DOC_SAVEFIG_BBOX: tight
   PYDEVD_DISABLE_FILE_VALIDATION: 1
 
 jobs:
@@ -46,26 +40,17 @@ jobs:
           sudo dpkg -i pandoc-3.1.11-1-amd64.deb
 
       - name: Cache datasets
-        uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9 # v4.0.2
-        with:
-          path: ${{ github.workspace }}/seaborn-data
-          key: seaborn-data-${{ hashFiles('ci/cache_datasets.py') }}
-          restore-keys: |
-            seaborn-data-
-
-      - name: Build docs (via unified build wrapper)
         run: |
-          python doc/build.py all -j "$(nproc)"
+          git clone https://github.com/mwaskom/seaborn-data.git
+          ls $SEABORN_DATA
 
-      - name: Print build manifest summary
-        if: ${{ always() }}
+      - name: Build docs
+        env:
+          SPHINXOPTS: -j `nproc`
         run: |
-          python doc/build.py summary || true
-
-      - name: Diagnose doc build failure
-        if: ${{ failure() }}
-        run: |
-          python doc/diagnose_build.py
+          cd doc
+          make -j `nproc` notebooks
+          make html
 
 
   run-tests:

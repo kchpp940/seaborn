@@ -2207,6 +2207,7 @@ def displot(
         col_order=col_order, height=height,
         aspect=aspect,
         order_registry=p._order_registry,
+        diagnostics=p._diagnostics,
         **facet_kws,
     )
 
@@ -2228,6 +2229,7 @@ def displot(
     kwargs["legend"] = legend
 
     # --- Draw the plots
+    p._record_plot_kind(kind)
 
     if kind == "hist":
 

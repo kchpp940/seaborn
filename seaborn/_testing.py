@@ -3,6 +3,49 @@ import matplotlib as mpl
 from matplotlib.colors import to_rgb, to_rgba
 from numpy.testing import assert_array_equal
 
+from seaborn._core.diagnostics import PlotDiagnostics
+
+
+def get_diagnostics(obj):
+    """Extract diagnostics from a seaborn plot object.
+
+    This is a test helper that retrieves the :class:`PlotDiagnostics`
+    object from various seaborn objects (FacetGrid, Plotter,
+    VectorPlotter, etc.) and returns the diagnostic data as a plain
+    dictionary.
+
+    Parameters
+    ----------
+    obj : object
+        A seaborn plot object (FacetGrid, Plotter, VectorPlotter, etc.)
+        that has an attached ``_diagnostics`` attribute.
+
+    Returns
+    -------
+    diagnostics : dict
+        Dictionary containing all diagnostic sections, or an empty
+        dict if no diagnostics are available.
+
+    Examples
+    --------
+    >>> import seaborn as sns
+    >>> from seaborn._testing import get_diagnostics
+    >>> tips = sns.load_dataset("tips")
+    >>> g = sns.displot(data=tips, x="total_bill", hue="sex")
+    >>> diag = get_diagnostics(g)
+    >>> diag["variables"]["assignments"].keys()
+    dict_keys(['x', 'hue'])
+    >>> diag["legend"]["entries"][0]["labels"]
+    ['Male', 'Female']
+
+    """
+    diag = getattr(obj, "_diagnostics", None)
+    if diag is None:
+        return {}
+    if isinstance(diag, PlotDiagnostics):
+        return diag.to_dict()
+    return diag
+
 
 USE_PROPS = [
     "alpha",

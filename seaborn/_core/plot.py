@@ -38,6 +38,7 @@ from seaborn._core.typing import (
     OrderSpec,
     Default,
 )
+from seaborn._core.diagnostics import PlotDiagnostics
 from seaborn._core.exceptions import PlotSpecError
 from seaborn._core.rules import categorical_order
 from seaborn._compat import get_layout_engine, set_layout_engine
@@ -991,6 +992,7 @@ class Plotter:
             tuple[str, str | int], list[Artist], list[str],
         ]] = []
         self._scales: dict[str, Scale] = {}
+        self._diagnostics = PlotDiagnostics()
 
     def save(self, loc, **kwargs) -> Plotter:  # TODO type args
         kwargs.setdefault("dpi", 96)
@@ -1082,6 +1084,15 @@ class Plotter:
             spec["data"] = common_data.join(layer.get("source"), layer.get("vars"))
             layers.append(spec)
 
+        if self._diagnostics.enabled:
+            for var in common_data.frame.columns:
+                name = common_data.names.get(var, var)
+                self._diagnostics.variables.record(
+                    str(var),
+                    source="plot_data",
+                    name=str(name) if name is not None else None,
+                )
+
         return common_data, layers
 
     def _resolve_label(self, p: Plot, var: str, auto_label: str | None) -> str:
@@ -1123,10 +1134,27 @@ class Plotter:
 
         self._subplots = subplots = Subplots(subplot_spec, facet_spec, pair_spec)
 
+        if self._diagnostics.enabled:
+            diag = self._diagnostics
+            diag.layout.kind = "objects"
+            diag.layout.nrows = subplots.subplot_spec["nrows"]
+            diag.layout.ncols = subplots.subplot_spec["ncols"]
+            diag.layout.n_subplots = subplots.n_subplots
+            diag.layout.col_names = list(subplots.grid_dimensions.get("col", []))
+            diag.layout.row_names = list(subplots.grid_dimensions.get("row", []))
+            diag.layout.col_wrap = getattr(subplots, "wrap", None)
+            diag.layout.sharex = subplots.subplot_spec.get("sharex", True)
+            diag.layout.sharey = subplots.subplot_spec.get("sharey", True)
+
         # --- Figure initialization
         self._figure = subplots.init_figure(
             pair_spec, self._pyplot, p._figure_spec, p._target,
         )
+
+        if self._diagnostics.enabled:
+            for sub in subplots:
+                sp_info = {k: v for k, v in sub.items() if k != "ax"}
+                self._diagnostics.layout.record_subplot(sp_info)
 
         # --- Figure annotation
         for sub in subplots:
@@ -1425,9 +1453,24 @@ class Plotter:
 
         pair_variables = p._pair_spec.get("structure", {})
 
+        layer_diag = None
+        if self._diagnostics.enabled:
+            layer_diag = self._diagnostics.add_layer()
+            layer_diag.mark = mark.__class__.__name__
+            if layer.get("stat") is not None:
+                layer_diag.stat = layer["stat"].__class__.__name__
+            if move is not None:
+                moves = move if isinstance(move, list) else [move]
+                layer_diag.moves = [m.__class__.__name__ for m in moves]
+            layer_diag.legend = layer.get("legend", True)
+            layer_diag.label = layer.get("label")
+
         for subplots, df, scales in self._generate_pairings(data, pair_variables):
 
             orient = layer["orient"] or mark._infer_orient(scales)
+
+            if layer_diag is not None and layer_diag.orient is None:
+                layer_diag.orient = str(orient)
 
             def get_order(var):
                 # Ignore order for x/y: they have been scaled to numeric indices,
@@ -1484,6 +1527,19 @@ class Plotter:
 
             grouping_vars = mark._grouping_props + default_grouping_vars
             split_generator = self._setup_split_generator(grouping_vars, df, subplots)
+
+            if layer_diag is not None and not layer_diag.grouping_vars:
+                layer_diag.grouping_vars = list(grouping_vars)
+                for var in grouping_vars:
+                    if var in scales:
+                        order = getattr(scales[var], "order", None)
+                        if order is not None:
+                            self._diagnostics.grouping.record_order(var, list(order))
+                            self._diagnostics.order.record(
+                                var,
+                                resolved_order=list(order),
+                                source="scale",
+                            )
 
             mark._plot(split_generator, scales, orient)
 
@@ -1746,6 +1802,14 @@ class Plotter:
                 existing_artists = merged_contents[key][0]
                 for i, new_artist in enumerate(new_artists):
                     existing_artists[i] += tuple([new_artist])
+
+        if self._diagnostics.enabled:
+            for (name, _), (_, labels) in merged_contents.items():
+                self._diagnostics.legend.record_entry(
+                    title=name,
+                    labels=list(labels),
+                    source="scale",
+                )
 
         # When using pyplot, an "external" legend won't be shown, so this
         # keeps it inside the axes (though still attached to the figure)

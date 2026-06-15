@@ -1,0 +1,49 @@
+{
+  "started_at": "2026-06-15T12:29:14+0800",
+  "config": {
+    "random_seed": 0,
+    "mpl_backend": "Agg",
+    "image_format": "png",
+    "image_dpi": 90,
+    "savefig_bbox": "tight",
+    "nb_exec_timeout": 600,
+    "nb_kernel": "python",
+    "data_cache_path": "/Users/pkcha/.cache/seaborn-data",
+    "dataset_source_base": "https://raw.githubusercontent.com/mwaskom/seaborn-data/master"
+  },
+  "stages": [
+    {
+      "name": "test_stage",
+      "status": "started",
+      "timestamp": "2026-06-15T12:29:14+0800"
+    }
+  ],
+  "examples": [
+    {
+      "name": "demo_ex",
+      "source_file": null,
+      "datasets": [
+        "tips"
+      ],
+      "images": [],
+      "status": "success",
+      "timestamp": "2026-06-15T12:29:14+0800"
+    }
+  ],
+  "datasets": {
+    "tips": {
+      "name": "tips",
+      "cache_path": "/Users/pkcha/.cache/seaborn-data/tips.csv",
+      "source_url": "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/tips.csv",
+      "cache_hit": false,
+      "last_accessed": "2026-06-15T12:29:14+0800"
+    }
+  },
+  "images": [],
+  "cache_hits": [],
+  "cache_misses": [
+    "tips"
+  ],
+  "failures": [],
+  "finished_at": "2026-06-15T12:29:14+0800"
+}

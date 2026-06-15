@@ -8,18 +8,6 @@ import numpy as np
 import matplotlib as mpl
 import seaborn as sns
 import seaborn.objects as so
-from seaborn._doc_config import (
-    apply_mpl_backend,
-    apply_random_seed,
-    RANDOM_SEED,
-    doc_example_context,
-    get_data_cache_path,
-    record_image,
-    get_manifest,
-    extract_dataset_names,
-)
-apply_mpl_backend()
-apply_random_seed()
 
 
 TEMPLATE = """
@@ -59,8 +47,6 @@ User guide and tutorial
 
 
 def main(app):
-    m = get_manifest()
-    m.add_stage("tutorial_builder", "started")
 
     content_yaml = Path(app.builder.srcdir) / "tutorial.yaml"
     tutorial_rst = Path(app.builder.srcdir) / "tutorial.rst"
@@ -81,7 +67,6 @@ def main(app):
     with open(tutorial_rst, "w") as fid:
         fid.write(content)
 
-    count_thumbs = 0
     for section in sections:
         for page in section["pages"]:
             if (
@@ -89,36 +74,22 @@ def main(app):
                 or svg_path.stat().st_mtime < Path(__file__).stat().st_mtime
             ):
                 write_thumbnail(svg_path, page)
-                count_thumbs += 1
-
-    m.add_stage("tutorial_builder", "completed", thumbnails_built=count_thumbs)
 
 
 def write_thumbnail(svg_path, page):
-
-    import inspect
-    try:
-        source_file = inspect.getsourcefile(globals()[page])
-    except Exception:
-        source_file = None
 
     with (
         sns.axes_style("dark"),
         sns.plotting_context("notebook"),
         sns.color_palette("deep")
     ):
-        with doc_example_context(
-            f"tutorial:{page}",
-            source_file=source_file,
-        ):
-            fig = globals()[page]()
-            for ax in fig.axes:
-                ax.set(xticklabels=[], yticklabels=[], xlabel="", ylabel="", title="")
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                fig.tight_layout()
-            fig.savefig(svg_path, format="svg")
-            record_image(str(svg_path))
+        fig = globals()[page]()
+        for ax in fig.axes:
+            ax.set(xticklabels=[], yticklabels=[], xlabel="", ylabel="", title="")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fig.tight_layout()
+        fig.savefig(svg_path, format="svg")
 
 
 def introduction():
