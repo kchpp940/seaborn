@@ -55,7 +55,7 @@ jobs:
 
       - name: Build docs (via unified build wrapper)
         run: |
-          python doc/build.py all -j `nproc`
+          python doc/build.py all -j "$(nproc)"
 
       - name: Print build manifest summary
         if: ${{ always() }}

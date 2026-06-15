@@ -8,6 +8,8 @@ PYTHON      ?= python
 BUILD_WRAP  ?= $(CURDIR)/build.py
 
 SPHINXOPTS  ?=
+JOBS        ?=
+
 SPHINXBUILD ?= sphinx-build
 PAPER       ?=
 BUILDDIR    ?= _build
@@ -16,6 +18,14 @@ PAPEROPT_a4     = -D latex_paper_size=a4
 PAPEROPT_letter  = -D latex_paper_size=letter
 ALLSPHINXOPTS    = -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
 I18NSPHINXOPTS   = $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
+
+WRAP_ARGS :=
+ifneq ($(JOBS),)
+    WRAP_ARGS += --jobs $(JOBS)
+endif
+ifneq ($(SPHINXOPTS),)
+    WRAP_ARGS += --sphinx-opts "$(SPHINXOPTS)"
+endif
 
 WRAP = $(PYTHON) $(BUILD_WRAP)
 
@@ -37,16 +47,16 @@ help:
 	@echo "  latex latexpdf text man changes linkcheck doctest gettext"
 
 cache-datasets:
-	$(WRAP) cache-datasets
+	$(WRAP) cache-datasets $(WRAP_ARGS)
 
 tutorials:
-	$(WRAP) tutorials
+	$(WRAP) tutorials $(WRAP_ARGS)
 
 docstrings:
-	$(WRAP) docstrings
+	$(WRAP) docstrings $(WRAP_ARGS)
 
 notebooks:
-	$(WRAP) notebooks
+	$(WRAP) notebooks $(WRAP_ARGS)
 
 summary:
 	$(WRAP) summary
@@ -55,10 +65,10 @@ clean:
 	-$(WRAP) clean
 
 all:
-	$(WRAP) all
+	$(WRAP) all $(WRAP_ARGS)
 
 html:
-	$(WRAP) html
+	$(WRAP) html $(WRAP_ARGS)
 
 # Legacy HTML target: bypass unified build wrapper and call sphinx directly.
 # Use `make html` for standard (wrappered) builds; use this only if you need to

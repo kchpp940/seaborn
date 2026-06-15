@@ -257,23 +257,48 @@ def build_parser():
         prog="doc/build.py",
         description="Unified documentation build wrapper for seaborn.",
     )
-    p.add_argument(
+
+    # Shared parent parser: --jobs and --sphinx-opts can be passed to any
+    # subcommand that drives sphinx or parallel builds. Using `parents` ensures
+    # all these subcommands have the EXACT same parameter contract.
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument(
         "--jobs", "-j", type=int,
         help="Parallel jobs (passed to sphinx).",
     )
-    p.add_argument(
+    shared.add_argument(
         "--sphinx-opts", default="",
         help="Extra options to pass to sphinx.",
     )
+
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("cache-datasets", help="Populate SEABORN_DATA cache dir.")
-    sub.add_parser("tutorials", help="Build tutorial .ipynb -> .rst.")
-    sub.add_parser("docstrings", help="Build docstring .ipynb -> .rst.")
-    sub.add_parser("notebooks", help="tutorials + docstrings.")
-    sp = sub.add_parser("html", help="Run sphinx html builder.")
-    sp.add_argument("--jobs", "-j", type=int, help="Parallel sphinx jobs.")
-    sub.add_parser("all", help="cache-datasets -> notebooks -> html.")
+    sub.add_parser(
+        "tutorials",
+        help="Build tutorial .ipynb -> .rst.",
+        parents=[shared],
+    )
+    sub.add_parser(
+        "docstrings",
+        help="Build docstring .ipynb -> .rst.",
+        parents=[shared],
+    )
+    sub.add_parser(
+        "notebooks",
+        help="tutorials + docstrings.",
+        parents=[shared],
+    )
+    sub.add_parser(
+        "html",
+        help="Run sphinx html builder.",
+        parents=[shared],
+    )
+    sub.add_parser(
+        "all",
+        help="cache-datasets -> notebooks -> html.",
+        parents=[shared],
+    )
     sub.add_parser("summary", help="Print build manifest summary.")
     sub.add_parser("clean", help="Remove all build output.")
     return p
