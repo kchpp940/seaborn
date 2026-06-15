@@ -123,16 +123,43 @@ class _LegendDiagnostics:
 
 
 @dataclass
+class _MappingDiagnostics:
+    """Diagnostics for semantic mapping (hue, size, style)."""
+
+    var: str | None = None
+    map_type: str | None = None
+    levels: list = field(default_factory=list)
+    user_order: list | None = None
+    source: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "var": self.var,
+            "map_type": self.map_type,
+            "levels": list(self.levels),
+            "user_order": list(self.user_order) if self.user_order else None,
+            "source": self.source,
+            "extra": dict(self.extra),
+        }
+
+
+@dataclass
 class _LayerDiagnostics:
     """Diagnostics for a single plot layer."""
 
     kind: str | None = None
     mark: str | None = None
     stat: str | None = None
+    stat_params: dict[str, Any] = field(default_factory=dict)
     moves: list[str] = field(default_factory=list)
     orient: str | None = None
     grouping_vars: list[str] = field(default_factory=list)
+    group_keys: list[tuple] = field(default_factory=list)
+    draw_function: str | None = None
     legend: bool = True
+    legend_source: str | None = None
+    legend_method: str | None = None
     label: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -140,10 +167,15 @@ class _LayerDiagnostics:
             "kind": self.kind,
             "mark": self.mark,
             "stat": self.stat,
+            "stat_params": dict(self.stat_params),
             "moves": list(self.moves),
             "orient": self.orient,
             "grouping_vars": list(self.grouping_vars),
+            "group_keys": [list(k) for k in self.group_keys],
+            "draw_function": self.draw_function,
             "legend": self.legend,
+            "legend_source": self.legend_source,
+            "legend_method": self.legend_method,
             "label": self.label,
         }
 
@@ -187,6 +219,7 @@ class PlotDiagnostics:
         self.order = _OrderDiagnostics()
         self.layout = _LayoutDiagnostics()
         self.legend = _LegendDiagnostics()
+        self.mappings: list[_MappingDiagnostics] = []
         self._layers: list[_LayerDiagnostics] = []
 
     # -- Enable / disable ------------------------------------------------------- #
@@ -224,6 +257,36 @@ class PlotDiagnostics:
     def layers(self) -> list[_LayerDiagnostics]:
         """List of per-layer diagnostics entries."""
         return list(self._layers)
+
+    # -- Mapping management ---------------------------------------------------- #
+
+    def add_mapping(self, map_type: str, *, var: str | None = None,
+                    levels: list | None = None, user_order: list | None = None,
+                    source: str | None = None, **extra: Any) -> None:
+        """Record a semantic mapping (hue, size, style, etc.).
+
+        If a mapping with the same map_type already exists, it will be
+        updated in place rather than adding a duplicate entry.
+        """
+        if not self._enabled:
+            return
+        for existing in self.mappings:
+            if existing.map_type == map_type:
+                existing.var = var if var is not None else existing.var
+                existing.levels = list(levels) if levels else existing.levels
+                existing.user_order = list(user_order) if user_order else existing.user_order
+                existing.source = source if source is not None else existing.source
+                existing.extra.update(extra)
+                return
+        mapping = _MappingDiagnostics(
+            var=var,
+            map_type=map_type,
+            levels=list(levels) if levels else [],
+            user_order=list(user_order) if user_order else None,
+            source=source,
+        )
+        mapping.extra.update(extra)
+        self.mappings.append(mapping)
 
     # -- Export ---------------------------------------------------------------- #
 
@@ -280,6 +343,7 @@ class PlotDiagnostics:
                 ],
                 "sources": list(self.legend.sources),
             },
+            "mappings": [m.to_dict() for m in self.mappings],
             "layers": [layer.to_dict() for layer in self._layers],
         }
 

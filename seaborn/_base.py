@@ -910,18 +910,43 @@ class VectorPlotter:
         resolved_order = self._order_registry.get("hue")
         mapping = HueMapping(self, palette, resolved_order, norm, saturation)
         self._hue_map = mapping
+        if self._diagnostics.enabled:
+            self._diagnostics.add_mapping(
+                "hue",
+                var=self.variables.get("hue"),
+                levels=list(mapping.levels) if mapping.levels is not None else [],
+                user_order=order,
+                source="user" if order is not None else "default",
+                palette=str(palette) if palette is not None else None,
+            )
 
     def map_size(self, sizes=None, order=None, norm=None):
         self._order_registry.register("size", order=order)
         resolved_order = self._order_registry.get("size")
         mapping = SizeMapping(self, sizes, resolved_order, norm)
         self._size_map = mapping
+        if self._diagnostics.enabled:
+            self._diagnostics.add_mapping(
+                "size",
+                var=self.variables.get("size"),
+                levels=list(mapping.levels) if mapping.levels is not None else [],
+                user_order=order,
+                source="user" if order is not None else "default",
+            )
 
     def map_style(self, markers=None, dashes=None, order=None):
         self._order_registry.register("style", order=order)
         resolved_order = self._order_registry.get("style")
         mapping = StyleMapping(self, markers, dashes, resolved_order)
         self._style_map = mapping
+        if self._diagnostics.enabled:
+            self._diagnostics.add_mapping(
+                "style",
+                var=self.variables.get("style"),
+                levels=list(mapping.levels) if mapping.levels is not None else [],
+                user_order=order,
+                source="user" if order is not None else "default",
+            )
 
     def iter_data(
         self, grouping_vars=None, *,

@@ -258,6 +258,26 @@ class _LinePlotter(_RelationalPlotter):
             self.estimator, self.errorbar, n_boot=self.n_boot, seed=self.seed,
         )
 
+        # Record diagnostics for line plot layer
+        if self._diagnostics.enabled:
+            if self._diagnostics.layers:
+                layer = self._diagnostics.layers[-1]
+            else:
+                layer = self._diagnostics.add_layer()
+            layer.stat = type(agg).__name__
+            layer.stat_params = {
+                "estimator": self.estimator,
+                "errorbar": self.errorbar,
+            }
+            layer.orient = self.orient
+            layer.draw_function = "ax.plot"
+            layer.grouping_vars = [
+                v for v in ["hue", "size", "style", "units"]
+                if v in self.variables
+            ]
+            layer.legend_source = "hue+size+style"
+            layer.legend_method = "add_legend_data"
+
         # TODO abstract variable to aggregate over here-ish. Better name?
         orient = self.orient
         if orient not in {"x", "y"}:
@@ -416,6 +436,20 @@ class _ScatterPlotter(_RelationalPlotter):
         _, inv_x = _get_transform_functions(ax, "x")
         _, inv_y = _get_transform_functions(ax, "y")
         x, y = inv_x(x), inv_y(y)
+
+        # Record diagnostics for scatter plot layer
+        if self._diagnostics.enabled:
+            if self._diagnostics.layers:
+                layer = self._diagnostics.layers[-1]
+            else:
+                layer = self._diagnostics.add_layer()
+            layer.draw_function = "ax.scatter"
+            layer.grouping_vars = [
+                v for v in ["hue", "size", "style"]
+                if v in self.variables
+            ]
+            layer.legend_source = "hue+size+style"
+            layer.legend_method = "add_legend_data"
 
         if "style" in self.variables:
             # Use a representative marker so scatter sets the edgecolor
@@ -844,6 +878,24 @@ def relplot(
 
     # Draw the plot
     p._record_plot_kind(kind)
+
+    if p._diagnostics.enabled and p._diagnostics.layers:
+        layer = p._diagnostics.layers[-1]
+        layer.draw_function = "ax.scatter" if kind == "scatter" else "ax.plot"
+        layer.legend_source = "semantic_mappings"
+        layer.legend_method = "add_legend_data"
+
+        grouping_vars = [v for v in ["hue", "size", "style"] if v in p.variables]
+        if kind == "line":
+            if "units" in p.variables:
+                grouping_vars.append("units")
+        layer.grouping_vars = grouping_vars
+
+        if kind == "line":
+            layer.stat = "EstimateAggregator"
+            # We don't know exact params here, but we can record what we know
+            layer.stat_params = dict(estimator=kwargs.get("estimator", "mean"))
+
     g.map_dataframe(func, **plot_kws)
 
     # Label the axes, using the original variables

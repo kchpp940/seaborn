@@ -432,6 +432,23 @@ class _DistributionPlotter(VectorPlotter):
         # to copy diagnostics between layers. This is the single source of truth.
         self._diagnostics_collector = estimator._diagnostics_collector
         self.diagnostics_ = self._diagnostics_collector.diagnostics
+
+        # Record plot-level diagnostics for the histogram layer
+        if self._diagnostics.enabled:
+            if self._diagnostics.layers:
+                layer = self._diagnostics.layers[-1]
+            else:
+                layer = self._diagnostics.add_layer()
+            layer.stat = "Hist"
+            layer.stat_params = dict(estimate_kws)
+            layer.orient = orient
+            layer.grouping_vars = ["hue"] if "hue" in self.variables else []
+            layer.draw_function = "ax.bar" if element == "bars" else (
+                "ax.fill_between" if fill else "ax.plot"
+            )
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_configure_legend"
+
         histograms = {}
 
         # Do pre-compute housekeeping related to multiple groups
@@ -536,6 +553,11 @@ class _DistributionPlotter(VectorPlotter):
 
             # Store the finalized histogram data for future plotting
             histograms[key] = hist
+
+        # Record group keys after first pass
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.group_keys = list(histograms.keys())
 
         # Modify the histogram and density data to resolve multiple groups
         histograms, baselines = self._resolve_multiple(histograms, multiple)

@@ -1269,6 +1269,19 @@ class _CategoricalPlotter(VectorPlotter):
 
         ax = self.ax
 
+        # Record diagnostics for this plot layer
+        if self._diagnostics.enabled:
+            if self._diagnostics.layers:
+                layer = self._diagnostics.layers[-1]
+            else:
+                layer = self._diagnostics.add_layer()
+            layer.orient = self.orient
+            layer.grouping_vars = list(iter_vars) if "hue" in self.variables else []
+            layer.draw_function = "ax.bar" if self.orient == "x" else "ax.barh"
+            layer.stat = type(aggregator).__name__
+            layer.legend_source = "hue_map"
+            layer.legend_method = "_configure_legend"
+
         if self._hue_map.levels is None:
             dodge = False
 
@@ -1280,11 +1293,13 @@ class _CategoricalPlotter(VectorPlotter):
 
         err_kws.setdefault("linewidth", 1.5 * mpl.rcParams["lines.linewidth"])
 
+        group_keys = []
         for sub_vars, sub_data in self.iter_data(iter_vars,
                                                  from_comp_data=True,
                                                  allow_empty=True):
 
             ax = self._get_axes(sub_vars)
+            group_keys.append(tuple(sub_vars.items()))
 
             agg_data = sub_data if sub_data.empty else (
                 sub_data
@@ -1329,6 +1344,11 @@ class _CategoricalPlotter(VectorPlotter):
                     ax, agg_data, capsize,
                     {"color": ".26" if fill else main_color, **err_kws}
                 )
+
+        # Record group keys after loop
+        if self._diagnostics.enabled and self._diagnostics.layers:
+            layer = self._diagnostics.layers[-1]
+            layer.group_keys = group_keys
 
         legend_artist = _get_patch_legend_artist(fill)
         self._configure_legend(ax, legend_artist, plot_kws)
