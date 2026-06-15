@@ -14,17 +14,12 @@ from matplotlib.colors import to_rgb
 import matplotlib.pyplot as plt
 from matplotlib.cbook import normalize_kwargs
 
-from seaborn._core.typing import deprecated
+from seaborn._core import deprecated
 from seaborn.external.version import Version
 from seaborn.external.appdirs import user_cache_dir
-from seaborn._param_validation import (
-    _check_argument as _pv_check_argument,
-    _deprecate_ci as _pv_deprecate_ci,
-)
 
 __all__ = ["desaturate", "saturate", "set_hls_values", "move_legend",
-           "despine", "get_dataset_names", "get_data_home", "load_dataset",
-           "_check_argument", "_deprecate_ci"]
+           "despine", "get_dataset_names", "get_data_home", "load_dataset"]
 
 DATASET_SOURCE = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master"
 DATASET_NAMES_URL = f"{DATASET_SOURCE}/dataset_names.txt"
@@ -752,9 +747,18 @@ def to_utf8(obj):
         return str(obj)
 
 
-def _check_argument(param, options, value, prefix=False, **kwargs):
+def _check_argument(param, options, value, prefix=False):
     """Raise if value for param is not in options."""
-    return _pv_check_argument(param, options, value, prefix=prefix, **kwargs)
+    if prefix and value is not None:
+        failure = not any(value.startswith(p) for p in options if isinstance(p, str))
+    else:
+        failure = value not in options
+    if failure:
+        raise ValueError(
+            f"The value for `{param}` must be one of {options}, "
+            f"but {repr(value)} was passed."
+        )
+    return value
 
 
 def _assign_default_kwargs(kws, call_func, source_func):
@@ -796,7 +800,7 @@ def adjust_legend_subtitles(legend):
                     text.set_size(font_size)
 
 
-def _deprecate_ci(errorbar, ci, **kwargs):
+def _deprecate_ci(errorbar, ci):
     """
     Warn on usage of ci= and convert to appropriate errorbar= arg.
 
@@ -805,7 +809,20 @@ def _deprecate_ci(errorbar, ci, **kwargs):
     (and extracted from kwargs) after one cycle.
 
     """
-    return _pv_deprecate_ci(errorbar, ci, stacklevel=2, **kwargs)
+    if ci is not deprecated and ci != "deprecated":
+        if ci is None:
+            errorbar = None
+        elif ci == "sd":
+            errorbar = "sd"
+        else:
+            errorbar = ("ci", ci)
+        msg = (
+            "\n\nThe `ci` parameter is deprecated. "
+            f"Use `errorbar={repr(errorbar)}` for the same effect.\n"
+        )
+        warnings.warn(msg, FutureWarning, stacklevel=3)
+
+    return errorbar
 
 
 def _get_transform_functions(ax, axis):

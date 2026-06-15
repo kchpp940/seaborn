@@ -40,15 +40,6 @@ from ._docstrings import (
     DocstringComponents,
     _core_docs,
 )
-from ._param_validation import (
-    _check_argument as _pv_check_argument,
-    _check_figure_level_ax,
-    _check_param_constraint,
-    _deprecate_param,
-    _handle_ignored_param,
-    _warn_deprecated_function,
-    _warn_singular,
-)
 
 
 __all__ = ["displot", "histplot", "kdeplot", "ecdfplot", "rugplot", "distplot"]
@@ -362,8 +353,12 @@ class _DistributionPlotter(VectorPlotter):
                 singular = True
 
             if singular:
+                msg = (
+                    "Dataset has 0 variance; skipping density estimate. "
+                    "Pass `warn_singular=False` to disable this warning."
+                )
                 if warn_singular:
-                    _warn_singular("univariate", stacklevel=3)
+                    warnings.warn(msg, UserWarning, stacklevel=4)
                 continue
 
             # Invert the scaling of the support points
@@ -417,12 +412,11 @@ class _DistributionPlotter(VectorPlotter):
             and not estimate_kws["discrete"]
         )
         if auto_bins_with_weights:
-            _handle_ignored_param(
-                "bins", "auto",
-                style="bins_auto_weights",
-                reason="Setting `bins=10`, but you will likely want to adjust.",
-                stacklevel=2,
+            msg = (
+                "`bins` cannot be 'auto' when using weights. "
+                "Setting `bins=10`, but you will likely want to adjust."
             )
+            warnings.warn(msg, UserWarning)
             estimate_kws["bins"] = 10
 
         # Simplify downstream code if we are not normalizing
@@ -1132,8 +1126,12 @@ class _DistributionPlotter(VectorPlotter):
                 singular = True
 
             if singular:
+                msg = (
+                    "KDE cannot be estimated (0 variance or perfect covariance). "
+                    "Pass `warn_singular=False` to disable this warning."
+                )
                 if warn_singular:
-                    _warn_singular("bivariate", stacklevel=2)
+                    warnings.warn(msg, UserWarning, stacklevel=3)
                 continue
 
             # Transform the support grid back to the original scale
@@ -1157,7 +1155,7 @@ class _DistributionPlotter(VectorPlotter):
             levels = np.linspace(thresh, 1, levels)
         else:
             if min(levels) < 0 or max(levels) > 1:
-                _check_param_constraint("levels must be in [0, 1]", param="levels")
+                raise ValueError("levels must be in [0, 1]")
 
         # Transform from iso-proportions to iso-densities
         if common_norm:
@@ -1175,12 +1173,8 @@ class _DistributionPlotter(VectorPlotter):
         if "hue" in self.variables:
             for param in ["cmap", "colors"]:
                 if param in contour_kws:
-                    _handle_ignored_param(
-                        param, contour_kws[param],
-                        style="ignored_when",
-                        context="hue mapping",
-                        stacklevel=2,
-                    )
+                    msg = f"{param} parameter ignored when using hue mapping."
+                    warnings.warn(msg, UserWarning)
                     contour_kws.pop(param)
         else:
 
@@ -1653,13 +1647,10 @@ def kdeplot(
 
     # Handle (past) deprecation of `data2`
     if "data2" in kwargs:
-        _deprecate_param(
-            "data2", True,
-            style="removed",
-            new_param="y",
-        )
+        msg = "`data2` has been removed (replaced by `y`); please update your code."
+        raise TypeError(msg)
 
-    # Handle deprecation of `vertical` - needs custom variable swapping
+    # Handle deprecation of `vertical`
     vertical = kwargs.pop("vertical", None)
     if vertical is not None:
         if vertical:
@@ -1670,49 +1661,41 @@ def kdeplot(
                 x, y = y, x
         else:
             action_taken = "assigning data to `x`."
-        _deprecate_param(
-            "vertical", vertical,
-            style="dedented_vertical",
-            suggestion=action_taken.strip(),
-            version="0.14.0",
-            stacklevel=2,
-        )
+        msg = textwrap.dedent(f"""\n
+        The `vertical` parameter is deprecated; {action_taken}
+        This will become an error in seaborn v0.14.0; please update your code.
+        """)
+        warnings.warn(msg, UserWarning, stacklevel=2)
 
     # Handle deprecation of `bw`
     bw = kwargs.pop("bw", None)
     if bw is not None:
-        bw_method = _deprecate_param(
-            "bw", bw,
-            style="dedented_bw_kde",
-            new_param="`bw_method` and `bw_adjust`",
-            set_param="bw_method",
-            new_value=bw,
-            version="0.14.0",
-            stacklevel=2,
-        )
+        msg = textwrap.dedent(f"""\n
+        The `bw` parameter is deprecated in favor of `bw_method` and `bw_adjust`.
+        Setting `bw_method={bw}`, but please see the docs for the new parameters
+        and update your code. This will become an error in seaborn v0.14.0.
+        """)
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        bw_method = bw
 
     # Handle deprecation of `kernel`
-    _deprecate_param(
-        "kernel", kwargs.pop("kernel", None),
-        style="dedented_kernel_kde",
-        suggestion="Support for alternate kernels has been removed; using Gaussian kernel.",
-        version="0.14.0",
-        stacklevel=2,
-    )
+    if kwargs.pop("kernel", None) is not None:
+        msg = textwrap.dedent("""\n
+        Support for alternate kernels has been removed; using Gaussian kernel.
+        This will become an error in seaborn v0.14.0; please update your code.
+        """)
+        warnings.warn(msg, UserWarning, stacklevel=2)
 
     # Handle deprecation of shade_lowest
     shade_lowest = kwargs.pop("shade_lowest", None)
     if shade_lowest is not None:
         if shade_lowest:
             thresh = 0
-        _deprecate_param(
-            "shade_lowest", shade_lowest,
-            style="dedented_replaced",
-            new_param="thresh",
-            new_value=thresh,
-            version="0.14.0",
-            stacklevel=2,
-        )
+        msg = textwrap.dedent(f"""\n
+        `shade_lowest` has been replaced by `thresh`; setting `thresh={thresh}.
+        This will become an error in seaborn v0.14.0; please update your code.
+        """)
+        warnings.warn(msg, UserWarning, stacklevel=2)
 
     # Handle "soft" deprecation of shade `shade` is not really the right
     # terminology here, but unlike some of the other deprecated parameters it
@@ -1724,14 +1707,12 @@ def kdeplot(
     # can actually fire a FutureWarning, and eventually remove.
     shade = kwargs.pop("shade", None)
     if shade is not None:
-        fill = _deprecate_param(
-            "shade", shade,
-            style="dedented_shade",
-            new_param="fill",
-            new_value=shade,
-            version="0.14.0",
-            stacklevel=2,
-        )
+        fill = shade
+        msg = textwrap.dedent(f"""\n
+        `shade` is now deprecated in favor of `fill`; setting `fill={shade}`.
+        This will become an error in seaborn v0.14.0; please update your code.
+        """)
+        warnings.warn(msg, FutureWarning, stacklevel=2)
 
     # Handle `n_levels`
     # This was never in the formal API but it was processed, and appeared in an
@@ -2066,13 +2047,11 @@ def rugplot(
 
     if a is not None:
         data = a
-        _deprecate_param(
-            "a", a,
-            style="dedented_generic",
-            suggestion="use `x`, `y`, and/or `data` instead.",
-            version="0.14.0",
-            stacklevel=2,
-        )
+        msg = textwrap.dedent("""\n
+        The `a` parameter has been replaced; use `x`, `y`, and/or `data` instead.
+        Please update your code; This will become an error in seaborn v0.14.0.
+        """)
+        warnings.warn(msg, UserWarning, stacklevel=2)
 
     if axis is not None:
         if axis == "x":
@@ -2080,15 +2059,12 @@ def rugplot(
         elif axis == "y":
             y = data
         data = None
-        _deprecate_param(
-            "axis", axis,
-            style="dedented_generic_deprecated",
-            suggestion=f"use the `{axis}` parameter instead.",
-            version="0.14.0",
-            stacklevel=2,
-        )
+        msg = textwrap.dedent(f"""\n
+        The `axis` parameter has been deprecated; use the `{axis}` parameter instead.
+        Please update your code; this will become an error in seaborn v0.14.0.
+        """)
+        warnings.warn(msg, UserWarning, stacklevel=2)
 
-    # Handle deprecation of `vertical` - needs custom variable swapping
     vertical = kwargs.pop("vertical", None)
     if vertical is not None:
         if vertical:
@@ -2099,13 +2075,11 @@ def rugplot(
                 x, y = y, x
         else:
             action_taken = "assigning data to `x`."
-        _deprecate_param(
-            "vertical", vertical,
-            style="dedented_vertical",
-            suggestion=action_taken.strip(),
-            version="0.14.0",
-            stacklevel=2,
-        )
+        msg = textwrap.dedent(f"""\n
+        The `vertical` parameter is deprecated; {action_taken}
+        This will become an error in seaborn v0.14.0; please update your code.
+        """)
+        warnings.warn(msg, UserWarning, stacklevel=2)
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
 
@@ -2198,7 +2172,13 @@ def displot(
     # --- Initialize the FacetGrid object
 
     # Check for attempt to plot onto specific axes and warn
-    _check_figure_level_ax("displot", kwargs, kind=kind, style="displot", stacklevel=2)
+    if "ax" in kwargs:
+        msg = (
+            "`displot` is a figure-level function and does not accept "
+            "the ax= parameter. You may wish to try {}plot.".format(kind)
+        )
+        warnings.warn(msg, UserWarning)
+        kwargs.pop("ax")
 
     for var in ["row", "col"]:
         # Handle faceting variables that lack name information
@@ -2501,19 +2481,17 @@ def distplot(a=None, bins=None, hist=True, kde=True, rug=False, fit=None,
             "`histplot` (an axes-level function for histograms)"
         )
 
-    deprecation_msg = (
-        f"Please adapt your code to use either `displot` (a figure-level "
-        f"function with similar flexibility) or {axes_level_suggestion}.\n\n"
-        "For a guide to updating your code to use the new functions, "
-        "please see https://gist.github.com/mwaskom/de44147ed2974457ad6372750bbe5751"
-    )
-    _warn_deprecated_function(
-        "distplot",
-        style="default",
-        version="0.14.0",
-        suggestion=deprecation_msg,
-        stacklevel=2,
-    )
+    msg = textwrap.dedent(f"""
+
+    `distplot` is a deprecated function and will be removed in seaborn v0.14.0.
+
+    Please adapt your code to use either `displot` (a figure-level function with
+    similar flexibility) or {axes_level_suggestion}.
+
+    For a guide to updating your code to use the new functions, please see
+    https://gist.github.com/mwaskom/de44147ed2974457ad6372750bbe5751
+    """)
+    warnings.warn(msg, UserWarning, stacklevel=2)
 
     if ax is None:
         ax = plt.gca()

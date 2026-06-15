@@ -3,6 +3,8 @@ import itertools
 import warnings
 
 import numpy as np
+
+__all__: list[str] = []
 from numpy.typing import ArrayLike
 from pandas import Series
 import matplotlib as mpl

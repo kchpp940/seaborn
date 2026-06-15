@@ -7,6 +7,8 @@ import pandas as pd
 
 from seaborn._core.rules import categorical_order
 
+__all__ = ["GroupBy"]
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Callable

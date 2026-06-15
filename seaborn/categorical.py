@@ -14,7 +14,7 @@ from matplotlib.markers import MarkerStyle
 from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
 
-from seaborn._core.typing import default, deprecated
+from seaborn._core import default, deprecated
 from seaborn._base import VectorPlotter, infer_orient
 from seaborn._stats.density import KDE
 from seaborn import utils
@@ -36,13 +36,6 @@ from seaborn._statistics import (
 )
 from seaborn.palettes import light_palette
 from seaborn.axisgrid import FacetGrid, _facet_docs
-from seaborn._param_validation import (
-    _check_figure_level_ax,
-    _check_mutually_exclusive,
-    _deprecate_ci,
-    _deprecate_param,
-    _handle_ignored_param,
-)
 
 
 __all__ = [
@@ -185,26 +178,23 @@ class _CategoricalPlotter(VectorPlotter):
             if not isinstance(color, str):
                 color = mpl.colors.to_hex(color)
             palette = f"dark:{color}"
-            _deprecate_param(
-                "color", color,
-                style="palette_color_trick",
-                version="0.14.0",
-                suggestion=palette,
-                stacklevel=2,
+            msg = (
+                "\n\nSetting a gradient palette using color= is deprecated and will be "
+                f"removed in v0.14.0. Set `palette='{palette}'` for the same effect.\n"
             )
+            warnings.warn(msg, FutureWarning, stacklevel=3)
 
         return palette, hue_order
 
     def _palette_without_hue_backcompat(self, palette, hue_order):
         """Provide one cycle where palette= implies hue= when not provided"""
         if "hue" not in self.variables and palette is not None:
-            _deprecate_param(
-                "palette", palette,
-                style="palette_no_hue",
-                version="0.14.0",
-                context=self.orient,
-                stacklevel=2,
+            msg = (
+                "\n\nPassing `palette` without assigning `hue` is deprecated "
+                f"and will be removed in v0.14.0. Assign the `{self.orient}` variable "
+                "to `hue` and set `legend=False` for the same effect.\n"
             )
+            warnings.warn(msg, FutureWarning, stacklevel=3)
 
             self.legend = False
             self.plot_data["hue"] = self.plot_data[self.orient]
@@ -223,56 +213,53 @@ class _CategoricalPlotter(VectorPlotter):
             mew = lw * .75
             ms = lw * 2
 
-            _deprecate_param(
-                "scale", scale,
-                style="point_scale",
-                version="0.15.0",
-                stacklevel=2,
+            msg = (
+                "\n\n"
+                "The `scale` parameter is deprecated and will be removed in v0.15.0. "
+                "You can now control the size of each plot element using matplotlib "
+                "`Line2D` parameters (e.g., `linewidth`, `markersize`, etc.)."
+                "\n"
             )
+            warnings.warn(msg, stacklevel=3)
             kwargs.update(linewidth=lw, markeredgewidth=mew, markersize=ms)
 
         if join is not deprecated:
-            suggestion = "You can remove the line between points with `linestyle='none'`." if not join else None
-            _deprecate_param(
-                "join", join,
-                style="point_join",
-                version="0.15.0",
-                suggestion=suggestion,
-                stacklevel=2,
+            msg = (
+                "\n\n"
+                "The `join` parameter is deprecated and will be removed in v0.15.0."
             )
             if not join:
+                msg += (
+                    " You can remove the line between points with `linestyle='none'`."
+                )
                 kwargs.update(linestyle="")
+            msg += "\n"
+            warnings.warn(msg, stacklevel=3)
 
     def _err_kws_backcompat(self, err_kws, errcolor, errwidth, capsize):
         """Provide two cycles where existing signature-level err_kws are handled."""
-        if errcolor is not None and errcolor is not deprecated:
-            _deprecate_param(
-                "errcolor", errcolor,
-                style="err_kwarg",
-                version="0.15.0",
-                suggestion=f"err_kws={{'color': {errcolor!r}}}",
-                stacklevel=3,
+        def deprecate_err_param(name, key, val):
+            if val is deprecated:
+                return
+            suggest = f"err_kws={{'{key}': {val!r}}}"
+            msg = (
+                f"\n\nThe `{name}` parameter is deprecated. And will be removed "
+                f"in v0.15.0. Pass `{suggest}` instead.\n"
             )
-            err_kws["color"] = errcolor
+            warnings.warn(msg, FutureWarning, stacklevel=4)
+            err_kws[key] = val
 
-        if errwidth is not deprecated and errwidth is not None:
-            _deprecate_param(
-                "errwidth", errwidth,
-                style="err_kwarg",
-                version="0.15.0",
-                suggestion=f"err_kws={{'linewidth': {errwidth!r}}}",
-                stacklevel=3,
-            )
-            err_kws["linewidth"] = errwidth
+        if errcolor is not None:
+            deprecate_err_param("errcolor", "color", errcolor)
+        deprecate_err_param("errwidth", "linewidth", errwidth)
 
         if capsize is None:
             capsize = 0
-            _deprecate_param(
-                "capsize", capsize,
-                style="capsize_none",
-                version="0.15.0",
-                stacklevel=2,
+            msg = (
+                "\n\nPassing `capsize=None` is deprecated and will be removed "
+                "in v0.15.0. Pass `capsize=0` to disable caps.\n"
             )
+            warnings.warn(msg, FutureWarning, stacklevel=3)
 
         return err_kws, capsize
 
@@ -280,25 +267,19 @@ class _CategoricalPlotter(VectorPlotter):
         """Provide two cycles of backcompat for scale kwargs"""
         if scale is not deprecated:
             density_norm = scale
-            _deprecate_param(
-                "scale", scale,
-                style="brief_renamed",
-                new_param="density_norm",
-                new_value=density_norm,
-                version="0.15.0",
-                stacklevel=2,
+            msg = (
+                "\n\nThe `scale` parameter has been renamed and will be removed "
+                f"in v0.15.0. Pass `density_norm={scale!r}` for the same effect."
             )
+            warnings.warn(msg, FutureWarning, stacklevel=3)
 
         if scale_hue is not deprecated:
             common_norm = scale_hue
-            _deprecate_param(
-                "scale_hue", scale_hue,
-                style="brief_replaced",
-                new_param="common_norm",
-                new_value=not scale_hue,
-                version="0.15.0",
-                stacklevel=2,
+            msg = (
+                "\n\nThe `scale_hue` parameter has been replaced and will be removed "
+                f"in v0.15.0. Pass `common_norm={not scale_hue}` for the same effect."
             )
+            warnings.warn(msg, FutureWarning, stacklevel=3)
 
         return density_norm, common_norm
 
@@ -306,50 +287,38 @@ class _CategoricalPlotter(VectorPlotter):
         """Provide two cycles of backcompat for violin bandwidth parameterization."""
         if bw is not deprecated:
             bw_method = bw
-            _deprecate_param(
-                "bw", bw,
-                style="dedented_bw_violin",
-                new_param="`bw_method`/`bw_adjust`",
-                set_param="bw_method",
-                new_value=bw_method,
-                version="0.15.0",
-                stacklevel=2,
-            )
+            msg = dedent(f"""\n
+                The `bw` parameter is deprecated in favor of `bw_method`/`bw_adjust`.
+                Setting `bw_method={bw!r}`, but please see docs for the new parameters
+                and update your code. This will become an error in seaborn v0.15.0.
+            """)
+            warnings.warn(msg, FutureWarning, stacklevel=3)
         return bw_method
 
     def _boxen_scale_backcompat(self, scale, width_method):
         """Provide two cycles of backcompat for scale kwargs"""
         if scale is not deprecated:
             width_method = scale
-            if scale == "area":
-                suggest = (
-                    f"Pass `width_method={scale!r}`, but note that the result "
-                    "for 'area' will appear different."
-                )
-            else:
-                suggest = f"Pass `width_method={scale!r}` for the same effect."
-            _deprecate_param(
-                "scale", scale,
-                style="brief_renamed",
-                new_param="width_method",
-                new_value=width_method,
-                version="0.15.0",
-                suggestion=suggest,
-                stacklevel=2,
+            msg = (
+                "\n\nThe `scale` parameter has been renamed to `width_method` and "
+                f"will be removed in v0.15. Pass `width_method={scale!r}"
             )
+            if scale == "area":
+                msg += ", but note that the result for 'area' will appear different."
+            else:
+                msg += " for the same effect."
+            warnings.warn(msg, FutureWarning, stacklevel=3)
 
         return width_method
 
     def _complement_color(self, color, base_color, hue_map):
         """Allow a color to be set automatically using a basis of comparison."""
         if color == "gray":
-            _deprecate_param(
-                "color", color,
-                style="gray_color",
-                new_value="auto",
-                version="0.14.0",
-                stacklevel=2,
+            msg = (
+                'Use "auto" to set automatic grayscale colors. From v0.14.0, '
+                '"gray" will default to matplotlib\'s definition.'
             )
+            warnings.warn(msg, FutureWarning, stacklevel=3)
             color = "auto"
         elif color is None or color is default:
             color = "auto"
@@ -2375,7 +2344,7 @@ def barplot(
     ci=deprecated, errcolor=deprecated, errwidth=deprecated, ax=None, **kwargs,
 ):
 
-    errorbar = _deprecate_ci(errorbar, ci)
+    errorbar = utils._deprecate_ci(errorbar, ci)
 
     # Be backwards compatible with len passed directly, which
     # does not work in Series.agg (maybe a pandas bug?)
@@ -2518,7 +2487,7 @@ def pointplot(
     ax=None, **kwargs,
 ):
 
-    errorbar = _deprecate_ci(errorbar, ci)
+    errorbar = utils._deprecate_ci(errorbar, ci)
 
     p = _CategoricalAggPlotter(
         data=data,
@@ -2671,11 +2640,7 @@ def countplot(
         orient = "x"
         y = 1 if list(x) else None
     elif x is not None and y is not None:
-        _check_mutually_exclusive(
-            [("x", True), ("y", True)],
-            style="cannot_pass_both",
-            error_type=TypeError,
-        )
+        raise TypeError("Cannot pass values for both `x` and `y`.")
 
     p = _CategoricalAggPlotter(
         data=data,
@@ -2806,7 +2771,11 @@ def catplot(
 ):
 
     # Check for attempt to plot onto specific axes and warn
-    _check_figure_level_ax("catplot", kwargs, kind=kind, style="catplot", stacklevel=2)
+    if "ax" in kwargs:
+        msg = ("catplot is a figure-level function and does not accept "
+               f"target axes. You may wish to try {kind}plot")
+        warnings.warn(msg, UserWarning)
+        kwargs.pop("ax")
 
     desaturated_kinds = ["bar", "count", "box", "violin", "boxen"]
     undodged_kinds = ["strip", "swarm", "point"]
@@ -2824,11 +2793,7 @@ def catplot(
             orient = "x"
             y = 1
         elif x is not None and y is not None:
-            _check_mutually_exclusive(
-                [("x", True), ("y", True)],
-                style="cannot_pass_both",
-                error_type=ValueError,
-            )
+            raise ValueError("Cannot pass values for both `x` and `y`.")
 
     p = Plotter(
         data=data,
@@ -2891,7 +2856,7 @@ def catplot(
     palette, hue_order = p._hue_backcompat(color, palette, hue_order)
 
     # Othe deprecations
-    errorbar = _deprecate_ci(errorbar, ci)
+    errorbar = utils._deprecate_ci(errorbar, ci)
 
     saturation = kwargs.pop(
         "saturation",
@@ -2919,12 +2884,8 @@ def catplot(
 
     if "weight" in p.plot_data:
         if kind not in ["bar", "point"]:
-            _handle_ignored_param(
-                "weights", True,
-                style="has_no_effect",
-                context=f"kind={kind!r}",
-                stacklevel=2,
-            )
+            msg = f"The `weights` parameter has no effect with kind={kind!r}."
+            warnings.warn(msg, stacklevel=2)
         agg_cls = WeightedAggregator
     else:
         agg_cls = EstimateAggregator
@@ -3165,12 +3126,11 @@ def catplot(
         )
 
     else:
-        _check_argument(
-            "kind",
-            ["strip", "swarm", "box", "boxen", "violin", "bar", "count", "point"],
-            kind,
-            style="invalid_kind_list",
+        msg = (
+            f"Invalid `kind`: {kind!r}. Options are 'strip', 'swarm', "
+            "'box', 'boxen', 'violin', 'bar', 'count', and 'point'."
         )
+        raise ValueError(msg)
 
     for ax in g.axes.flat:
         p._adjust_cat_axis(ax, axis=p.orient)

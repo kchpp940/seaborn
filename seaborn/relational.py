@@ -21,12 +21,6 @@ from ._compat import groupby_apply_include_groups
 from ._statistics import EstimateAggregator, WeightedAggregator
 from .axisgrid import FacetGrid, _facet_docs
 from ._docstrings import DocstringComponents, _core_docs
-from ._param_validation import (
-    _check_argument,
-    _check_figure_level_ax,
-    _check_param_constraint,
-    _handle_ignored_param,
-)
 
 
 __all__ = ["relplot", "scatterplot", "lineplot"]
@@ -255,10 +249,8 @@ class _LinePlotter(_RelationalPlotter):
         elif self.err_style == "bars":
             pass
         elif self.err_style is not None:
-            _check_argument(
-                "err_style", ["band", "bars"], self.err_style,
-                style="must_be",
-            )
+            err = "`err_style` must be 'band' or 'bars', not {}"
+            raise ValueError(err.format(self.err_style))
 
         # Initialize the aggregation object
         weighted = "weight" in self.plot_data
@@ -268,7 +260,9 @@ class _LinePlotter(_RelationalPlotter):
 
         # TODO abstract variable to aggregate over here-ish. Better name?
         orient = self.orient
-        _check_argument("orient", ["x", "y"], orient, style="must_be_either")
+        if orient not in {"x", "y"}:
+            err = f"`orient` must be either 'x' or 'y', not {orient!r}."
+            raise ValueError(err)
         other = {"x": "y", "y": "x"}[orient]
 
         # TODO How to handle NA? We don't want NA to propagate through to the
@@ -291,10 +285,9 @@ class _LinePlotter(_RelationalPlotter):
                 and sub_data[orient].value_counts().max() > 1
             ):
                 if "units" in self.variables:
-                    _check_param_constraint(
-                        "estimator must be None when specifying units",
-                        param="estimator",
-                    )
+                    # TODO eventually relax this constraint
+                    err = "estimator must be None when specifying units"
+                    raise ValueError(err)
                 grouped = sub_data.groupby(orient, sort=self.sort)
                 # Could pass as_index=False instead of reset_index,
                 # but that fails on a corner case with older pandas.
@@ -728,18 +721,17 @@ def relplot(
         dashes = True if dashes is None else dashes
 
     else:
-        _check_argument(
-            "kind", ["scatter", "line"], kind,
-            style="kind_not_recognized",
-        )
+        err = f"Plot kind {kind} not recognized"
+        raise ValueError(err)
 
     # Check for attempt to plot onto specific axes and warn
-    _check_figure_level_ax(
-        "relplot", kwargs,
-        kind=kind,
-        style="default",
-        stacklevel=2,
-    )
+    if "ax" in kwargs:
+        msg = (
+            "relplot is a figure-level function and does not accept "
+            "the `ax` parameter. You may wish to try {}".format(kind + "plot")
+        )
+        warnings.warn(msg, UserWarning)
+        kwargs.pop("ax")
 
     # Use the full dataset to map the semantics
     variables = dict(x=x, y=y, hue=hue, size=size, style=style)
@@ -747,18 +739,12 @@ def relplot(
         variables["units"] = units
         variables["weight"] = weights
     else:
-        _handle_ignored_param(
-            "units", units,
-            style="has_no_effect",
-            context="kind='scatter'",
-            stacklevel=2,
-        )
-        _handle_ignored_param(
-            "weights", weights,
-            style="has_no_effect",
-            context="kind='scatter'",
-            stacklevel=2,
-        )
+        if units is not None:
+            msg = "The `units` parameter has no effect with kind='scatter'."
+            warnings.warn(msg, stacklevel=2)
+        if weights is not None:
+            msg = "The `weights` parameter has no effect with kind='scatter'."
+            warnings.warn(msg, stacklevel=2)
     p = Plotter(
         data=data,
         variables=variables,

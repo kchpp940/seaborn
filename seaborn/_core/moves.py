@@ -5,6 +5,8 @@ from typing import ClassVar, Callable, Optional, Union, cast
 import numpy as np
 from pandas import DataFrame
 
+__all__: list[str] = []
+
 from seaborn._core.groupby import GroupBy
 from seaborn._core.scales import Scale
 from seaborn._core.typing import Default

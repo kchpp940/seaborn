@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
+__all__: list[str] = []
+
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from typing import TYPE_CHECKING

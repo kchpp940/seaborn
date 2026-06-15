@@ -11,6 +11,8 @@ from pandas import DataFrame
 
 from seaborn._core.typing import DataSource, VariableSpec, ColumnName
 
+__all__ = ["PlotData", "handle_data_source"]
+
 
 class PlotData:
     """

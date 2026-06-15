@@ -3,6 +3,8 @@ import re
 from copy import copy
 from collections.abc import Sequence
 from dataclasses import dataclass
+
+__all__: list[str] = []
 from functools import partial
 from typing import Any, Callable, Tuple, Optional, ClassVar
 

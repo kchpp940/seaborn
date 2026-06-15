@@ -4,6 +4,24 @@ from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any, Optional, Union, Tuple, List, Dict, Protocol
 
+__all__ = [
+    "ColumnName",
+    "Vector",
+    "VariableSpec",
+    "VariableSpecList",
+    "DataFrameProtocol",
+    "DataSource",
+    "OrderSpec",
+    "NormSpec",
+    "PaletteSpec",
+    "DiscreteValueSpec",
+    "ContinuousValueSpec",
+    "Default",
+    "Deprecated",
+    "default",
+    "deprecated",
+]
+
 from numpy import ndarray  # TODO use ArrayLike?
 from pandas import DataFrame, Series, Index, Timestamp, Timedelta
 from matplotlib.colors import Colormap, Normalize

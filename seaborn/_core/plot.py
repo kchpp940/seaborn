@@ -1,4 +1,8 @@
-"""The classes for specifying and compiling a declarative visualization."""
+"""The classes for specifying and compiling a declarative visualization.
+
+This module is internal to ``seaborn._core``.  Import only via
+``seaborn.objects`` or from this module directly within ``_core``.
+"""
 from __future__ import annotations
 
 import io
