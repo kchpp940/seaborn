@@ -308,14 +308,15 @@ class ExampleGenerator:
         print(f"running {self.filename}")
 
         datasets = extract_dataset_names(self.filetext)
+        plt.close('all')
+        my_globals = {'pl': plt,
+                      'plt': plt}
         with doc_example_context(
             f"gallery:{self.modulename}",
             dataset_names=datasets,
             source_file=self.filename,
+            exec_globals=my_globals,
         ):
-            plt.close('all')
-            my_globals = {'pl': plt,
-                          'plt': plt}
             execfile(self.filename, my_globals)
 
             fig = plt.gcf()

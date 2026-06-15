@@ -242,30 +242,90 @@ def init_doc_env():
     os.environ.setdefault("SEABORN_DOC_SAVEFIG_BBOX", SAVEFIG_BBOX)
     os.environ.setdefault("SEABORN_DOC_NB_TIMEOUT", str(NB_EXEC_TIMEOUT))
     os.environ.setdefault("NB_KERNEL", NB_KERNEL)
-    install_dataset_tracking()
 
 
 _CURRENT_CONTEXT = {}
 
 
 @contextmanager
-def doc_example_context(example_name, dataset_names=None, source_file=None):
+def doc_example_context(example_name, dataset_names=None, source_file=None,
+                        exec_globals=None):
     """Context manager wrapping a single doc example execution.
 
     Image recording single write point: producers call record_image() which
     populates this context's images list; when the context exits (success or
     failure) those images are flushed ONCE to the manifest via add_example().
 
-    Dataset recording single write point: the monkey-patched load_dataset()
-    is the source of truth — `dataset_names` here is a best-effort hint from
-    regex pre-scans and gets merged with what the patched function actually
-    observes during execution.
+    Dataset recording:
+      1. `dataset_names` = best-effort hints from regex pre-scans of source.
+      2. Context ENTERS → seaborn.load_dataset is monkey-patched AND
+         if `exec_globals` is provided, any pre-existing `load_dataset`
+         reference in it is also swapped. This covers both:
+             import seaborn; seaborn.load_dataset("x")
+             from seaborn import load_dataset; load_dataset("x")
+      3. Context EXITS → original references restored, no permanent change.
     """
     global _CURRENT_CONTEXT
     m = get_manifest()
     hinted_datasets = list(dict.fromkeys(dataset_names or []))
     for ds in hinted_datasets:
         m.add_dataset(ds)
+
+    # --- Patch phase ---
+    # Only patch when actually in a doc build. Outside doc builds the context
+    # manager is fully transparent (no monkey-patching, restores nothing).
+    seaborn_module = None
+    seaborn_orig_ld = None
+    exec_globals_orig_ld = None
+    patched_ld = None
+
+    if _DOC_BUILDING:
+        try:
+            import seaborn as _sns
+            seaborn_module = _sns
+            seaborn_orig_ld = _sns.load_dataset
+
+            def _tracked_load_dataset(name, **kwargs):
+                cache_path = os.path.join(get_data_cache_path(), f"{name}.csv")
+                cache_hit_before = os.path.isfile(cache_path)
+                try:
+                    result = seaborn_orig_ld(name, **kwargs)
+                except Exception:
+                    try:
+                        m.add_dataset(name, cache_hit=False)
+                    except Exception:
+                        pass
+                    raise
+                try:
+                    m.add_dataset(
+                        name,
+                        cache_hit=cache_hit_before or os.path.isfile(cache_path),
+                    )
+                except Exception:
+                    pass
+                if _CURRENT_CONTEXT:
+                    ds_list = _CURRENT_CONTEXT.setdefault("datasets", [])
+                    if name not in ds_list:
+                        ds_list.append(name)
+                return result
+
+            patched_ld = _tracked_load_dataset
+            patched_ld.__name__ = seaborn_orig_ld.__name__
+            patched_ld.__wrapped__ = seaborn_orig_ld
+            seaborn_module.load_dataset = patched_ld
+
+            if exec_globals is not None:
+                if "load_dataset" in exec_globals:
+                    exec_globals_orig_ld = exec_globals["load_dataset"]
+                exec_globals["load_dataset"] = patched_ld
+                if "seaborn" not in exec_globals:
+                    exec_globals["seaborn"] = seaborn_module
+                if "sns" not in exec_globals:
+                    exec_globals["sns"] = seaborn_module
+        except Exception as patch_err:
+            print(f"[doc_config] WARNING: load_dataset patch failed for "
+                  f"'{example_name}': {patch_err}", file=sys.stderr)
+            seaborn_orig_ld = None
 
     _CURRENT_CONTEXT = {
         "example": example_name,
@@ -276,6 +336,11 @@ def doc_example_context(example_name, dataset_names=None, source_file=None):
         "image_format": IMAGE_FORMAT,
         "image_dpi": IMAGE_DPI,
         "images": [],
+        "_patched_ld": patched_ld,
+        "_seaborn_module": seaborn_module,
+        "_seaborn_orig_ld": seaborn_orig_ld,
+        "_exec_globals": exec_globals,
+        "_exec_globals_orig_ld": exec_globals_orig_ld,
     }
     try:
         yield _CURRENT_CONTEXT
@@ -312,7 +377,25 @@ def doc_example_context(example_name, dataset_names=None, source_file=None):
         _report_failure()
         raise
     finally:
+        # --- Unpatch phase: restore all originals ---
+        ctx = _CURRENT_CONTEXT
         _CURRENT_CONTEXT = {}
+        if ctx.get("_seaborn_module") is not None and ctx.get("_seaborn_orig_ld") is not None:
+            try:
+                ctx["_seaborn_module"].load_dataset = ctx["_seaborn_orig_ld"]
+            except Exception:
+                pass
+        eg = ctx.get("_exec_globals")
+        if eg is not None:
+            try:
+                if "load_dataset" in eg:
+                    orig = ctx.get("_exec_globals_orig_ld")
+                    if orig is not None:
+                        eg["load_dataset"] = orig
+                    else:
+                        eg.pop("load_dataset", None)
+            except Exception:
+                pass
 
 
 def record_image(image_path):
@@ -334,76 +417,16 @@ def record_image(image_path):
 def record_dataset(name, cache_hit=None):
     """Record a dataset access against the manifest.
 
-    NOTE: In doc builds, prefer the monkey-patched load_dataset() hook
-    which binds to REAL calls — use this only for pre-declaration (e.g. from
-    regex scans when the actual code path might not be executed).
+    NOTE: During doc_example_context, prefer the context-scope patched
+    load_dataset() which binds to REAL calls inside that example. Use this
+    only for pre-declaration (e.g. from regex scans when the actual code
+    path may not run, or for external tracking).
     """
     try:
         m = get_manifest()
         m.add_dataset(name, cache_hit=cache_hit)
     except Exception:
         pass
-
-
-def _patched_load_dataset(original):
-    """Wrap seaborn.load_dataset so we record the REAL dataset access.
-
-    This is the single source of truth for dataset tracking. Regex pre-scans
-    are best-effort — the patched function binds to actual load_dataset() calls,
-    which actually happened and records cache_hit status based on whether the
-    CSV is ALREADY present before the original call resolves it.
-    """
-    def wrapper(name, **kwargs):
-        cache_path = os.path.join(get_data_cache_path(), f"{name}.csv")
-        cache_hit_before = os.path.isfile(cache_path)
-        try:
-            result = original(name, **kwargs)
-        except Exception:
-            try:
-                get_manifest().add_dataset(name, cache_hit=False)
-            except Exception:
-                pass
-            raise
-        try:
-            get_manifest().add_dataset(
-                name,
-                cache_hit=cache_hit_before or os.path.isfile(cache_path),
-            )
-        except Exception:
-            pass
-        if _CURRENT_CONTEXT:
-            ds_list = _CURRENT_CONTEXT.setdefault("datasets", [])
-            if name not in ds_list:
-                ds_list.append(name)
-        return result
-    wrapper.__name__ = original.__name__
-    wrapper.__wrapped__ = original
-    return wrapper
-
-
-_DATASET_PATCH_INSTALLED = False
-
-
-def install_dataset_tracking():
-    """Monkey-patch seaborn.load_dataset to track real access.
-
-    Safe to call multiple times — idempotent. No-op when not in doc build mode.
-    """
-    global _DATASET_PATCH_INSTALLED
-    if _DATASET_PATCH_INSTALLED:
-        return
-    if not _DOC_BUILDING:
-        return
-    try:
-        import seaborn
-        original = seaborn.load_dataset
-        seaborn.load_dataset = _patched_load_dataset(original)
-        _DATASET_PATCH_INSTALLED = True
-        return True
-    except Exception as e:
-        print(f"[doc_config] WARNING: could not patch load_dataset: {e}",
-              file=sys.stderr)
-        return False
 
 
 def _report_failure():
