@@ -53,42 +53,19 @@ jobs:
           restore-keys: |
             seaborn-data-
 
-      - name: Populate dataset cache
+      - name: Build docs (via unified build wrapper)
         run: |
-          if [ ! -d "$SEABORN_DATA" ] || [ -z "$(ls -A $SEABORN_DATA)" ]; then
-            git clone https://github.com/mwaskom/seaborn-data.git "$SEABORN_DATA"
-          fi
-          ls $SEABORN_DATA
+          python doc/build.py all -j `nproc`
 
-      - name: Build docs
-        env:
-          SPHINXOPTS: -j `nproc`
+      - name: Print build manifest summary
+        if: ${{ always() }}
         run: |
-          cd doc
-          make -j `nproc` notebooks
-          make html
+          python doc/build.py summary || true
 
       - name: Diagnose doc build failure
         if: ${{ failure() }}
         run: |
-          echo "===== DOC BUILD FAILURE DIAGNOSTICS ====="
-          echo "Example images generated (if any):"
-          find doc/_build -name "*.png" -o -name "*.svg" 2>/dev/null | head -50 || true
-          echo ""
-          echo "Dataset cache contents:"
-          ls -la "$SEABORN_DATA" 2>/dev/null || echo "  <cache dir missing>"
-          echo ""
-          echo "Doc config environment:"
-          echo "  SEABORN_DATA=$SEABORN_DATA"
-          echo "  SEABORN_DOC_MPL_BACKEND=$SEABORN_DOC_MPL_BACKEND"
-          echo "  SEABORN_DOC_RANDOM_SEED=$SEABORN_DOC_RANDOM_SEED"
-          echo "  SEABORN_DOC_IMAGE_FORMAT=$SEABORN_DOC_IMAGE_FORMAT"
-          echo "  SEABORN_DOC_IMAGE_DPI=$SEABORN_DOC_IMAGE_DPI"
-          echo "  SEABORN_DOC_BUILD=$SEABORN_DOC_BUILD"
-          echo ""
-          echo "Sphinx build log tail:"
-          cat doc/_build/html/.buildinfo 2>/dev/null || echo "  <no buildinfo>"
-          echo "===== END DIAGNOSTICS ====="
+          python doc/diagnose_build.py
 
 
   run-tests:

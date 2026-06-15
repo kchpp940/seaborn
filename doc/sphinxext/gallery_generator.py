@@ -22,6 +22,8 @@ from seaborn._doc_config import (
     apply_random_seed,
     doc_example_context,
     extract_dataset_names,
+    record_image,
+    get_manifest,
 )
 apply_mpl_backend()
 apply_random_seed()
@@ -306,7 +308,11 @@ class ExampleGenerator:
         print(f"running {self.filename}")
 
         datasets = extract_dataset_names(self.filetext)
-        with doc_example_context(self.filename, dataset_names=datasets):
+        with doc_example_context(
+            f"gallery:{self.modulename}",
+            dataset_names=datasets,
+            source_file=self.filename,
+        ):
             plt.close('all')
             my_globals = {'pl': plt,
                           'plt': plt}
@@ -318,9 +324,11 @@ class ExampleGenerator:
             thumbfile = op.join("example_thumbs", self.thumbfilename)
             self.html = f"<img src=../{self.pngfilename}>"
             fig.savefig(pngfile, dpi=75, bbox_inches="tight")
+            record_image(pngfile)
 
             cx, cy = self.thumbloc
             create_thumbnail(pngfile, thumbfile, cx=cx, cy=cy)
+            record_image(thumbfile)
 
     def toctree_entry(self):
         return f"   ./{op.splitext(self.htmlfilename)[0]}\n\n"
@@ -342,6 +350,9 @@ class ExampleGenerator:
 
 
 def main(app):
+    m = get_manifest()
+    m.add_stage("gallery_generator", "started")
+
     static_dir = op.join(app.builder.srcdir, '_static')
     target_dir = op.join(app.builder.srcdir, 'examples')
     image_dir = op.join(app.builder.srcdir, 'examples/_images')
@@ -399,6 +410,8 @@ def main(app):
         index.write(INDEX_TEMPLATE.format(sphinx_tag="example_gallery",
                                           toctree=toctree,
                                           contents=contents))
+
+    m.add_stage("gallery_generator", "completed", examples=len(banner_data))
 
 
 def setup(app):

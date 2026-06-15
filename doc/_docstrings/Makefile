@@ -1,14 +1,21 @@
-rst_files := $(patsubst %.ipynb,../docstrings/%.rst,$(wildcard *.ipynb))
-export MPLBACKEND := module://matplotlib_inline.backend_inline
+# Docstring notebooks -> .rst builder
+#
+# This delegates to doc/build.py, which is the unified entry point for all
+# doc builds. It ensures SEABORN_DATA, random seed, matplotlib backend, and
+# image params are the same everywhere (local and CI).
 
-docstrings: ${rst_files}
+PYTHON     ?= python
+DOC_ROOT   := $(abspath $(CURDIR)/..)
+BUILD_WRAP  = $(DOC_ROOT)/build.py
 
-../docstrings/%.rst: %.ipynb
-	../tools/nb_to_doc.py $*.ipynb ../docstrings
-	@cp -r ../docstrings/$*_files ../generated/
-	@if [ -f ../generated/seaborn.$*.rst ]; then \
-	    touch ../generated/seaborn.$*.rst; \
-	 fi
+rst_files := $(patsubst %.ipynb,$(DOC_ROOT)/docstrings/%.rst,$(wildcard *.ipynb))
+
+.PHONY: docstrings clean
+
+docstrings: $(rst_files)
+
+$(DOC_ROOT)/docstrings/%.rst: %.ipynb
+	$(PYTHON) $(BUILD_WRAP) docstrings
 
 clean:
-	rm -rf ../docstrings
+	$(PYTHON) $(BUILD_WRAP) clean

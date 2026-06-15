@@ -1,67 +1,70 @@
 # Makefile for Sphinx documentation
 #
+# All targets delegate to doc/build.py, which is the unified entry point
+# for both local and CI doc builds. It ensures SEABORN_DATA, random seed,
+# matplotlib backend, and image params are always the same.
 
-# You can set these variables from the command line.
-SPHINXOPTS    =
-SPHINXBUILD   = sphinx-build
-PAPER         =
-BUILDDIR      = _build
+PYTHON      ?= python
+BUILD_WRAP  ?= $(CURDIR)/build.py
 
-# Internal variables.
+SPHINXOPTS  ?=
+SPHINXBUILD ?= sphinx-build
+PAPER       ?=
+BUILDDIR    ?= _build
+
 PAPEROPT_a4     = -D latex_paper_size=a4
-PAPEROPT_letter = -D latex_paper_size=letter
-ALLSPHINXOPTS   = -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
-# the i18n builder cannot share the environment and doctrees with the others
-I18NSPHINXOPTS  = $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
+PAPEROPT_letter  = -D latex_paper_size=letter
+ALLSPHINXOPTS    = -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
+I18NSPHINXOPTS   = $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) .
 
-.PHONY: help clean html dirhtml singlehtml pickle json htmlhelp qthelp devhelp epub latex latexpdf text man changes linkcheck doctest gettext
+WRAP = $(PYTHON) $(BUILD_WRAP)
+
+.PHONY: help clean html dirhtml singlehtml pickle json htmlhelp qthelp devhelp epub latex latexpdf text man changes linkcheck doctest gettext notebooks tutorials docstrings cache-datasets summary all
 
 help:
 	@echo "Please use \`make <target>' where <target> is one of"
-	@echo "  clean      to remove generated output"
-	@echo "  html       to make standalone HTML files"
-	@echo "  notebooks  to make the Jupyter notebook-based tutorials"
-	@echo "  dirhtml    to make HTML files named index.html in directories"
-	@echo "  singlehtml to make a single large HTML file"
-	@echo "  pickle     to make pickle files"
-	@echo "  json       to make JSON files"
-	@echo "  htmlhelp   to make HTML files and a HTML help project"
-	@echo "  qthelp     to make HTML files and a qthelp project"
-	@echo "  devhelp    to make HTML files and a Devhelp project"
-	@echo "  epub       to make an epub"
-	@echo "  latex      to make LaTeX files, you can set PAPER=a4 or PAPER=letter"
-	@echo "  latexpdf   to make LaTeX files and run them through pdflatex"
-	@echo "  text       to make text files"
-	@echo "  man        to make manual pages"
-	@echo "  texinfo    to make Texinfo files"
-	@echo "  info       to make Texinfo files and run them through makeinfo"
-	@echo "  gettext    to make PO message catalogs"
-	@echo "  changes    to make an overview of all changed/added/deprecated items"
-	@echo "  linkcheck  to check all external links for integrity"
-	@echo "  doctest    to run all doctests embedded in the documentation (if enabled)"
+	@echo "  cache-datasets  pre-populate SEABORN_DATA cache directory"
+	@echo "  tutorials       build tutorial .ipynb -> .rst (via build.py)"
+	@echo "  docstrings      build docstring .ipynb -> .rst (via build.py)"
+	@echo "  notebooks       tutorials + docstrings (via build.py)"
+	@echo "  html            standalone HTML files (via sphinx-build)"
+	@echo "  summary         print build manifest summary"
+	@echo "  clean           remove all generated output (via build.py)"
+	@echo "  all             cache-datasets -> notebooks -> html (via build.py)"
+	@echo ""
+	@echo "Legacy Sphinx targets (bypass build.py):"
+	@echo "  dirhtml singlehtml pickle json htmlhelp qthelp devhelp epub"
+	@echo "  latex latexpdf text man changes linkcheck doctest gettext"
+
+cache-datasets:
+	$(WRAP) cache-datasets
+
+tutorials:
+	$(WRAP) tutorials
+
+docstrings:
+	$(WRAP) docstrings
+
+notebooks:
+	$(WRAP) notebooks
+
+summary:
+	$(WRAP) summary
 
 clean:
-	-rm -rf $(BUILDDIR)/*
-	-rm -rf examples/*
-	-rm -rf example_thumbs/*
-	-rm -rf generated/*
-	-rm -rf tutorial.rst
-	-$(MAKE) -C _docstrings clean
-	-$(MAKE) -C _tutorial clean
+	-$(WRAP) clean
 
-.PHONY: tutorials
-tutorials:
-	@mkdir -p tutorial
-	@$(MAKE) -C _tutorial
-
-.PHONY: docstrings
-docstrings:
-	@mkdir -p docstrings
-	@$(MAKE) -C _docstrings
-
-notebooks: tutorials docstrings
+all:
+	$(WRAP) all
 
 html:
+	$(WRAP) html
+
+# Legacy HTML target: bypass unified build wrapper and call sphinx directly.
+# Use `make html` for standard (wrappered) builds; use this only if you need to
+# skip the wrapper for debugging.
+.PHONY: html-raw
+html-raw:
 	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) $(BUILDDIR)/html
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/html."
@@ -95,7 +98,7 @@ htmlhelp:
 qthelp:
 	$(SPHINXBUILD) -b qthelp $(ALLSPHINXOPTS) $(BUILDDIR)/qthelp
 	@echo
-	@echo "Build finished; now you can run "qcollectiongenerator" with the" \
+	@echo "Build finished; now you can run \"qcollectiongenerator\" with the" \
 	      ".qhcp project file in $(BUILDDIR)/qthelp, like this:"
 	@echo "# qcollectiongenerator $(BUILDDIR)/qthelp/lyman.qhcp"
 	@echo "To view the help file:"
